@@ -10,12 +10,12 @@ from .vtv.vtv import (
 
 from .mutual_information import (
     MutualInformationGradientPrior,
-    MutualInformationObjective,
+    MutualInformationImagePrior,
 )
 
 __all__ = [
     "WeightedTotalVariation",
     "WeightedVectorialTotalVariation",
     "MutualInformationGradientPrior",
-    "MutualInformationObjective",
+    "MutualInformationImagePrior",
 ]
