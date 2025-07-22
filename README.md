@@ -1,5 +1,5 @@
 # SETR
-## Synergistic Tomographic Image Reconstruction
+## Synergistic Emission Tomographic Reconstruction
 
 Tools for nuclear medicine image reconstruction combining PET/SPECT with CT anatomical information.
 
