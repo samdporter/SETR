@@ -1,0 +1,22 @@
+alpha: 1.0
+beta: 1.0
+delta: null
+num_subsets: [9, 12]
+no_prior: false
+num_epochs: 10
+use_kappa: false
+initial_step_size: 1.0
+relaxation_eta: 0.02
+tail_singular_values: null
+pet_gauss_fwhm: [5.0, 5.0, 5.0]
+spect_gauss_fwhm: [13.4, 13.4, 13.4]
+spect_res: [1.22, 0.03, false]
+pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom"
+spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+output_path: "/home/sam/working/synergistic_recon/output/test"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+save_images: true
+seed: null
+no_gpu: false
+keep_all_views_in_cache: true
+profile: false
