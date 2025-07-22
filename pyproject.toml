@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "setr"
+name = "py-setr"
 version = "0.1.0"
-description = "Synergistic Tomographic Image Reconstruction for PET/SPECT with CT anatomical information"
+description = "Synergistic Tomographic Image Reconstruction for PET/SPECT with CT anatomical information (install: pip install py-setr, import: import setr)"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
