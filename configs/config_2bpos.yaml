@@ -4,15 +4,16 @@ delta: null
 num_subsets: [9, 12]
 no_prior: false
 num_epochs: 30
-use_kappa: false
+use_kappa: true
+rho_max: 8.0   # Upper bound on |κ_PET / κ_SPECT|; keeps the ratio within [1/8, 8]. ## NOT CURRENTLY USED
 initial_step_size: 0.1
 iterations: 250
 update_interval: null
 relaxation_eta: 0.02
 tail_singular_values: null
 
-pet_gauss_fwhm: [5.0, 5.0, 5.0]
-spect_gauss_fwhm: [13.4, 13.4, 13.4]
+pet_gauss_fwhm: [4.83, 5.61, 5.61] # FROM 710 acceptance testing at UCL
+spect_gauss_fwhm: [13.4, 13.4, 13.4] # FROM best fit to anyscan
 spect_res: [1.22, 0.03, false]
 
 use_tof: false

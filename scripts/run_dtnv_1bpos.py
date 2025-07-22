@@ -301,13 +301,16 @@ def get_kappa_squareds(obj_funs_list, image_list, normalise=True):
     kappa_squareds = []
     for obj_funs, image in zip(obj_funs_list, image_list):
         kappa_squareds.append(
-            compute_kappa_squared_image_from_partitioned_objective(obj_funs, image, normalise)
+            compute_kappa_squared_image_from_partitioned_objective(obj_funs, image)
         )
-        if normalise:
-            # find 95th percentile of kappa squared image
-            kappa_squared_array = kappa_squareds[-1].as_array()
-            normalising_factor = np.percentile(kappa_squareds[-1].as_array(), 95)
-            kappa_squareds[-1].fill(kappa_squared_array / normalising_factor)
+    if normalise:
+        arrays = [im.as_array() for im in kappa_squareds]
+        p95    = [np.percentile(a, 95) for a in arrays]
+
+        scalars = [1/p if p>1e-12 else 1.0 for p in p95]
+
+        for im, s in zip(kappa_squareds, scalars):
+            im *= s 
             
     return EnhancedBlockDataContainer(*kappa_squareds)
 

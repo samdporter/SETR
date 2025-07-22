@@ -298,11 +298,13 @@ def get_data_fidelity(
 ):
     """
     Set up data fidelity (objective) functions.
-    
+
     Returns:
-        List of objective functions.
+        all_funs: list of block objective functions (PET all beds, then SPECT).
+        s_inv:    EnhancedBlockDataContainer of 1/sensitivity images (PET,SPECT).
+        kappa_sq_block: EnhancedBlockDataContainer of κ² images (PET,SPECT) in common PET space.
     """
-    # Partition data for each bed position.
+    # --- partition PET by bed ---
     pet_dfs = [
         partitioner.data_partition(
             pet_data['bed_positions'][suffix]["acquisition_data"],
@@ -315,11 +317,16 @@ def get_data_fidelity(
         for suffix in pet_data["bed_positions"]
     ]
 
-    # Set up the objective functions for each bed position.
+    # keep raw copies for κ before operator wrapping
+    pet_dfs_raw = [list(df_list) for df_list in pet_dfs]
+
+    # set_up subset objs on their own bed template
     for i, suffix in enumerate(pet_data["bed_positions"]):
+        tmpl = pet_data['bed_positions'][suffix]["template_image"]
         for j in range(len(pet_dfs[i])):
-            pet_dfs[i][j].set_up(pet_data['bed_positions'][suffix]["template_image"])
-            
+            pet_dfs[i][j].set_up(tmpl)
+
+    # --- partition SPECT ---
     _, _, spect_dfs = partitioner.data_partition(
         spect_data["acquisition_data"],
         spect_data["additive"],
@@ -328,92 +335,117 @@ def get_data_fidelity(
         mode="staggered",
         create_acq_model=get_spect_am,
     )
-
     for obj_fun in spect_dfs:
         obj_fun.set_up(spect_data['initial_image'])
-        
-    # Before we add all the complicated operators, we'll get the kappa images and sensitivity images
+
+    # =========================
+    # κ² build *before* op wrapping
+    # =========================
+    # per-bed PET κ² in bed coords
+    pet_kappa_bed_sq = []
+    for (df_list, suffix) in zip(pet_dfs_raw, pet_data["bed_positions"]):
+        tmpl = pet_data['bed_positions'][suffix]["template_image"]
+        pet_kappa_bed_sq.append(
+            compute_kappa_squared_image_from_partitioned_objective(df_list, tmpl)
+        )
+
+    # shift each bed κ² into common PET space
+    pet_kappa_bed_sq_global = [
+        unshift_ops[i].adjoint(img) for i, img in enumerate(pet_kappa_bed_sq)
+    ]
+
+    # add across beds (Fisher additivity)
+    pet_kappa_sq = pet_kappa_bed_sq_global[0].clone()
+    for img in pet_kappa_bed_sq_global[1:]:
+        pet_kappa_sq += img
+
+    # SPECT κ²
+    spect_kappa_sq = compute_kappa_squared_image_from_partitioned_objective(
+        spect_dfs, spect_data['initial_image']
+    )
+
     pet_sens = [
         get_sensitivity_from_subset_objs(
             df, pet_data['bed_positions'][suffix]["template_image"]
-            ) 
+        )
         for df, suffix in zip(pet_dfs, pet_data["bed_positions"])
     ]
-    
+
     spect_s_inv = get_s_inv_from_subset_objs(
         spect_dfs, spect_data['initial_image']
     )
-    
-    # need to unshift and then combine pet images
+
+    # unshift+combine PET sensitivities to common PET grid
     pet_sens_combined = uncombine_op.adjoint(
         EnhancedBlockDataContainer(*[
             unshift_op.adjoint(s)
             for unshift_op, s in zip(unshift_ops, pet_sens)
-        ]) 
+        ])
     )
     pet_s_inv = pet_sens_combined.clone()
     pet_sens_array = pet_sens_combined.as_array()
-    pet_s_inv.fill(
-        np.reciprocal(
-            pet_sens_array,
-            where=pet_sens_array != 0,
-        )
-    )
+    pet_s_inv.fill(np.reciprocal(pet_sens_array, where=pet_sens_array != 0))
     cyl, _ = get_filters()
     cyl.apply(pet_s_inv)
-    
-    s_inv = EnhancedBlockDataContainer(
-        pet_s_inv, spect_s_inv
-    )
-    
-    # save the s_inv images
+
+    s_inv = EnhancedBlockDataContainer(pet_s_inv, spect_s_inv)
+
+    # save s_inv images (unchanged)
     for i, image in enumerate(s_inv.containers):
         image.write(os.path.join(args.output_path, f"s_inv_{i}.hv"))
         logging.info(f"Writing s_inv_{i} with max {image.max()}")
-            
-    # For each bed position, update each subset operator.
+
+    # --- now wrap PET objectives with uncombine/choose/unshift ---
     for i, suffix in enumerate(pet_data["bed_positions"]):
         for j in range(len(pet_dfs[i])):
-            # Replace the operator with the composed operator that applies:
-            # uncombine -> choose -> unshift, then the original op.
             pet_dfs[i][j] = OperatorCompositionFunction(
                 pet_dfs[i][j],
-                CompositionOperator(
-                    unshift_ops[i],
-                    choose_ops[i],
-                    uncombine_op,
-                ),
+                CompositionOperator(unshift_ops[i], choose_ops[i], uncombine_op),
             )
 
-    # At this point, pet_dfs is a list (over beds) of lists (over subsets).
-    # Flatten the list so you obtain one function per subset per bed.
+    # flatten beds
     pet_combined_dfs = [df for bed in pet_dfs for df in bed]
 
-    # Convert each operator into a final objective function.
-    pet_dfs = [
+    # block objectives
+    pet_dfs_block = [
         get_block_objective(
             pet_data["initial_image"],
             spect_data["initial_image"],
             df,
             order=0,
-        )
-        for df in pet_combined_dfs  
+        ) for df in pet_combined_dfs
     ]
- 
-    
-    spect_dfs = [
+    spect_dfs_block = [
         get_block_objective(
             spect_data["initial_image"],
             pet_data["initial_image"],
             obj_fun,
             order=1,
-        )
-        for obj_fun in spect_dfs
+        ) for obj_fun in spect_dfs
     ]
 
-    all_funs = pet_dfs + spect_dfs
+    all_funs = pet_dfs_block + spect_dfs_block
 
-    return all_funs, s_inv, None
+    # bundle κ² (PET in PET space; SPECT still in SPECT space—transform later in get_prior)
+    kappa_sq_block = EnhancedBlockDataContainer(pet_kappa_sq, spect_kappa_sq)
+
+    # write κ² images
+    for i, image in enumerate(kappa_sq_block.containers):
+        image.write(os.path.join(args.output_path, f"pet_kappa_sq_{i}.hv"))
+        logging.info(f"Writing pet_kappa_sq_{i} with max {image.max()}")
+
+    return all_funs, s_inv, kappa_sq_block
+
+
+def normalise_kappa_squares(kappa_block, pct=95):
+    """
+    Scale each κ² image so its `pct` percentile == 1.
+    """
+    arrays = [im.as_array() for im in kappa_block.containers]
+    pvals  = [np.percentile(a, pct) for a in arrays]
+    for im, p in zip(kappa_block.containers, pvals):
+        if p > 1e-12:
+            im *= (1.0 / p)
 
 
 def get_preconditioners(
@@ -573,7 +605,7 @@ def main() -> None:
 
     # Set up data fidelity functions.
     num_subsets = [int(i) for i in args.num_subsets]
-    all_funs, s_inv, kappa = get_data_fidelity(
+    all_funs, s_inv, kappa_sq_block = get_data_fidelity(
         args, 
         pet_data, spect_data, 
         get_pet_am_with_res,
@@ -583,6 +615,13 @@ def main() -> None:
         unshift_ops,     
         choose_ops
     )
+
+    # cross-modal scaling (95th pct; clip ratio to, say, 8× — tune)
+    kappa_sq_block = normalise_kappa_squares(
+        kappa_sq_block,
+        pct=95,
+    )
+
     
     if args.no_prior:
         prior = None
@@ -591,8 +630,8 @@ def main() -> None:
         prior = get_prior(
                 args, umap, pet_data, 
                 spect_data, initial_estimates, 
-                spect2pet, kappa
-                )
+                spect2pet, kappa_sq_block
+        )
         # Scale and attach Hessian to the prior if needed.
         prior = -1 / len(all_funs) * prior
         attach_prior_hessian(prior, epsilon=1e-3)
