@@ -143,3 +143,8 @@ tmp/
 temp/
 *.tmp
 *.log
+
+# PyPI build artifacts  
+dist/
+build/
+*.egg-info/

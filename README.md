@@ -21,10 +21,9 @@ Tools for nuclear medicine image reconstruction combining PET/SPECT with CT anat
 # Install dependencies via conda / pip or from source
 - SIRF
 - CIL
-- torch, numpy, numba etc. (see requirements.txt)
 
 # Install SETR
-pip install -e .
+pip install py-setr
 ```
 
 ## Note
