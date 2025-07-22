@@ -1,0 +1,8 @@
+# Core dependencies (pip-installable)
+torch>=2.0.0
+numba>=0.58.0
+numpy>=1.21.0
+matplotlib>=3.5.0
+
+# Note: CIL and SIRF must be installed separately from source
+# See README.md for installation instructions
