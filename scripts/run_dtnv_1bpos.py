@@ -64,6 +64,7 @@ from setr.utils.sirf import (
     get_block_objective,
     get_filters,
     get_s_inv_from_objs,
+    normalise_kappa_squares
 )
 
 cli = parse_cli()
@@ -177,9 +178,6 @@ def get_prior(
     )
 
     if kappas is not None:
-        for i, kappa in enumerate(kappas.containers):
-            logging.info(f"Writing kappa {i} with max {kappa.max()}")
-            kappa.write(os.path.join(args.output_path, f"kappa_{i}.hv"))
         kappas = bo.direct(kappas)
     else:
         kappas = EnhancedBlockDataContainer(
@@ -278,7 +276,6 @@ def get_data_fidelity(
         kappa = get_kappa_squareds(
             [pet_obj_funs, spect_obj_funs], 
             [pet_data["initial_image"], spect_data["initial_image"]],
-            normalise=True
         )
         for kappa_image in kappa.containers:
             gauss.apply(kappa_image)
@@ -303,14 +300,6 @@ def get_kappa_squareds(obj_funs_list, image_list, normalise=True):
         kappa_squareds.append(
             compute_kappa_squared_image_from_partitioned_objective(obj_funs, image)
         )
-    if normalise:
-        arrays = [im.as_array() for im in kappa_squareds]
-        p95    = [np.percentile(a, 95) for a in arrays]
-
-        scalars = [1/p if p>1e-12 else 1.0 for p in p95]
-
-        for im, s in zip(kappa_squareds, scalars):
-            im *= s 
             
     return EnhancedBlockDataContainer(*kappa_squareds)
 
@@ -483,13 +472,19 @@ def main() -> None:
 
     # Set up data fidelity functions.
     num_subsets = [int(i) for i in args.num_subsets]
-    all_funs, s_inv, kappa = get_data_fidelity(
+    all_funs, s_inv, kappas = get_data_fidelity(
         args, 
         pet_data, spect_data, 
         get_pet_am_with_res,
         get_spect_am_with_res,
         num_subsets
     )
+
+    kappas = normalise_kappa_squares(kappas)
+
+    for i, kappa in enumerate(kappas.containers):
+        logging.info(f"Writing kappa {i} with max {kappa.max()}")
+        kappa.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
     
     if args.no_prior:
         prior = None
@@ -498,7 +493,7 @@ def main() -> None:
         prior = get_prior(
                 args, ct, pet_data, 
                 spect_data, initial_estimates, 
-                spect2pet, kappa
+                spect2pet, kappas
                 )
         # Scale and attach Hessian to the prior if needed.
         prior = -1 / len(all_funs) * prior

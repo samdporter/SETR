@@ -1,17 +1,17 @@
-alpha: 1.0
-beta: 1.0
+alpha: 1
+beta: 1
 delta: null
 num_subsets: [9, 12]
 no_prior: false
-num_epochs: 10
+num_epochs: 50
 use_kappa: true
 initial_step_size: 1.0
 relaxation_eta: 0.02
 tail_singular_values: null
 
-pet_gauss_fwhm: [4.83, 5.61, 5.61] # FROM 710 acceptance testing at UCL
+pet_gauss_fwhm: [5.1, 4.9, 4.9] # FROM Mediso Anyscan specifications at 10cm
 spect_gauss_fwhm: [13.4, 13.4, 13.4]
-spect_res: [1.22, 0.03, false]
+spect_res: [1.22, 0.03, false] # Analytical collimator resolution for SPECT
 
 pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom"
 spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"

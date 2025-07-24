@@ -32,7 +32,7 @@ from cil.optimisation.operators import (
     BlockOperator,
     CompositionOperator,
     IdentityOperator,
-    ZeroOperator,
+    ZeroOperator, 
 )
 from cil.optimisation.utilities import Sampler
 
@@ -72,6 +72,7 @@ from setr.utils.sirf import (
     get_filters,
     get_s_inv_from_subset_objs,
     get_sensitivity_from_subset_objs,
+    normalise_kappa_squares
 )
 
 
@@ -263,20 +264,19 @@ def get_prior(
         spect2pet,  # spect2pet
         shape=(2, 2),
     )
+    logging.info("Block operator set up.")
 
-    if kappas is not None:
-        for i, kappa in enumerate(kappas.containers):
-            logging.info(f"Writing kappa {i} with max {kappa.max()}")
-            kappa.write(os.path.join(args.output_path, f"kappa_{i}.hv"))
-        kappas = bo.direct(kappas)
-    else:
+    if kappas is None:
         kappas = EnhancedBlockDataContainer(
             pet_data["initial_image"].get_uniform_copy(1),
             spect_data["initial_image"].get_uniform_copy(1),
         )
-        kappas = bo.direct(kappas)
+    
+    kappas = bo.direct(kappas)
+    logging.info("Kappa images set up.")
     for i, (b, el) in enumerate(zip([args.alpha, args.beta], kappas.containers)):
         kappas.containers[i].fill(b * el)
+    logging.info("Kappa images scaled.")
 
     vtv = WeightedVectorialTotalVariation(
         bo.direct(initial_estimates),
@@ -287,7 +287,9 @@ def get_prior(
         stable=True,
         tail_singular_values=args.tail_singular_values, 
     )
+    logging.info("Weighted Vectorial Total Variation prior set up.")
     prior = OperatorCompositionFunction(vtv, bo)
+    logging.info("Prior function composed with block operator.")
     return prior
 
 def get_data_fidelity(
@@ -349,20 +351,23 @@ def get_data_fidelity(
             compute_kappa_squared_image_from_partitioned_objective(df_list, tmpl)
         )
 
-    # shift each bed κ² into common PET space
-    pet_kappa_bed_sq_global = [
-        unshift_ops[i].adjoint(img) for i, img in enumerate(pet_kappa_bed_sq)
-    ]
 
     # add across beds (Fisher additivity)
-    pet_kappa_sq = pet_kappa_bed_sq_global[0].clone()
-    for img in pet_kappa_bed_sq_global[1:]:
-        pet_kappa_sq += img
+    pet_kappa_sq = uncombine_op.adjoint(
+        EnhancedBlockDataContainer(*[
+            unshift_op.adjoint(pet_kappa_bed_sq[i])
+            for i, unshift_op in enumerate(unshift_ops)
+        ])
+    )
+
+    logging.info(f"PET κ² images computed and uncombined with shape {pet_kappa_sq.shape}.")
 
     # SPECT κ²
     spect_kappa_sq = compute_kappa_squared_image_from_partitioned_objective(
         spect_dfs, spect_data['initial_image']
     )
+
+    logging.info(f"SPECT κ² image computed with shape {spect_kappa_sq.shape}.")
 
     pet_sens = [
         get_sensitivity_from_subset_objs(
@@ -429,23 +434,7 @@ def get_data_fidelity(
     # bundle κ² (PET in PET space; SPECT still in SPECT space—transform later in get_prior)
     kappa_sq_block = EnhancedBlockDataContainer(pet_kappa_sq, spect_kappa_sq)
 
-    # write κ² images
-    for i, image in enumerate(kappa_sq_block.containers):
-        image.write(os.path.join(args.output_path, f"pet_kappa_sq_{i}.hv"))
-        logging.info(f"Writing pet_kappa_sq_{i} with max {image.max()}")
-
     return all_funs, s_inv, kappa_sq_block
-
-
-def normalise_kappa_squares(kappa_block, pct=95):
-    """
-    Scale each κ² image so its `pct` percentile == 1.
-    """
-    arrays = [im.as_array() for im in kappa_block.containers]
-    pvals  = [np.percentile(a, pct) for a in arrays]
-    for im, p in zip(kappa_block.containers, pvals):
-        if p > 1e-12:
-            im *= (1.0 / p)
 
 
 def get_preconditioners(
@@ -619,10 +608,17 @@ def main() -> None:
     # cross-modal scaling (95th pct; clip ratio to, say, 8× — tune)
     kappa_sq_block = normalise_kappa_squares(
         kappa_sq_block,
-        pct=95,
+        pct=90,
     )
 
-    
+    # write κ² images
+    for i, image in enumerate(kappa_sq_block.containers):
+        image.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
+        try:
+            logging.info(image.get_info().get_geometrical_info())
+        except AttributeError:
+            logging.info("No geometrical info available for this image.")
+
     if args.no_prior:
         prior = None
     else:
@@ -632,12 +628,16 @@ def main() -> None:
                 spect_data, initial_estimates, 
                 spect2pet, kappa_sq_block
         )
+        logging.info("get_prior called.")
         # Scale and attach Hessian to the prior if needed.
         prior = -1 / len(all_funs) * prior
         attach_prior_hessian(prior, epsilon=1e-3)
+        logging.info("Prior Hessian attached.")
 
         for i, fun in enumerate(all_funs):
             all_funs[i] = SumFunction(fun, prior)
+
+    logging.info("Prior set up complete.")
         
     update_interval = len(all_funs)
     
