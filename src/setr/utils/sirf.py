@@ -226,7 +226,7 @@ def get_spect_data(path: str) -> dict:
 
     return spect_data
 
-def create_spect_uniform_image(sinogram, xy=None, origin=None):
+def create_spect_uniform_image(sinogram, origin=None):
     """
     Create a uniform image for SPECT data based on the sinogram dimensions.
     Adjusts the z-direction voxel size and image dimensions to create a template
@@ -242,8 +242,7 @@ def create_spect_uniform_image(sinogram, xy=None, origin=None):
             and voxel sizes.
     """
     # Create a uniform image from the sinogram and adjust z-voxel size.
-    print(type(xy))
-    image = sinogram.create_uniform_image(value=1, xy=int(xy))
+    image = sinogram.create_uniform_image(value=1)
     voxel_size = list(image.voxel_sizes())
     voxel_size[0] *= 2  # Adjust z-direction voxel size.
 
@@ -261,34 +260,36 @@ def create_spect_uniform_image(sinogram, xy=None, origin=None):
     new_image.initialise(tuple(dims), tuple(voxel_size), tuple(origin))
     return new_image
 
-def compute_kappa_squared_image_from_partitioned_objective(obj_funs, initial_image):
+def compute_kappa_squared_image_from_partitioned_objective(obj_funs, init_img):
     """
-    κ²(x) = H·1   (diagonal of the Hessian at x_init)  — no normalisation here.
-    Works for             ▸ PoissonLogLikelihoodWithLinearModelForMeanAndProjData
-                          ▸ OperatorCompositionFunction
-                          ▸ ScaledFunction
-                          ▸ any custom wrapper that stores the inner object as .function
+    κ²(x) = Σ_i  H_i(init_img) · 1    (no scaling).
+    Works with your 3‑arg STIR signature.
     """
-    out = initial_image.get_uniform_copy(0)
+    out  = init_img.get_uniform_copy(0)   # accumulator zeros
+    ones = init_img.get_uniform_copy(1)         # vector of ones
 
-    for f in obj_funs:
-        g = f
-        # unwrap nested *.function levels until we reach the real loss object
+    for obj_fun in obj_funs:
+        g = obj_fun
         while hasattr(g, "function"):
-            g = g.function
+            g = g.function 
 
-        # safety check
-        if not hasattr(g, "multiply_with_Hessian"):
-            raise TypeError(
-                f"{type(g).__name__} has no multiply_with_Hessian method"
-            )
+        h1 = g.multiply_with_Hessian(init_img, ones) 
+        out += h1
 
-        out += g.multiply_with_Hessian(
-            initial_image,
-            initial_image.allocate(1)
-        )
+    out = out.abs()
+    return out
 
-    return out.maximum(0)          # guard tiny negatives
+def normalise_kappa_squares(kappa_block, pct=95):
+    """
+    Scale each κ² image so its `pct` percentile == 1.
+    """
+    arrays = [im.as_array() for im in kappa_block.containers]
+    pvals  = [np.percentile(a, pct) for a in arrays]
+    for im, p in zip(kappa_block.containers, pvals):
+        if p > 1e-12:
+            logging.info(f"Normalising kappa image with max {im.max()} to percentile {pct} value {p}")
+            im *= (1.0 / p)
+    return kappa_block
 
 
 def attach_prior_hessian(prior, epsilon = 0) -> None:
