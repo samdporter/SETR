@@ -120,7 +120,7 @@ def prepare_data(args):
     spect_data = get_spect_data(args.spect_data_path)
 
     # Apply filters to initial images
-    cyl, gauss = get_filters()
+    cyl, gauss = get_filters(fwhms=(20,20,20))
 
     gauss.apply(spect_data["initial_image"])
     gauss.apply(pet_data["initial_image"])
@@ -286,6 +286,8 @@ def get_prior(
         gpu=not args.no_gpu,
         stable=True,
         tail_singular_values=args.tail_singular_values, 
+        diagonal=args.diagonal,
+        both_directions= args.both_directions,
     )
     logging.info("Weighted Vectorial Total Variation prior set up.")
     prior = OperatorCompositionFunction(vtv, bo)
@@ -605,10 +607,10 @@ def main() -> None:
         choose_ops
     )
 
-    # cross-modal scaling (95th pct; clip ratio to, say, 8× — tune)
+    # cross-modal scaling (XXth pct)
     kappa_sq_block = normalise_kappa_squares(
         kappa_sq_block,
-        pct=90,
+        pct=50,
     )
 
     # write κ² images

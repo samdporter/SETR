@@ -8,6 +8,8 @@ use_kappa: true
 initial_step_size: 1.0
 relaxation_eta: 0.02
 tail_singular_values: null
+diagonal: true
+both_directions: true
 
 pet_gauss_fwhm: [5.1, 4.9, 4.9] # FROM Mediso Anyscan specifications at 10cm
 spect_gauss_fwhm: [13.4, 13.4, 13.4]

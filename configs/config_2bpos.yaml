@@ -1,5 +1,5 @@
-alpha: 1.0
-beta: 5.0
+alpha: 0.5
+beta: 50
 delta: null
 num_subsets: [9, 12]
 no_prior: false
@@ -11,6 +11,8 @@ iterations: 250
 update_interval: null
 relaxation_eta: 0.02
 tail_singular_values: null
+diagonal: true
+both_directions: true
 
 pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
 spect_gauss_fwhm: [6.7, 6.7, 6.7] # FROM bremss data anyscan
