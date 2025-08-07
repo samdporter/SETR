@@ -21,11 +21,9 @@ from sirf.contrib.partitioner import partitioner
 AcquisitionData.set_storage_scheme("memory")
 
 # CIL imports
-from cil.framework import BlockDataContainer
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import (
     OperatorCompositionFunction,
-    SAGAFunction, 
     SVRGFunction,
     SumFunction,
 )
@@ -64,7 +62,7 @@ from setr.utils.sirf import (
     get_block_objective,
     get_filters,
     get_s_inv_from_objs,
-    normalise_kappa_squares
+    normalise_kappa_squares,
 )
 
 cli = parse_cli()
@@ -85,8 +83,8 @@ def configure_logging() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
-        
-        
+
+
 def prepare_data(args):
     """
     Prepare the CT image, PET and SPECT data, and initial estimates.
@@ -98,7 +96,7 @@ def prepare_data(args):
         initial_estimates: BlockDataContainer combining PET and SPECT initial images.
         cyl, gauss: Filter objects.
     """
-    
+
     # get guidance image
     ct = ImageData(os.path.join(args.pet_data_path, "umap_zoomed.hv"))
     # Normalize CT image
@@ -114,9 +112,9 @@ def prepare_data(args):
     gauss.apply(spect_data["initial_image"])
     gauss.apply(pet_data["initial_image"])
     cyl.apply(pet_data["initial_image"])
-    
+
     pet_data["initial_image"].write("initial_image_0.hv")
-    spect_data["initial_image"].write("initial_image_1.hv")            
+    spect_data["initial_image"].write("initial_image_1.hv")
 
     # check for nans in all data
     for data in [ct, pet_data["initial_image"], spect_data["initial_image"]]:
@@ -124,9 +122,11 @@ def prepare_data(args):
             logging.warning("An image contains NaNs")
             break
     for data in [
-        pet_data["acquisition_data"], spect_data["acquisition_data"],
+        pet_data["acquisition_data"],
+        spect_data["acquisition_data"],
         pet_data["normalisation"],
-        pet_data["additive"], spect_data["additive"]
+        pet_data["additive"],
+        spect_data["additive"],
     ]:
         if np.isnan(data.as_array()).any():
             logging.warning("A ProjData contains NaNs")
@@ -136,7 +136,9 @@ def prepare_data(args):
 
 
 def get_resampling_operators(
-    args, pet_data, spect_data,
+    args,
+    pet_data,
+    spect_data,
 ):
     """
     Set up resampling operators for SPECT images to PET images.
@@ -158,8 +160,12 @@ def get_resampling_operators(
 
 
 def get_prior(
-    args, ct, pet_data, spect_data,
-    initial_estimates, spect2pet,
+    args,
+    ct,
+    pet_data,
+    spect_data,
+    initial_estimates,
+    spect2pet,
     kappas=None,
 ):
     """
@@ -171,7 +177,9 @@ def get_prior(
     """
     bo = BlockOperator(
         IdentityOperator(pet_data["initial_image"]),  # pet2pet
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),  # zero_spect2pet
+        ZeroOperator(
+            spect_data["initial_image"], pet_data["initial_image"]
+        ),  # zero_spect2pet
         ZeroOperator(pet_data["initial_image"]),  # zero_pet2pet
         spect2pet,  # spect2pet
         shape=(2, 2),
@@ -185,11 +193,11 @@ def get_prior(
             spect_data["initial_image"].get_uniform_copy(1),
         )
         kappas = bo.direct(kappas)
-        
+
     # multiply first kappa by alpha
     for i, (ab, el) in enumerate(zip([args.alpha, args.beta], kappas.containers)):
         kappas.containers[i].fill(ab * el)
-    
+
     vtv = WeightedVectorialTotalVariation(
         bo.direct(initial_estimates),
         kappas,
@@ -197,15 +205,14 @@ def get_prior(
         anatomical=ct,
         gpu=not args.no_gpu,
         stable=True,
-        tail_singular_values=args.tail_singular_values, 
+        tail_singular_values=args.tail_singular_values,
     )
     prior = OperatorCompositionFunction(vtv, bo)
     return prior
 
+
 def get_data_fidelity(
-    args, pet_data, spect_data,
-    get_pet_am, get_spect_am,
-    num_subsets
+    args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets
 ):
     """
     Set up data fidelity (objective) functions.
@@ -217,7 +224,7 @@ def get_data_fidelity(
         pet_ams, spect_ams: Acquisition model components.
     """
     # Partition PET data.
-    
+
     _, _, pet_obj_funs = partitioner.data_partition(
         pet_data["acquisition_data"],
         pet_data["additive"],
@@ -236,22 +243,21 @@ def get_data_fidelity(
     )
 
     for obj_fun in pet_obj_funs:
-        obj_fun.set_up(pet_data['initial_image'])
+        obj_fun.set_up(pet_data["initial_image"])
     for obj_fun in spect_obj_funs:
-        obj_fun.set_up(spect_data['initial_image'])
+        obj_fun.set_up(spect_data["initial_image"])
 
     # Get sensitivity image ^ -1 now before we complicate things
     s_inv = get_s_inv_from_objs(
-        [pet_obj_funs, spect_obj_funs], 
+        [pet_obj_funs, spect_obj_funs],
         EnhancedBlockDataContainer(
-            pet_data["initial_image"], 
-            spect_data["initial_image"]
-        )
+            pet_data["initial_image"], spect_data["initial_image"]
+        ),
     )
-    
+
     for i, el in enumerate(s_inv.containers):
         s_inv.containers[i].write(os.path.join(args.output_path, f"s_inv_{i}.hv"))
-        
+
     pet_obj_funs = [
         get_block_objective(
             pet_data["initial_image"],
@@ -270,11 +276,11 @@ def get_data_fidelity(
         )
         for obj_fun in spect_obj_funs
     ]
-    
+
     _, gauss = get_filters()
     if args.use_kappa:
         kappa = get_kappa_squareds(
-            [pet_obj_funs, spect_obj_funs], 
+            [pet_obj_funs, spect_obj_funs],
             [pet_data["initial_image"], spect_data["initial_image"]],
         )
         for kappa_image in kappa.containers:
@@ -300,7 +306,7 @@ def get_kappa_squareds(obj_funs_list, image_list, normalise=True):
         kappa_squareds.append(
             compute_kappa_squared_image_from_partitioned_objective(obj_funs, image)
         )
-            
+
     return EnhancedBlockDataContainer(*kappa_squareds)
 
 
@@ -309,7 +315,8 @@ def get_preconditioners(
     s_inv: Any,
     all_funs: List[Any],
     update_interval: int,
-    prior: Any, initial_estimates: EnhancedBlockDataContainer,
+    prior: Any,
+    initial_estimates: EnhancedBlockDataContainer,
 ) -> Any:
     """
     Set up the preconditioners.
@@ -317,40 +324,47 @@ def get_preconditioners(
     Returns:
         The combined preconditioner.
     """
-    
+
     max_vals = [el.max() for el in initial_estimates.containers]
     minmax_val = min(max_vals)
-    
+
     bsrem_precond = BSREMPreconditioner(
-        s_inv, 1, np.inf, 
+        s_inv,
+        1,
+        np.inf,
         epsilon=minmax_val / 1000,
         max_vals=max_vals,
         smooth=True,
     )
     if prior is None:
         return bsrem_precond
-    
+
     prior_precond = ImageFunctionPreconditioner(
-        prior.inv_hessian_diag, 1., 
+        prior.inv_hessian_diag,
+        1.0,
         update_interval=update_interval,
         epsilon=0,
         freeze_iter=np.inf,
     )
-    
+
     precond = LehmerMeanPreconditioner(
         [bsrem_precond, prior_precond],
         update_interval=update_interval,
         freeze_iter=len(all_funs) * 10,
     )
-    
+
     return precond
+
 
 def get_probabilities(args, num_subsets, update_interval):
     pet_probs = [1 / update_interval] * num_subsets[0]
     spect_probs = [1 / update_interval] * num_subsets[1]
     probs = pet_probs + spect_probs
-    assert abs(sum(probs) - 1) < 1e-10, f"Probabilities do not sum to 1, got {sum(probs)}"
+    assert abs(sum(probs) - 1) < 1e-10, (
+        f"Probabilities do not sum to 1, got {sum(probs)}"
+    )
     return probs
+
 
 def get_callbacks(args, update_interval: int) -> List[Any]:
     """
@@ -361,10 +375,16 @@ def get_callbacks(args, update_interval: int) -> List[Any]:
     """
     return [
         SaveImageCallback(os.path.join(args.output_path, "image"), update_interval),
-        SaveGradientUpdateCallback(os.path.join(args.output_path, "gradient"), update_interval),
-        SavePreconditionerCallback(os.path.join(args.output_path, "preconditioner"),update_interval),
+        SaveGradientUpdateCallback(
+            os.path.join(args.output_path, "gradient"), update_interval
+        ),
+        SavePreconditionerCallback(
+            os.path.join(args.output_path, "preconditioner"), update_interval
+        ),
         PrintObjectiveCallback(update_interval),
-        SaveObjectiveCallback(os.path.join(args.output_path, "objective"), update_interval),
+        SaveObjectiveCallback(
+            os.path.join(args.output_path, "objective"), update_interval
+        ),
     ]
 
 
@@ -396,9 +416,7 @@ def get_algorithm(
     return algo
 
 
-def save_results(
-    bsrem: ISTA, args: argparse.Namespace
-) -> None:
+def save_results(bsrem: ISTA, args: argparse.Namespace) -> None:
     """Save profiling information and results to disk."""
 
     os.makedirs(args.output_path, exist_ok=True)
@@ -429,39 +447,45 @@ def main() -> None:
 
     # Redirect messages if needed.
     msg = MessageRedirector()
-    
+
     # Data preparation.
     ct, pet_data, spect_data = prepare_data(args)
-    
+
     # find alpha weighting using dynamic range of the initial images (95th percentile)
     pet_max = np.percentile(pet_data["initial_image"].as_array(), 95)
     spect_max = np.percentile(spect_data["initial_image"].as_array(), 95)
     args.alpha = args.alpha * spect_max / pet_max
     logging.info(f"Setting alpha to {args.alpha} based on initial images")
-        
+
     initial_estimates = EnhancedBlockDataContainer(
         pet_data["initial_image"], spect_data["initial_image"]
     )
-    
+
     for i, image in enumerate(initial_estimates.containers):
         image.write(os.path.join(args.output_path, f"initial_image_{i}.hv"))
-    
+
         # Set delta (smoothing parameter) if not provided
     if args.delta is None:
-        # set delta as 1000 times smaller than maximum of the minimum dynamic range of initial images 
+        # set delta as 1000 times smaller than maximum of the minimum dynamic range of initial images
         # multiplied by the weighted alpha/beta
-        args.delta = min(args.alpha*initial_estimates.containers[0].max(), args.beta*initial_estimates.containers[1].max()) / 1e3
+        args.delta = (
+            min(
+                args.alpha * initial_estimates.containers[0].max(),
+                args.beta * initial_estimates.containers[1].max(),
+            )
+            / 1e3
+        )
 
     save_args(args, "args.csv")
-    
+
     # Set up resampling operators.
     spect2pet = get_resampling_operators(args, pet_data, spect_data)
-    
+
     get_pet_am_with_res = lambda: get_pet_am(
         not args.no_gpu,
         gauss_fwhm=args.pet_gauss_fwhm,
     )
-    
+
     get_spect_am_with_res = lambda: get_spect_am(
         spect_data,
         res=args.spect_res,
@@ -473,11 +497,12 @@ def main() -> None:
     # Set up data fidelity functions.
     num_subsets = [int(i) for i in args.num_subsets]
     all_funs, s_inv, kappas = get_data_fidelity(
-        args, 
-        pet_data, spect_data, 
+        args,
+        pet_data,
+        spect_data,
         get_pet_am_with_res,
         get_spect_am_with_res,
-        num_subsets
+        num_subsets,
     )
 
     kappas = normalise_kappa_squares(kappas)
@@ -485,43 +510,44 @@ def main() -> None:
     for i, kappa in enumerate(kappas.containers):
         logging.info(f"Writing kappa {i} with max {kappa.max()}")
         kappa.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
-    
+
     if args.no_prior:
         prior = None
     else:
         # Set up the prior.
         prior = get_prior(
-                args, ct, pet_data, 
-                spect_data, initial_estimates, 
-                spect2pet, kappas
-                )
+            args, ct, pet_data, spect_data, initial_estimates, spect2pet, kappas
+        )
         # Scale and attach Hessian to the prior if needed.
         prior = -1 / len(all_funs) * prior
         attach_prior_hessian(prior)
 
         for i, fun in enumerate(all_funs):
             all_funs[i] = SumFunction(fun, prior)
-        
+
     update_interval = len(all_funs)
-    
+
     # Set up preconditioners.
     precond = get_preconditioners(
-        args, s_inv, all_funs, 
-        update_interval, prior,
-        initial_estimates
+        args, s_inv, all_funs, update_interval, prior, initial_estimates
     )
 
     probs = get_probabilities(args, num_subsets, update_interval)
-    
+
     f_obj = -SVRGFunction(
-            all_funs, sampler=Sampler.random_with_replacement(len(all_funs), prob=probs,),
-            snapshot_update_interval=update_interval*2, store_gradients=True
-        )
-    #f_obj = -SAGAFunction(
+        all_funs,
+        sampler=Sampler.random_with_replacement(
+            len(all_funs),
+            prob=probs,
+        ),
+        snapshot_update_interval=update_interval * 2,
+        store_gradients=True,
+    )
+    # f_obj = -SAGAFunction(
     #        all_funs, sampler=Sampler.random_with_replacement(len(all_funs), prob=probs,),
     #    )
-    #f_obj.function.warm_start_approximate_gradients(initial_estimates)
-    #f_obj = -SGFunction(
+    # f_obj.function.warm_start_approximate_gradients(initial_estimates)
+    # f_obj = -SGFunction(
     #        all_funs, sampler=Sampler.random_with_replacement(len(all_funs), prob=probs,),
     #    )
 
@@ -545,21 +571,20 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-
     if args.profile:
         logging.info("Profiling is enabled. This may slow down the execution.")
         profiler = cProfile.Profile()
         profiler.enable()
         main()
         profiler.disable()
-        profiler.dump_stats(args.output_path + '/profile_data.prof')
+        profiler.dump_stats(args.output_path + "/profile_data.prof")
 
-        with open(args.output_path + '/profiling_results.txt', 'w') as f:
+        with open(args.output_path + "/profiling_results.txt", "w") as f:
             logging.info("Writing profiling results to 'profiling_results.txt'")
             ps = pstats.Stats(profiler, stream=f)
-            ps.strip_dirs()                 # remove extraneous path info
-            ps.sort_stats('cumulative')     # sort by cumulative time
-            ps.print_stats(None)            # print *every* function
+            ps.strip_dirs()  # remove extraneous path info
+            ps.sort_stats("cumulative")  # sort by cumulative time
+            ps.print_stats(None)  # print *every* function
     else:
         logging.info("Profiling disabled.")
         main()

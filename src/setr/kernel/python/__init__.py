@@ -8,7 +8,7 @@ from .my_kem import (
     get_kernel_operator,
     BaseKernelOperator,
     KernelOperator,
-    NumbaKernelOperator
+    NumbaKernelOperator,
 )
 
 __all__ = [

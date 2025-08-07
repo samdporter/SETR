@@ -15,7 +15,6 @@ from sirf.STIR import (
     SPECTUBMatrix,
     SeparableGaussianImageFilter,
     TruncateToCylinderProcessor,
-    PoissonLogLikelihoodWithLinearModelForMeanAndProjData
 )
 from sirf.contrib import partitioner
 from setr.cil_extensions.operators import ScalingOperator
@@ -24,38 +23,37 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+
 def get_pet_am(
-        gpu=True, gauss_fwhm=None, 
-    ):
+    gpu=True,
+    gauss_fwhm=None,
+):
     if gpu:
         pet_am = AcquisitionModelUsingParallelproj()
     else:
         pet_am = AcquisitionModelUsingRayTracingMatrix()
         pet_am.set_num_tangential_LORs(10)
-    
+
     if gauss_fwhm:
         pet_psf = SeparableGaussianImageFilter()
         pet_psf.set_fwhms(gauss_fwhm)
         pet_am.set_image_data_processor(pet_psf)
-    
+
     return pet_am
 
 
 def get_spect_am(
-        spect_data, res = None, 
-        keep_all_views_in_cache=True, 
-        gauss_fwhm=None,
-        attenuation=True
-    ):
+    spect_data,
+    res=None,
+    keep_all_views_in_cache=True,
+    gauss_fwhm=None,
+    attenuation=True,
+):
     spect_am_mat = SPECTUBMatrix()
-    spect_am_mat.set_keep_all_views_in_cache(
-        keep_all_views_in_cache
-    )
+    spect_am_mat.set_keep_all_views_in_cache(keep_all_views_in_cache)
     if attenuation:
         try:
-            spect_am_mat.set_attenuation_image(
-                spect_data["attenuation"]
-            )
+            spect_am_mat.set_attenuation_image(spect_data["attenuation"])
         except:
             print("No attenuation data")
     if res:
@@ -63,14 +61,15 @@ def get_spect_am(
     spect_am = AcquisitionModelUsingMatrix(spect_am_mat)
     if gauss_fwhm:
         spect_psf = SeparableGaussianImageFilter()
-        spect_psf.set_fwhms(gauss_fwhm) 
+        spect_psf.set_fwhms(gauss_fwhm)
         spect_am.set_image_data_processor(spect_psf)
     return spect_am
+
 
 def get_pet_data(path: str, suffix: str = "") -> dict:
     """
     Load PET data from the given path.
-    
+
     This function always loads a template image and then attempts to load the
     initial image. If the initial image is not found, it creates a uniform copy
     of the template image (filled with ones).
@@ -94,10 +93,10 @@ def get_pet_data(path: str, suffix: str = "") -> dict:
     pet_data["normalisation"] = AcquisitionData(
         os.path.join(path, f"mult_factors{suffix}.hs")
     )
-    pet_data["attenuation"] = ImageData(os.path.join(path, f"umap_zoomed.hv"))
+    pet_data["attenuation"] = ImageData(os.path.join(path, "umap_zoomed.hv"))
 
     # Always load the template image.
-    template_img_path = os.path.join(path, f"template_image.hv")
+    template_img_path = os.path.join(path, "template_image.hv")
     try:
         pet_data["template_image"] = ImageData(template_img_path)
     except Exception as e_template:
@@ -105,12 +104,14 @@ def get_pet_data(path: str, suffix: str = "") -> dict:
         raise RuntimeError("Unable to load PET template image.") from e_template
 
     # Try to load the initial image.
-    initial_img_path = os.path.join(path, f"initial_image.hv")
+    initial_img_path = os.path.join(path, "initial_image.hv")
     try:
         pet_data["initial_image"] = ImageData(initial_img_path).maximum(0)
     except Exception as e_initial:
-        logging.warning("No PET initial image found (%s). Using uniform copy of template image.",
-                        str(e_initial))
+        logging.warning(
+            "No PET initial image found (%s). Using uniform copy of template image.",
+            str(e_initial),
+        )
         pet_data["initial_image"] = pet_data["template_image"].get_uniform_copy(1)
 
     try:
@@ -124,7 +125,10 @@ def get_pet_data(path: str, suffix: str = "") -> dict:
 from pathlib import Path
 from typing import Dict, List, Optional
 
-def get_pet_data_multiple_bed_pos(path: str, suffixes: List[str], tof: bool = False) -> Dict[str, object]:
+
+def get_pet_data_multiple_bed_pos(
+    path: str, suffixes: List[str], tof: bool = False
+) -> Dict[str, object]:
     """
     Load PET data for multiple bed positions.
 
@@ -136,7 +140,9 @@ def get_pet_data_multiple_bed_pos(path: str, suffixes: List[str], tof: bool = Fa
     """
     base = Path(path) / ("tof" if tof else "non_tof")
 
-    def load_image(fp: Path, clamp: bool = True, required: bool = False) -> Optional[ImageData]:
+    def load_image(
+        fp: Path, clamp: bool = True, required: bool = False
+    ) -> Optional[ImageData]:
         try:
             img = ImageData(str(fp))
             return img.maximum(0) if clamp else img
@@ -151,34 +157,40 @@ def get_pet_data_multiple_bed_pos(path: str, suffixes: List[str], tof: bool = Fa
 
     # shared data
     pet_data: Dict[str, object] = {}
-    pet_data["attenuation"]    = load_image(base / "umap_zoomed.hv")
-    pet_data["template_image"] = load_image(base / "template_image.hv", clamp=False, required=True)
-    pet_data["initial_image"]  = load_image(base / "initial_image.hv") \
-                                  or pet_data["template_image"].get_uniform_copy(1)
-    pet_data["spect"]          = load_image(base / "spect.hv", clamp=False)
+    pet_data["attenuation"] = load_image(base / "umap_zoomed.hv")
+    pet_data["template_image"] = load_image(
+        base / "template_image.hv", clamp=False, required=True
+    )
+    pet_data["initial_image"] = load_image(base / "initial_image.hv") or pet_data[
+        "template_image"
+    ].get_uniform_copy(1)
+    pet_data["spect"] = load_image(base / "spect.hv", clamp=False)
 
     # per‐bed data
     beds: Dict[str, Dict[str, object]] = {}
     for suf in suffixes:
         bp = {}
         bp["acquisition_data"] = load_acq(base / f"prompts{suf}.hs")
-        bp["additive"]         = load_acq(base / f"additive_term{suf}.hs")
-        bp["normalisation"]    = load_acq(base / f"mult_factors{suf}.hs")
-        bp["template_image"]   = load_image(base / f"template_image{suf}.hv", clamp=False, required=True)
-        bp["initial_image"]    = load_image(base / f"initial_image{suf}.hv") \
-                                  or bp["template_image"].get_uniform_copy(1)
-        bp["attenuation"]      = load_image(base / f"umap{suf}.hv")
-        bp["spect"]            = load_image(base / f"spect{suf}.hv", clamp=False)
+        bp["additive"] = load_acq(base / f"additive_term{suf}.hs")
+        bp["normalisation"] = load_acq(base / f"mult_factors{suf}.hs")
+        bp["template_image"] = load_image(
+            base / f"template_image{suf}.hv", clamp=False, required=True
+        )
+        bp["initial_image"] = load_image(base / f"initial_image{suf}.hv") or bp[
+            "template_image"
+        ].get_uniform_copy(1)
+        bp["attenuation"] = load_image(base / f"umap{suf}.hv")
+        bp["spect"] = load_image(base / f"spect{suf}.hv", clamp=False)
         beds[suf] = bp
 
     pet_data["bed_positions"] = beds
     return pet_data
 
-        
+
 def get_spect_data(path: str) -> dict:
     """
     Load SPECT data from the given path.
-    
+
     This function always loads a template image and then attempts to load the
     initial image. If the initial image is not found, it creates a uniform copy
     of the template image (filled with ones). Also, the attenuation image is flipped
@@ -220,11 +232,14 @@ def get_spect_data(path: str) -> dict:
     try:
         spect_data["initial_image"] = ImageData(initial_img_path).maximum(0)
     except Exception as e_initial:
-        logging.warning("No SPECT initial image found (%s). Using uniform copy of template image.",
-                        str(e_initial))
+        logging.warning(
+            "No SPECT initial image found (%s). Using uniform copy of template image.",
+            str(e_initial),
+        )
         spect_data["initial_image"] = spect_data["template_image"].get_uniform_copy(1)
 
     return spect_data
+
 
 def create_spect_uniform_image(sinogram, origin=None):
     """
@@ -249,8 +264,8 @@ def create_spect_uniform_image(sinogram, origin=None):
     # Compute new dimensions based on the uniform image.
     dims = list(image.dimensions())
     dims[0] = dims[0] // 2 + dims[0] % 2  # Halve the first dimension (with rounding)
-    dims[1] -= dims[1] % 2                # Ensure even number for second dimension
-    dims[2] = dims[1]                     # Set third dimension equal to second dimension
+    dims[1] -= dims[1] % 2  # Ensure even number for second dimension
+    dims[2] = dims[1]  # Set third dimension equal to second dimension
 
     if origin is None:
         origin = (0, 0, 0)
@@ -260,39 +275,43 @@ def create_spect_uniform_image(sinogram, origin=None):
     new_image.initialise(tuple(dims), tuple(voxel_size), tuple(origin))
     return new_image
 
+
 def compute_kappa_squared_image_from_partitioned_objective(obj_funs, init_img):
     """
     κ²(x) = Σ_i  H_i(init_img) · 1    (no scaling).
     Works with your 3‑arg STIR signature.
     """
-    out  = init_img.get_uniform_copy(0)   # accumulator zeros
-    ones = init_img.get_uniform_copy(1)         # vector of ones
+    out = init_img.get_uniform_copy(0)  # accumulator zeros
+    ones = init_img.get_uniform_copy(1)  # vector of ones
 
     for obj_fun in obj_funs:
         g = obj_fun
         while hasattr(g, "function"):
-            g = g.function 
+            g = g.function
 
-        h1 = g.multiply_with_Hessian(init_img, ones) 
+        h1 = g.multiply_with_Hessian(init_img, ones)
         out += h1
 
     out = out.abs()
     return out
+
 
 def normalise_kappa_squares(kappa_block, pct=95):
     """
     Scale each κ² image so its `pct` percentile == 1.
     """
     arrays = [im.as_array() for im in kappa_block.containers]
-    pvals  = [np.percentile(a, pct) for a in arrays]
+    pvals = [np.percentile(a, pct) for a in arrays]
     for im, p in zip(kappa_block.containers, pvals):
         if p > 1e-12:
-            logging.info(f"Normalising kappa image with max {im.max()} to percentile {pct} value {p}")
-            im *= (1.0 / p)
+            logging.info(
+                f"Normalising kappa image with max {im.max()} to percentile {pct} value {p}"
+            )
+            im *= 1.0 / p
     return kappa_block
 
 
-def attach_prior_hessian(prior, epsilon = 0) -> None:
+def attach_prior_hessian(prior, epsilon=0) -> None:
     """Attach an inv_hessian_diag method to the prior function."""
 
     def inv_hessian_diag(self, x, out=None, epsilon=epsilon):
@@ -305,7 +324,7 @@ def attach_prior_hessian(prior, epsilon = 0) -> None:
         if out is not None:
             out.fill(ret)
         return ret
-    
+
     def hessian_diag(self, x, out=None, epsilon=epsilon):
         ret = self.function.operator.adjoint(
             self.function.function.hessian_diag(
@@ -322,20 +341,19 @@ def attach_prior_hessian(prior, epsilon = 0) -> None:
 
 
 def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_funs):
+    """Returns a CIL SumFunction for the partitioned objective functions"""
 
-    """ Returns a CIL SumFunction for the partitioned objective functions """
-    
     for obj_fun in pet_obj_funs:
-        obj_fun.set_up(pet_data['initial_image'])
+        obj_fun.set_up(pet_data["initial_image"])
 
     for obj_fun in spect_obj_funs:
-        obj_fun.set_up(spect_data['initial_image'])
-    
+        obj_fun.set_up(spect_data["initial_image"])
+
     return pet_obj_funs, spect_obj_funs
 
-def get_block_objective(desired_image, other_image, obj_fun, scale=1, order = 0):
 
-    """ Returns a block CIL objective function for the given SIRF objective function """
+def get_block_objective(desired_image, other_image, obj_fun, scale=1, order=0):
+    """Returns a block CIL objective function for the given SIRF objective function"""
 
     # Set up zero operators
     o2d_zero = ZeroOperator(other_image, desired_image)
@@ -345,56 +363,75 @@ def get_block_objective(desired_image, other_image, obj_fun, scale=1, order = 0)
         d2d_id = ScalingOperator(scale, desired_image)
 
     if order == 0:
-        return OperatorCompositionFunction(obj_fun, BlockOperator(d2d_id, o2d_zero, shape = (1,2)))
+        return OperatorCompositionFunction(
+            obj_fun, BlockOperator(d2d_id, o2d_zero, shape=(1, 2))
+        )
     elif order == 1:
-        return OperatorCompositionFunction(obj_fun, BlockOperator(o2d_zero, d2d_id, shape = (1,2)))
+        return OperatorCompositionFunction(
+            obj_fun, BlockOperator(o2d_zero, d2d_id, shape=(1, 2))
+        )
     else:
         raise ValueError("Order must be 0 or 1")
 
-def set_up_kl_objectives(pet_data, spect_data, pet_datas, pet_norms, spect_datas, pet_ams, spect_ams):
 
-    """ Returns a CIL SumFunction using KL objective functions for the PET and SPECT data and acq models """
-    
+def set_up_kl_objectives(
+    pet_data, spect_data, pet_datas, pet_norms, spect_datas, pet_ams, spect_ams
+):
+    """Returns a CIL SumFunction using KL objective functions for the PET and SPECT data and acq models"""
+
     for d, am in zip(pet_datas, pet_ams):
-        am.set_up(d, pet_data['initial_image'])
+        am.set_up(d, pet_data["initial_image"])
 
     for d, am in zip(spect_datas, spect_ams):
-        am.set_up(d, spect_data['initial_image'])
+        am.set_up(d, spect_data["initial_image"])
 
-    pet_ads = [am.get_additive_term()*norm for am, norm in zip(pet_ams, pet_norms)]
-    spect_ads = [am.get_additive_term() for am in spect_ams] # Do I somehow need to apply the normalisation here?
+    pet_ads = [am.get_additive_term() * norm for am, norm in zip(pet_ams, pet_norms)]
+    spect_ads = [
+        am.get_additive_term() for am in spect_ams
+    ]  # Do I somehow need to apply the normalisation here?
 
     pet_ams = [am.get_linear_acquisition_model() for am in pet_ams]
     spect_ams = [am.get_linear_acquisition_model() for am in spect_ams]
 
-    pet_obj_funs = [OperatorCompositionFunction(KullbackLeibler(data, eta=add+add.max()/1e3), am) for data, add, am in zip(pet_datas, pet_ads, pet_ams)]
-    spect_obj_funs = [OperatorCompositionFunction(KullbackLeibler(data, eta=add+add.max()/1e3), am) for data, add, am in zip(spect_datas, spect_ads, spect_ams)]
+    pet_obj_funs = [
+        OperatorCompositionFunction(
+            KullbackLeibler(data, eta=add + add.max() / 1e3), am
+        )
+        for data, add, am in zip(pet_datas, pet_ads, pet_ams)
+    ]
+    spect_obj_funs = [
+        OperatorCompositionFunction(
+            KullbackLeibler(data, eta=add + add.max() / 1e3), am
+        )
+        for data, add, am in zip(spect_datas, spect_ads, spect_ams)
+    ]
 
     return pet_obj_funs, spect_obj_funs
+
 
 def get_s_inv_from_objs(obj_funs, initial_estimates):
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimates.get_uniform_copy(0)
     for i, el in enumerate(s_inv.containers):
         for j, obj_fun in enumerate(obj_funs[i]):
-            if j == 0: 
+            if j == 0:
                 sens = obj_fun.get_subset_sensitivity(0)
             else:
                 sens += obj_fun.get_subset_sensitivity(0)
         # Compute maximum with zero (returning a new container)
-        sens.maximum(0, out = sens)
+        sens.maximum(0, out=sens)
         sens_arr = sens.as_array().astype(np.float32)
         # We can afford to avoid zeros because
         # a zero sensitivity means we're outside the FOV
         inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
         # there really shouldn't be any NaNs, but just in case
-        s_inv.containers[i].fill(np.nan_to_num(inv_sens_arr) )
+        s_inv.containers[i].fill(np.nan_to_num(inv_sens_arr))
     return s_inv
 
 
 def get_s_inv_from_am(ams, initial_estimates):
     # get subset_sensitivity BDC for preconditioner
-    s_inv = initial_estimates*0
+    s_inv = initial_estimates * 0
     for i, el in enumerate(s_inv.containers):
         for am in ams[i]:
             one = am.forward(initial_estimates[i]).get_uniform_copy(1)
@@ -402,15 +439,16 @@ def get_s_inv_from_am(ams, initial_estimates):
             el += tmp
         el = el.maximum(0)
         el_arr = el.as_array()
-        el_arr = np.reciprocal(el_arr, where=el_arr!=0)
+        el_arr = np.reciprocal(el_arr, where=el_arr != 0)
         el.fill(np.nan_to_num(el_arr))
     return s_inv
+
 
 def get_s_inv_from_subset_objs(obj_funs, initial_estimate):
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimate.get_uniform_copy(0)
     for j, obj_fun in enumerate(obj_funs):
-        if j == 0: 
+        if j == 0:
             sens = obj_fun.get_subset_sensitivity(0)
         else:
             sens += obj_fun.get_subset_sensitivity(0)
@@ -421,13 +459,14 @@ def get_s_inv_from_subset_objs(obj_funs, initial_estimate):
     # a zero sensitivity means we're outside the FOV
     inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
     # there really shouldn't be any NaNs, but just in case
-    s_inv.fill(np.nan_to_num(inv_sens_arr) )
+    s_inv.fill(np.nan_to_num(inv_sens_arr))
     return s_inv
+
 
 def get_sensitivity_from_subset_objs(obj_funs, initial_estimate):
     # get subset_sensitivity BDC for preconditioner
     for j, obj_fun in enumerate(obj_funs):
-        if j == 0: 
+        if j == 0:
             sens = obj_fun.get_subset_sensitivity(0)
         else:
             sens += obj_fun.get_subset_sensitivity(0)
@@ -435,17 +474,18 @@ def get_sensitivity_from_subset_objs(obj_funs, initial_estimate):
     sens = sens.maximum(0)
     return sens
 
+
 def get_sensitivities_from_subset_objs(obj_funs, initial_estimate):
     # get subset_sensitivity BDC for preconditioner
-    sens_list = [] 
+    sens_list = []
     for j, obj_fun in enumerate(obj_funs):
         sens = obj_fun.get_subset_sensitivity(0)
         sens = sens.maximum(0)
         sens_list.append(sens)
     return sens
 
-def compute_inv_hessian_diagonals(bdc, obj_funs_list):
 
+def compute_inv_hessian_diagonals(bdc, obj_funs_list):
     outputs = []
 
     for image, obj_funs in zip(bdc.containers, obj_funs_list):
@@ -455,28 +495,29 @@ def compute_inv_hessian_diagonals(bdc, obj_funs_list):
 
         # Accumulate Hessian contributions
         for obj_fun in obj_funs:
-            hessian_diag += obj_fun.function.multiply_with_Hessian(
-                image, ones_image
-            )
+            hessian_diag += obj_fun.function.multiply_with_Hessian(image, ones_image)
 
         # Take absolute values and write the result
         hessian_diag = hessian_diag.abs()
 
         hessian_diag_arr = hessian_diag.as_array()
-        hessian_diag.fill(np.reciprocal(hessian_diag_arr, where=hessian_diag_arr!=0))
-        
+        hessian_diag.fill(np.reciprocal(hessian_diag_arr, where=hessian_diag_arr != 0))
+
         outputs.append(hessian_diag)
 
     return BlockDataContainer(*outputs)
 
-def get_subset_data(data, num_subsets, stagger = "staggered"):
-        
-    views=data.dimensions()[2]
+
+def get_subset_data(data, num_subsets, stagger="staggered"):
+    views = data.dimensions()[2]
     indices = list(range(views))
-    partitions_idxs = partitioner.partition_indices(num_subsets, indices, stagger = stagger)
+    partitions_idxs = partitioner.partition_indices(
+        num_subsets, indices, stagger=stagger
+    )
     datas = [data.get_subset(partitions_idxs[i]) for i in range(num_subsets)]
 
     return datas
+
 
 def get_filters(fwhms=(10, 10, 10)):
     cyl, gauss = TruncateToCylinderProcessor(), SeparableGaussianImageFilter()

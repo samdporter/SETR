@@ -8,7 +8,7 @@ from .python import (
     get_kernel_operator,
     BaseKernelOperator,
     KernelOperator as PythonKernelOperator,
-    NumbaKernelOperator
+    NumbaKernelOperator,
 )
 from .stir import STIRKernelOperator
 

@@ -4,8 +4,10 @@ from cil.optimisation.utilities import Preconditioner
 from cil.optimisation.functions import ScaledFunction
 from sirf.STIR import SeparableGaussianImageFilter
 
+
 class ConstantPreconditioner(Preconditioner):
     """Constant preconditioner."""
+
     def __init__(self, value):
         self.value = value
 
@@ -18,8 +20,8 @@ class ConstantPreconditioner(Preconditioner):
 
 class PreconditionerWithInterval(Preconditioner):
     """Preconditioner with support for update intervals and freezing behavior."""
-    def __init__(self, update_interval=1, 
-                 freeze_iter=np.inf):
+
+    def __init__(self, update_interval=1, freeze_iter=np.inf):
         self.update_interval = update_interval
         self.freeze_iter = freeze_iter
         self.freeze = None
@@ -50,14 +52,21 @@ class PreconditionerWithInterval(Preconditioner):
 
 class BSREMPreconditioner(PreconditionerWithInterval):
     """Preconditioner for BSREM."""
-    def __init__(self, s_inv, update_interval=1, 
-                 freeze_iter=np.inf, epsilon=None,
-                 max_vals=None, smooth=True,):
+
+    def __init__(
+        self,
+        s_inv,
+        update_interval=1,
+        freeze_iter=np.inf,
+        epsilon=None,
+        max_vals=None,
+        smooth=True,
+    ):
         super().__init__(update_interval, freeze_iter)
         self.s_inv = s_inv
         if smooth:
             self.gaussian = SeparableGaussianImageFilter()
-            self.gaussian.set_fwhms((10,10,10))
+            self.gaussian.set_fwhms((10, 10, 10))
         else:
             self.gaussian = None
         if epsilon is None:
@@ -80,9 +89,9 @@ class BSREMPreconditioner(PreconditionerWithInterval):
                 x = x.minimum(self.max_vals)
                 if self.gaussian is not None:
                     self.gaussian.apply(x)
-                
+
         if out is None:
-            return (x + self.epsilon) * self.s_inv 
+            return (x + self.epsilon) * self.s_inv
         out.fill((x + self.epsilon) * self.s_inv)
         return out
 
@@ -91,15 +100,22 @@ class ImageFunctionPreconditioner(PreconditionerWithInterval):
     """
     Preconditioner for the prior, using the inverse Hessian diagonal.
     """
-    def __init__(self, function, scale, update_interval=1, 
-                 freeze_iter=np.inf, epsilon = 0,
-                 max_value=np.inf):
+
+    def __init__(
+        self,
+        function,
+        scale,
+        update_interval=1,
+        freeze_iter=np.inf,
+        epsilon=0,
+        max_value=np.inf,
+    ):
         super().__init__(update_interval, freeze_iter)
         self.function = function
         self.scale = scale
         self.epsilon = epsilon
         self.max_value = max_value
-        
+
     def compute_preconditioner(self, algorithm, out=None):
         precond = self.scale * self.function(algorithm.solution)
         precond = precond.maximum(self.epsilon)
@@ -112,11 +128,15 @@ class ImageFunctionPreconditioner(PreconditionerWithInterval):
 
 class HarmonicMeanPreconditioner(PreconditionerWithInterval):
     """Preconditioner that combines two preconditioners using a harmonic mean."""
-    def __init__(self, preconds, 
-                 update_interval=np.inf, 
-                 freeze_iter=np.inf, epsilon=1e-6,
-                 scales =None
-                 ):
+
+    def __init__(
+        self,
+        preconds,
+        update_interval=np.inf,
+        freeze_iter=np.inf,
+        epsilon=1e-6,
+        scales=None,
+    ):
         super().__init__(update_interval, freeze_iter)
         self.preconds = preconds
         self.epsilon = epsilon
@@ -132,14 +152,19 @@ class HarmonicMeanPreconditioner(PreconditionerWithInterval):
             b.sapyb(self.scales[1], b, 0, out=b)
         out.fill(2 * a * b / (a + b + self.epsilon))
         return out
-    
+
+
 class LehmerMeanPreconditioner(PreconditionerWithInterval):
     """Combine two preconditioners via a Lehmer mean of order p."""
-    def __init__(self, preconds, 
-                 p=1e-6,   # Lehmer order: p=0→harmonic, p=1→arithmetic, p>1→toward max
-                 epsilon=1e-12,
-                 update_interval=np.inf, 
-                 freeze_iter=np.inf):
+
+    def __init__(
+        self,
+        preconds,
+        p=1e-6,  # Lehmer order: p=0→harmonic, p=1→arithmetic, p>1→toward max
+        epsilon=1e-12,
+        update_interval=np.inf,
+        freeze_iter=np.inf,
+    ):
         super().__init__(update_interval, freeze_iter)
         self.preconds = preconds
         self.p = p
@@ -164,6 +189,7 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
 
 class ArithmeticMeanPreconditioner(PreconditionerWithInterval):
     """Preconditioner that combines two preconditioners using a simple mean."""
+
     def __init__(self, preconds, update_interval=np.inf, freeze_iter=np.inf):
         super().__init__(update_interval, freeze_iter)
         self.preconds = preconds
@@ -187,6 +213,7 @@ class ArithmeticMeanPreconditioner(PreconditionerWithInterval):
 
 class IdentityPreconditioner(PreconditionerWithInterval):
     """Identity preconditioner."""
+
     def __init__(self, update_interval=1, freeze_iter=np.inf):
         super().__init__(update_interval, freeze_iter)
 
@@ -199,6 +226,7 @@ class IdentityPreconditioner(PreconditionerWithInterval):
 
 class SubsetPreconditioner(PreconditionerWithInterval):
     """Base class for subset preconditioners."""
+
     def __init__(self, num_subsets, update_interval=1, freeze_iter=np.inf):
         super().__init__(update_interval, freeze_iter)
         self.num_subsets = num_subsets
@@ -212,7 +240,15 @@ class SubsetEMPreconditioner(SubsetPreconditioner):
     Preconditioner for EM with subsets using sensitivities.
     Can be used for OSEM with sequential sampler or for stochastic EM with random sampler.
     """
-    def __init__(self, num_subsets, sensitivities, update_interval=1, freeze_iter=np.inf, epsilon=1e-6):
+
+    def __init__(
+        self,
+        num_subsets,
+        sensitivities,
+        update_interval=1,
+        freeze_iter=np.inf,
+        epsilon=1e-6,
+    ):
         super().__init__(num_subsets, update_interval, freeze_iter)
         self.counter = 0
         self.sensitivities = sensitivities
@@ -227,25 +263,27 @@ class SubsetEMPreconditioner(SubsetPreconditioner):
 
         if out is None:
             return algorithm.solution / adj
-        
+
         algorithm.solution.divide(adj, out=out)
         return out
 
 
 class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
-    def __init__(self,
-                 sens_bdcs,           # list of BlockDataContainer(s1,s2), length=num_subsets
-                 kernel,            # [K1, K2] kernel operators for each bed
-                 uncombine_ops,      # [U1, U2] uncombine (adjoint) operators
-                 num_subsets,
-                 update_interval=1,
-                 freeze_iter=np.inf,
-                 epsilon=1e-6):
+    def __init__(
+        self,
+        sens_bdcs,  # list of BlockDataContainer(s1,s2), length=num_subsets
+        kernel,  # [K1, K2] kernel operators for each bed
+        uncombine_ops,  # [U1, U2] uncombine (adjoint) operators
+        num_subsets,
+        update_interval=1,
+        freeze_iter=np.inf,
+        epsilon=1e-6,
+    ):
         super().__init__(num_subsets, update_interval, freeze_iter)
-        self.sens_bdcs    = sens_bdcs
-        self.kernel     = kernel
+        self.sens_bdcs = sens_bdcs
+        self.kernel = kernel
         self.uncombine_ops = uncombine_ops
-        self.epsilon     = epsilon
+        self.epsilon = epsilon
         self.freeze_kernel_iter = freeze_iter
 
     def apply(self, algorithm, gradient, out=None):
@@ -257,15 +295,14 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             self.precond = self.compute_preconditioner(algorithm).abs()
         if out is None:
             return gradient * self.precond
-        
+
         if out is None:
             return gradient * self.precond
-        
+
         gradient.multiply(self.precond, out=out)
         return out
 
     def compute_preconditioner(self, algorithm, out=None):
-
         # for the kernelised EM, we need to freeze the alpha after a certain number of iterations
         # rather than freezing the whole preconditioner
         if algorithm.iteration >= self.freeze_kernel_iter:
@@ -278,7 +315,9 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             sg = algorithm.f
         try:
             subset_idx = sg.data_passes_indices[-1][0]
-        except IndexError: # can happen if the preconditioner is called before the first iteration
+        except (
+            IndexError
+        ):  # can happen if the preconditioner is called before the first iteration
             subset_idx = 0
 
         sens_bdc = self.sens_bdcs[subset_idx]
@@ -288,21 +327,30 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
         for i in range(1, len(sens_bdc.containers)):
             k_s = self.kernels[i].adjoint(sens_bdc.containers[i])
             total += self.uncombine_ops[i].adjoint(k_s)
-        total += self.epsilon # to avoid division by zero
+        total += self.epsilon  # to avoid division by zero
 
         if out is None:
             return algorithm.solution / total
-        
+
         algorithm.solution.divide(total, out=out)
         return out
-    
+
 
 class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
     """
     Subset preconditioner for (hybrid) kernelised EM.
     Can be used for OS(H)KEM with sequential sampler or for stochastic (H)KEM with random sampler.
     """
-    def __init__(self, num_subsets, sensitivities, kernel, update_interval=1, freeze_iter=np.inf, epsilon=1e-6):
+
+    def __init__(
+        self,
+        num_subsets,
+        sensitivities,
+        kernel,
+        update_interval=1,
+        freeze_iter=np.inf,
+        epsilon=1e-6,
+    ):
         super().__init__(num_subsets, update_interval, freeze_iter=np.inf)
         self.sensitivities = sensitivities
         self.kernel = kernel
@@ -318,12 +366,11 @@ class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             self.precond = self.compute_preconditioner(algorithm).abs()
         if out is None:
             return gradient * self.precond
-        
+
         gradient.multiply(self.precond, out=out)
         return out
 
     def compute_preconditioner(self, algorithm, out=None):
-
         # for the kernelised EM, we need to freeze the alpha after a certain number of iterations
         # rather than freezing the whole preconditioner
         if algorithm.iteration >= self.freeze_kernel_iter:
@@ -333,11 +380,11 @@ class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             sg = algorithm.f.function
         else:
             sg = algorithm.f
-        adj= self.kernel.adjoint(self.sensitivities[sg.data_passes_indices[-1][0]])
+        adj = self.kernel.adjoint(self.sensitivities[sg.data_passes_indices[-1][0]])
         adj += self.epsilon
 
         if out is None:
             return algorithm.solution / adj
-        
+
         algorithm.solution.divide(adj, out=out)
         return out

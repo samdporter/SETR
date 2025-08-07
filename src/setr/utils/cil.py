@@ -3,6 +3,7 @@ import torch
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
 class BlockDataContainerToArray:
     def __init__(self, domain_geometry, gpu=True):
         self.domain_geometry = domain_geometry
@@ -10,7 +11,9 @@ class BlockDataContainerToArray:
 
     def direct(self, x, out=None):
         if not hasattr(x, "containers"):
-            raise ValueError("Input x must be a block data container with a 'containers' attribute.")
+            raise ValueError(
+                "Input x must be a block data container with a 'containers' attribute."
+            )
         arrays = [d.as_array() for d in x.containers]
         if self.gpu:
             tens = [torch.tensor(arr, device=device) for arr in arrays]
