@@ -478,8 +478,8 @@ def get_subset_data(data, num_subsets, stagger = "staggered"):
 
     return datas
 
-def get_filters():
+def get_filters(fwhms=(10, 10, 10)):
     cyl, gauss = TruncateToCylinderProcessor(), SeparableGaussianImageFilter()
     cyl.set_strictly_less_than_radius(True)
-    gauss.set_fwhms((10,10,10))
+    gauss.set_fwhms(fwhms)
     return cyl, gauss
