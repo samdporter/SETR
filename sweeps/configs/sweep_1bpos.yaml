@@ -1,0 +1,21 @@
+# Sweep configuration for single bed position
+sweep_name: "1bpos_alpha_beta"
+base_config: "config_1bpos.yaml"
+script: "run_dtnv_1bpos.py"
+
+# SGE resource requirements
+sge:
+  runtime: "48:00:00"
+  memory: "60G"
+  cores: 4
+  queue: null  # Use default queue
+
+# Parameter sweep settings
+parameters:
+  alpha_file: "alphas.csv"
+  beta_file: "betas.csv"
+
+# Optional overrides for base config
+config_overrides:
+  num_epochs: 50
+  # Add other parameters you want to override
