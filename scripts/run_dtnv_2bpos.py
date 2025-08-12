@@ -127,8 +127,7 @@ def get_prior(args, umap, pet_data, spect_data, initial_estimates, bo):
 
     # multiply first kappa by alpha/beta for TNV prior
     for i, (ab, el) in enumerate(zip([args.alpha, args.beta], kappas.containers)):
-        el *= float(ab)
-        kappas.containers[i].fill(el)
+        kappas.containers[i].fill(float(ab) * el)
     logging.info("Kappa images scaled.")
 
     vtv = WeightedVectorialTotalVariation(
@@ -366,20 +365,18 @@ def main() -> None:
         shape=(2, 2),
     )
 
-    def get_pet_am_with_res():
-        return get_pet_am(
-            not args.no_gpu,
-            gauss_fwhm=args.pet_gauss_fwhm,
-        )
+    get_pet_am_with_res = lambda: get_pet_am(
+        not args.no_gpu,
+        gauss_fwhm=args.pet_gauss_fwhm,
+    )
 
-    def get_spect_am_with_res():
-        return get_spect_am(
-            spect_data,
-            res=args.spect_res,
-            keep_all_views_in_cache=args.stop_keep_all_views_in_cache,
-            gauss_fwhm=args.spect_gauss_fwhm,
-            attenuation=True,
-        )
+    get_spect_am_with_res = lambda: get_spect_am(
+        spect_data,
+        res=args.spect_res,
+        keep_all_views_in_cache=args.stop_keep_all_views_in_cache,
+        gauss_fwhm=args.spect_gauss_fwhm,
+        attenuation=True,
+    )
 
     # Set up data fidelity
     all_funs, s_inv, kappa_sq_block = get_data_fidelity(
@@ -444,13 +441,7 @@ def main() -> None:
     # Run algorithm using shared function
     subiterations = args.num_epochs * len(all_funs)
     bsrem = get_algorithm(
-        initial_estimates,
-        f_obj,
-        precond,
-        step_size,
-        update_interval,
-        subiterations,
-        callbacks,
+        initial_estimates, f_obj, precond, step_size, update_interval, subiterations, callbacks
     )
 
     # Save results using shared function

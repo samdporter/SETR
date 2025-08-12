@@ -177,17 +177,9 @@ def write_timeout_log(
         f.write(f"Duration: {duration_s:.2f} seconds (TIMEOUT)\n")
         f.write(f"Status: TIMEOUT after {int(duration_s)} seconds\n\n")
         f.write("STDOUT (partial):\n")
-        f.write(
-            e.stdout
-            if isinstance(e.stdout, str) and e.stdout
-            else "No stdout captured\n"
-        )
+        f.write(e.stdout if isinstance(e.stdout, str) and e.stdout else "No stdout captured\n")
         f.write("\nSTDERR (partial):\n")
-        f.write(
-            e.stderr
-            if isinstance(e.stderr, str) and e.stderr
-            else "No stderr captured\n"
-        )
+        f.write(e.stderr if isinstance(e.stderr, str) and e.stderr else "No stderr captured\n")
 
 
 # -----------------------------------------------------------------------------
@@ -220,9 +212,7 @@ def run_test(settings: Settings, tc: TestCase) -> TestResult:
             ok = True
         else:
             snippet = (proc.stderr or "")[:200]
-            logging.error(
-                "❌ FAILED: %s (rc=%s) | %s", tc.name, proc.returncode, snippet
-            )
+            logging.error("❌ FAILED: %s (rc=%s) | %s", tc.name, proc.returncode, snippet)
             ok = False
     except subprocess.TimeoutExpired as e:
         duration = time.time() - start
@@ -237,9 +227,7 @@ def run_test(settings: Settings, tc: TestCase) -> TestResult:
     return TestResult(tc.name, tc.script_rel, tc.config_filename, ok)
 
 
-def write_summary(
-    summary_path: Path, settings: Settings, results: Sequence[TestResult]
-) -> None:
+def write_summary(summary_path: Path, settings: Settings, results: Sequence[TestResult]) -> None:
     total = len(results)
     successful = sum(bool(r.ok) for r in results)
     with open(summary_path, "w") as f:
@@ -296,9 +284,7 @@ def main() -> None:
         successful / total * 100,
     )
     for r in results:
-        logging.info(
-            "  %s %s (%s)", "✅ PASS" if r.ok else "❌ FAIL", r.name, r.script_rel
-        )
+        logging.info("  %s %s (%s)", "✅ PASS" if r.ok else "❌ FAIL", r.name, r.script_rel)
 
     summary_path = settings.output_base / "test_summary.txt"
     write_summary(summary_path, settings, results)

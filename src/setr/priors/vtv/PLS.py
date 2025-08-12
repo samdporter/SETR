@@ -16,7 +16,6 @@
 #   - proximal(...)  -> NotImplementedError (non-separable)
 #
 import numpy as np
-
 from cil.optimisation.functions import Function
 
 from setr.core.gradients import Jacobian
@@ -236,9 +235,7 @@ class WeightedParallelLevelSets(Function):
 
         # coupling
         if coupling is None:
-            C = np.ones((self.M, self.M), dtype=np.float32) - np.eye(
-                self.M, dtype=np.float32
-            )
+            C = np.ones((self.M, self.M), dtype=np.float32) - np.eye(self.M, dtype=np.float32)
         else:
             C = np.asarray(coupling, dtype=np.float32)
             if C.shape != (self.M, self.M):
@@ -364,6 +361,4 @@ class WeightedParallelLevelSets(Function):
         return img_grad
 
     def proximal(self, x, tau, out=None):
-        raise NotImplementedError(
-            "PLS proximal is non-separable; use a first-order/PDHG scheme."
-        )
+        raise NotImplementedError("PLS proximal is non-separable; use a first-order/PDHG scheme.")

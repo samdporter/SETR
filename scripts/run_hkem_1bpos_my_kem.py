@@ -63,9 +63,11 @@ def run_ista(args, data, guidance, hyperparams):
 
     # Get acquisition model function
     if args.modality.upper() == "PET":
+
         def get_am():
             return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.gauss_fwhm)
     else:
+
         def get_am():
             return get_spect_am(data, args.spect_res, True, args.gauss_fwhm)
 
@@ -91,10 +93,7 @@ def run_ista(args, data, guidance, hyperparams):
 
     # Set up objective functions with kernel operator
     truncate = TruncationOperator(data["initial_image"])
-    f_list = [
-        OperatorCompositionFunction(obj, CompositionOperator(K, truncate))
-        for obj in objs
-    ]
+    f_list = [OperatorCompositionFunction(obj, CompositionOperator(K, truncate)) for obj in objs]
 
     sampler = Sampler.sequential(args.num_subsets)
     f = -SGFunction(f_list, sampler)

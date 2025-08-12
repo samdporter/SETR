@@ -81,9 +81,7 @@ ISTA.update = ista_update_step
 
 def configure_logging() -> None:
     """Configure logging for the application."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def prepare_data(args):
@@ -151,9 +149,7 @@ def get_resampling_operators(
         NiftyResampleOperator(
             pet_data["initial_image"],
             spect_data["initial_image"],
-            NiftiImageData3DDisplacement(
-                os.path.join(args.spect_data_path, "spect2pet.nii")
-            ),
+            NiftiImageData3DDisplacement(os.path.join(args.spect_data_path, "spect2pet.nii")),
         ),
         NaNToZeroOperator(pet_data["initial_image"]),
     )
@@ -184,9 +180,7 @@ def get_prior(
     """
     bo = BlockOperator(
         IdentityOperator(pet_data["initial_image"]),  # pet2pet
-        ZeroOperator(
-            spect_data["initial_image"], pet_data["initial_image"]
-        ),  # zero_spect2pet
+        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),  # zero_spect2pet
         ZeroOperator(pet_data["initial_image"]),  # zero_pet2pet
         spect2pet,  # spect2pet
         shape=(2, 2),
@@ -263,9 +257,7 @@ def get_prior(
         return SumFunction(*priors), priors
 
 
-def get_data_fidelity(
-    args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets
-):
+def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets):
     """
     Set up data fidelity (objective) functions.
 
@@ -302,9 +294,7 @@ def get_data_fidelity(
     # Get sensitivity image ^ -1 now before we complicate things
     s_inv = get_s_inv_from_objs(
         [pet_obj_funs, spect_obj_funs],
-        EnhancedBlockDataContainer(
-            pet_data["initial_image"], spect_data["initial_image"]
-        ),
+        EnhancedBlockDataContainer(pet_data["initial_image"], spect_data["initial_image"]),
     )
 
     for i, el in enumerate(s_inv.containers):
@@ -418,9 +408,7 @@ def get_probabilities(args, num_subsets, update_interval):
     pet_probs = [1 / update_interval] * num_subsets[0]
     spect_probs = [1 / update_interval] * num_subsets[1]
     probs = pet_probs + spect_probs
-    assert abs(sum(probs) - 1) < 1e-10, (
-        f"Probabilities do not sum to 1, got {sum(probs)}"
-    )
+    assert abs(sum(probs) - 1) < 1e-10, f"Probabilities do not sum to 1, got {sum(probs)}"
     return probs
 
 
@@ -433,16 +421,12 @@ def get_callbacks(args, update_interval: int) -> List[Any]:
     """
     return [
         SaveImageCallback(os.path.join(args.output_path, "image"), update_interval),
-        SaveGradientUpdateCallback(
-            os.path.join(args.output_path, "gradient"), update_interval
-        ),
+        SaveGradientUpdateCallback(os.path.join(args.output_path, "gradient"), update_interval),
         SavePreconditionerCallback(
             os.path.join(args.output_path, "preconditioner"), update_interval
         ),
         PrintObjectiveCallback(update_interval),
-        SaveObjectiveCallback(
-            os.path.join(args.output_path, "objective"), update_interval
-        ),
+        SaveObjectiveCallback(os.path.join(args.output_path, "objective"), update_interval),
     ]
 
 
@@ -480,9 +464,7 @@ def save_results(bsrem: ISTA, args: argparse.Namespace) -> None:
     os.makedirs(args.output_path, exist_ok=True)
     df_objective = pd.DataFrame(list(bsrem.loss))
     df_objective.to_csv(
-        os.path.join(
-            args.output_path, f"bsrem_objective_a_{args.alpha}_b_{args.beta}.csv"
-        ),
+        os.path.join(args.output_path, f"bsrem_objective_a_{args.alpha}_b_{args.beta}.csv"),
         index=False,
     )
 

@@ -62,9 +62,7 @@ ISTA.update = ista_update_step
 
 def configure_logging() -> None:
     """Configure logging for the application."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def prepare_data(args):
@@ -157,17 +155,12 @@ def run_ista(args, data, guidance, hyperparams):
         obj.set_up(data["initial_image"])
 
     # Create kernel operator
-    K = get_kernel_operator(
-        data["initial_image"], backend=args.kernel_backend, **hyperparams
-    )
+    K = get_kernel_operator(data["initial_image"], backend=args.kernel_backend, **hyperparams)
     K.set_anatomical_image(guidance)
 
     # Set up objective functions with kernel operator
     truncate = TruncationOperator(data["initial_image"])
-    f_list = [
-        OperatorCompositionFunction(obj, CompositionOperator(K, truncate))
-        for obj in objs
-    ]
+    f_list = [OperatorCompositionFunction(obj, CompositionOperator(K, truncate)) for obj in objs]
 
     sampler = Sampler.sequential(args.num_subsets)
     f = -SGFunction(f_list, sampler)
@@ -275,9 +268,7 @@ def main():
 
     # Run reconstruction
     if args.method.lower() == "kosmaposl":
-        raise NotImplementedError(
-            "KOSMAPOSL reconstruction is not implemented for my KEM prior."
-        )
+        raise NotImplementedError("KOSMAPOSL reconstruction is not implemented for my KEM prior.")
     elif args.method.lower() == "ista":
         output_alpha, output_x = run_ista(args, data, guidance, hyperparams)
     else:

@@ -76,9 +76,7 @@ ISTA.update = ista_update_step
 
 def configure_logging() -> None:
     """Configure logging for the application."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def prepare_data(args):
@@ -136,9 +134,7 @@ def get_shift_operators(pet_data):
 
     # Create shift operators
     shift_ops = [
-        CouchShiftOperator(
-            pet_data["bed_positions"][suffix]["template_image"], pet_shift
-        )
+        CouchShiftOperator(pet_data["bed_positions"][suffix]["template_image"], pet_shift)
         for suffix, pet_shift in zip(suffixes, pet_shifts)
     ]
 
@@ -260,9 +256,7 @@ def get_data_fidelity(
 
     # Get sensitivities for each bed position
     pet_sens = [
-        get_sensitivity_from_subset_objs(
-            df, pet_data["bed_positions"][suffix]["template_image"]
-        )
+        get_sensitivity_from_subset_objs(df, pet_data["bed_positions"][suffix]["template_image"])
         for df, suffix in zip(pet_dfs, pet_data["bed_positions"])
     ]
 
@@ -323,9 +317,7 @@ def get_data_fidelity(
     return all_funs, s_inv, sens_bdcs
 
 
-def get_kernel_operator(
-    args, guide_image, template_image, template_sinogram, hyperparams
-):
+def get_kernel_operator(args, guide_image, template_image, template_sinogram, hyperparams):
     K = STIRKernelOperator(
         template_image,
         template_sinogram,
@@ -345,9 +337,7 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
     """Run ISTA-based HKEM reconstruction with kernel preconditioner."""
 
     # Get acquisition model function
-    get_pet_am_with_res = lambda: get_pet_am(
-        gpu=not args.no_gpu, gauss_fwhm=args.pet_gauss_fwhm
-    )
+    get_pet_am_with_res = lambda: get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.pet_gauss_fwhm)
 
     # Set up shift operators
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
@@ -429,9 +419,7 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
     callbacks = [
         SaveImageCallback(os.path.join(args.output_path, "alpha"), update_interval),
         PrintObjectiveCallback(update_interval),
-        SaveObjectiveCallback(
-            os.path.join(args.output_path, "objective"), update_interval
-        ),
+        SaveObjectiveCallback(os.path.join(args.output_path, "objective"), update_interval),
     ]
 
     num_subiterations = args.num_epochs * update_interval

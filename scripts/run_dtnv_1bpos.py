@@ -137,8 +137,7 @@ def get_prior(
 
     # multiply first kappa by alpha/beta for TNV prior
     for i, (ab, el) in enumerate(zip([args.alpha, args.beta], kappas.containers)):
-        el *= float(ab)
-        kappas.containers[i].fill(el)
+        kappas.containers[i].fill(float(ab) * el)
 
     priors = []
 

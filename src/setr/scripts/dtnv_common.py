@@ -4,20 +4,21 @@ Only contains functions that are IDENTICAL between run_dtnv_1bpos.py and run_dtn
 """
 
 import argparse
-import os
-from typing import Any, List
-from types import MethodType
 import logging
+import os
+from types import MethodType
+from typing import Any, List
 
 import numpy as np
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import KullbackLeibler, OperatorCompositionFunction
 from cil.optimisation.operators import (
+    BlockOperator,
     IdentityOperator,
     ZeroOperator,
-    BlockOperator,
 )
 
+from setr.cil_extensions.algorithms import ista_update_step
 from setr.cil_extensions.callbacks import (
     PrintObjectiveCallback,
     SaveGradientUpdateCallback,
@@ -27,7 +28,6 @@ from setr.cil_extensions.callbacks import (
 )
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.functions import BlockIndicatorBox
-from setr.cil_extensions.algorithms import ista_update_step
 from setr.cil_extensions.operators import ScalingOperator
 
 ISTA.update = ista_update_step
@@ -52,16 +52,12 @@ def get_callbacks(args, update_interval: int) -> List[Any]:
     """Set up callbacks for DTNV algorithm monitoring (identical in both DTNV scripts)."""
     return [
         SaveImageCallback(os.path.join(args.output_path, "image"), update_interval),
-        SaveGradientUpdateCallback(
-            os.path.join(args.output_path, "gradient"), update_interval
-        ),
+        SaveGradientUpdateCallback(os.path.join(args.output_path, "gradient"), update_interval),
         SavePreconditionerCallback(
             os.path.join(args.output_path, "preconditioner"), update_interval
         ),
         PrintObjectiveCallback(update_interval),
-        SaveObjectiveCallback(
-            os.path.join(args.output_path, "objective"), update_interval
-        ),
+        SaveObjectiveCallback(os.path.join(args.output_path, "objective"), update_interval),
     ]
 
 
@@ -98,13 +94,9 @@ def get_block_objective(desired_image, other_image, obj_fun, scale=1, order=0):
         d2d_id = ScalingOperator(scale, desired_image)
 
     if order == 0:
-        return OperatorCompositionFunction(
-            obj_fun, BlockOperator(d2d_id, o2d_zero, shape=(1, 2))
-        )
+        return OperatorCompositionFunction(obj_fun, BlockOperator(d2d_id, o2d_zero, shape=(1, 2)))
     elif order == 1:
-        return OperatorCompositionFunction(
-            obj_fun, BlockOperator(o2d_zero, d2d_id, shape=(1, 2))
-        )
+        return OperatorCompositionFunction(obj_fun, BlockOperator(o2d_zero, d2d_id, shape=(1, 2)))
     else:
         raise ValueError("Order must be 0 or 1")
 
@@ -285,15 +277,11 @@ def set_up_kl_objectives(
     spect_ams = [am.get_linear_acquisition_model() for am in spect_ams]
 
     pet_obj_funs = [
-        OperatorCompositionFunction(
-            KullbackLeibler(data, eta=add + add.max() / 1e3), am
-        )
+        OperatorCompositionFunction(KullbackLeibler(data, eta=add + add.max() / 1e3), am)
         for data, add, am in zip(pet_datas, pet_ads, pet_ams)
     ]
     spect_obj_funs = [
-        OperatorCompositionFunction(
-            KullbackLeibler(data, eta=add + add.max() / 1e3), am
-        )
+        OperatorCompositionFunction(KullbackLeibler(data, eta=add + add.max() / 1e3), am)
         for data, add, am in zip(spect_datas, spect_ads, spect_ams)
     ]
 

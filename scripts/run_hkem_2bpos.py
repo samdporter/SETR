@@ -90,9 +90,7 @@ def get_data_fidelity(
 
     # Get sensitivities for each bed position
     pet_sens = [
-        get_sensitivity_from_subset_objs(
-            df, pet_data["bed_positions"][suffix]["template_image"]
-        )
+        get_sensitivity_from_subset_objs(df, pet_data["bed_positions"][suffix]["template_image"])
         for df, suffix in zip(pet_dfs, pet_data["bed_positions"])
     ]
 
@@ -158,9 +156,7 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
 
     # Get acquisition model function
     def get_pet_am_with_res():
-        return get_pet_am(
-            gpu=not args.no_gpu, gauss_fwhm=args.pet_gauss_fwhm
-        )
+        return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.pet_gauss_fwhm)
 
     # Set up shift operators
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)

@@ -62,9 +62,7 @@ ISTA.update = ista_update_step
 
 def configure_logging() -> None:
     """Configure logging for the application."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def prepare_data(args):
@@ -170,9 +168,7 @@ def run_kosmaposl(args, data, guidance, hyperparams):
     recon.set_sigma_m(hyperparams["sigma_anat"])
     recon.set_sigma_p(hyperparams["sigma_emission"])
     recon.set_sigma_dm(hyperparams["sigma_dist"])
-    recon.set_sigma_dp(
-        hyperparams["sigma_dist"]
-    )  # Same as sigma_dist for compatibility
+    recon.set_sigma_dp(hyperparams["sigma_dist"])  # Same as sigma_dist for compatibility
     recon.set_only_2D(not args.use_3d)
     recon.set_hybrid(hyperparams["hybrid"])
 
@@ -240,10 +236,7 @@ def run_ista(args, data, guidance, hyperparams):
 
     # Set up objective functions with kernel operator
     truncate = TruncationOperator(data["initial_image"])
-    f_list = [
-        OperatorCompositionFunction(obj, CompositionOperator(K, truncate))
-        for obj in objs
-    ]
+    f_list = [OperatorCompositionFunction(obj, CompositionOperator(K, truncate)) for obj in objs]
 
     sampler = Sampler.sequential(args.num_subsets)
     f = -SGFunction(f_list, sampler)

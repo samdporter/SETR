@@ -3,10 +3,11 @@
 Contains functions that should be identical across HKEM scripts.
 """
 
-import os
 import logging
+import os
 
 from sirf.STIR import ImageData
+
 from setr.kernel.stir import STIRKernelOperator
 
 
@@ -43,9 +44,7 @@ def get_kernel_hyperparams(args):
     }
 
 
-def get_kernel_operator(
-    args, guide_image, template_image, template_sinogram, hyperparams
-):
+def get_kernel_operator(args, guide_image, template_image, template_sinogram, hyperparams):
     """Set up the STIR kernel operator."""
     logging.info("Setting up STIR kernel operator")
 
@@ -78,11 +77,13 @@ def run_kosmaposl(args, data, guidance, hyperparams):
         output_x: Final kernelised image
     """
     import logging
+
     from sirf.STIR import (
         AcquisitionSensitivityModel,
         KOSMAPOSLReconstructor,
         make_Poisson_loglikelihood,
     )
+
     from setr.utils.sirf import get_pet_am, get_spect_am
 
     # Get acquisition model

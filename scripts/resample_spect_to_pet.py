@@ -15,9 +15,7 @@ from setr.utils.io import apply_overrides, load_config
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Resample SPECT reconstruction to PET space"
-    )
+    parser = argparse.ArgumentParser(description="Resample SPECT reconstruction to PET space")
 
     # Config-based approach
     parser.add_argument("--config", "-c", type=str, help="Path to YAML config file")

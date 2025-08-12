@@ -91,9 +91,7 @@ ISTA.update = ista_update_step
 
 def configure_logging() -> None:
     """Configure logging for the application."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def prepare_data(args):
@@ -168,9 +166,7 @@ def get_shift_operator(pet_data):
     ]
 
     shift_ops = [
-        CouchShiftOperator(
-            pet_data["bed_positions"][suffix]["template_image"], pet_shift
-        )
+        CouchShiftOperator(pet_data["bed_positions"][suffix]["template_image"], pet_shift)
         for suffix, pet_shift in zip(suffixes, pet_shifts)
     ]
 
@@ -220,9 +216,7 @@ def get_resampling_operators(
     return NiftyResampleOperator(
         pet_data["initial_image"],
         spect_data["initial_image"],
-        NiftiImageData3DDisplacement(
-            os.path.join(args.spect_data_path, "spect2pet.nii")
-        ),
+        NiftiImageData3DDisplacement(os.path.join(args.spect_data_path, "spect2pet.nii")),
     )
 
 
@@ -244,9 +238,7 @@ def get_prior(
     """
     bo = BlockOperator(
         IdentityOperator(pet_data["initial_image"]),  # pet2pet
-        ZeroOperator(
-            spect_data["initial_image"], pet_data["initial_image"]
-        ),  # zero_spect2pet
+        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),  # zero_spect2pet
         ZeroOperator(pet_data["initial_image"]),  # zero_pet2pet
         spect2pet,  # spect2pet
         shape=(2, 2),
@@ -350,16 +342,11 @@ def get_data_fidelity(
     # add across beds (Fisher additivity)
     pet_kappa_sq = uncombine_op.adjoint(
         EnhancedBlockDataContainer(
-            *[
-                unshift_op.adjoint(pet_kappa_bed_sq[i])
-                for i, unshift_op in enumerate(unshift_ops)
-            ]
+            *[unshift_op.adjoint(pet_kappa_bed_sq[i]) for i, unshift_op in enumerate(unshift_ops)]
         )
     )
 
-    logging.info(
-        f"PET κ² images computed and uncombined with shape {pet_kappa_sq.shape}."
-    )
+    logging.info(f"PET κ² images computed and uncombined with shape {pet_kappa_sq.shape}.")
 
     # SPECT κ²
     spect_kappa_sq = compute_kappa_squared_image_from_partitioned_objective(
@@ -369,9 +356,7 @@ def get_data_fidelity(
     logging.info(f"SPECT κ² image computed with shape {spect_kappa_sq.shape}.")
 
     pet_sens = [
-        get_sensitivity_from_subset_objs(
-            df, pet_data["bed_positions"][suffix]["template_image"]
-        )
+        get_sensitivity_from_subset_objs(df, pet_data["bed_positions"][suffix]["template_image"])
         for df, suffix in zip(pet_dfs, pet_data["bed_positions"])
     ]
 
@@ -483,9 +468,7 @@ def get_probabilities(args, num_subsets, update_interval):
     pet_probs = [1 / update_interval] * num_subsets[0] * 2
     spect_probs = [1 / update_interval] * num_subsets[1]
     probs = pet_probs + spect_probs
-    assert abs(sum(probs) - 1) < 1e-10, (
-        f"Probabilities do not sum to 1, got {sum(probs)}"
-    )
+    assert abs(sum(probs) - 1) < 1e-10, f"Probabilities do not sum to 1, got {sum(probs)}"
     return probs
 
 
@@ -498,16 +481,12 @@ def get_callbacks(args, update_interval: int) -> List[Any]:
     """
     return [
         SaveImageCallback(os.path.join(args.output_path, "image"), update_interval),
-        SaveGradientUpdateCallback(
-            os.path.join(args.output_path, "gradient"), update_interval
-        ),
+        SaveGradientUpdateCallback(os.path.join(args.output_path, "gradient"), update_interval),
         SavePreconditionerCallback(
             os.path.join(args.output_path, "preconditioner"), update_interval
         ),
         PrintObjectiveCallback(update_interval),
-        SaveObjectiveCallback(
-            os.path.join(args.output_path, "objective"), update_interval
-        ),
+        SaveObjectiveCallback(os.path.join(args.output_path, "objective"), update_interval),
     ]
 
 
@@ -545,9 +524,7 @@ def save_results(bsrem: ISTA, args: argparse.Namespace) -> None:
     os.makedirs(args.output_path, exist_ok=True)
     df_objective = pd.DataFrame(list(bsrem.loss))
     df_objective.to_csv(
-        os.path.join(
-            args.output_path, f"bsrem_objective_a_{args.alpha}_b_{args.beta}.csv"
-        ),
+        os.path.join(args.output_path, f"bsrem_objective_a_{args.alpha}_b_{args.beta}.csv"),
         index=False,
     )
 
@@ -655,9 +632,7 @@ def main() -> None:
     update_interval = len(all_funs)
 
     # Set up preconditioners.
-    precond = get_preconditioners(
-        args, s_inv, all_funs, update_interval, prior, initial_estimates
-    )
+    precond = get_preconditioners(args, s_inv, all_funs, update_interval, prior, initial_estimates)
 
     probs = get_probabilities(args, num_subsets, update_interval)
 

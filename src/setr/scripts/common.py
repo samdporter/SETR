@@ -6,10 +6,10 @@ import os
 
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.operators import (
+    BlockOperator,
+    CompositionOperator,
     IdentityOperator,
     ZeroOperator,
-    CompositionOperator,
-    BlockOperator,
 )
 
 
@@ -121,9 +121,7 @@ def get_shift_operators(pet_data):
 
     # Create shift operators
     shift_ops = [
-        CouchShiftOperator(
-            pet_data["bed_positions"][suffix]["template_image"], pet_shift
-        )
+        CouchShiftOperator(pet_data["bed_positions"][suffix]["template_image"], pet_shift)
         for suffix, pet_shift in zip(suffixes, pet_shifts)
     ]
 
