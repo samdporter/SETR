@@ -4,10 +4,10 @@ setr.cil_extensions.callbacks
 
 from .callbacks import (
     Callback,
+    PrintObjectiveCallback,
+    SaveGradientUpdateCallback,
     SaveImageCallback,
     SaveKernelisedImageCallback,
-    SaveGradientUpdateCallback,
-    PrintObjectiveCallback,
     SaveObjectiveCallback,
     SavePreconditionerCallback,
     SubsetValueCallback,

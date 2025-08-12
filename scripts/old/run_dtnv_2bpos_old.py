@@ -1,16 +1,32 @@
 #!/usr/bin/env python3
-"""SETR DTNV reconstruction for multiple bed positions - Simplified version using shared modules."""
+# run_dtnv_2bpos.py
 
 import argparse
 import cProfile
 import logging
 import os
 import pstats
+import shutil
 from types import SimpleNamespace
 from typing import Any, List
 
 import numpy as np
-from cil.optimisation.functions import OperatorCompositionFunction, SumFunction, SVRGFunction
+import pandas as pd
+from sirf.contrib.partitioner import partitioner
+from sirf.Reg import NiftiImageData3DDisplacement
+
+# SIRF imports
+from sirf.STIR import AcquisitionData, MessageRedirector
+
+AcquisitionData.set_storage_scheme("memory")
+
+# CIL imports
+from cil.optimisation.algorithms import ISTA
+from cil.optimisation.functions import (
+    OperatorCompositionFunction,
+    SumFunction,
+    SVRGFunction,
+)
 from cil.optimisation.operators import (
     BlockOperator,
     CompositionOperator,
@@ -18,10 +34,24 @@ from cil.optimisation.operators import (
     ZeroOperator,
 )
 from cil.optimisation.utilities import Sampler
-from sirf.contrib.partitioner import partitioner
-from sirf.STIR import AcquisitionData
 
+# SETR imports
+from setr.cil_extensions.algorithms import ista_update_step
+from setr.cil_extensions.callbacks import (
+    PrintObjectiveCallback,
+    SaveGradientUpdateCallback,
+    SaveImageCallback,
+    SaveObjectiveCallback,
+    SavePreconditionerCallback,
+)
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
+from setr.cil_extensions.functions import BlockIndicatorBox
+from setr.cil_extensions.operators import (
+    AdjointOperator,
+    CouchShiftOperator,
+    ImageCombineOperator,
+    NiftyResampleOperator,
+)
 from setr.cil_extensions.preconditioners import (
     BSREMPreconditioner,
     ImageFunctionPreconditioner,
@@ -29,23 +59,6 @@ from setr.cil_extensions.preconditioners import (
 )
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.priors import WeightedVectorialTotalVariation
-from setr.scripts.common import (
-    attach_prior_hessian,
-    configure_logging,
-    get_resampling_operators,
-    get_sensitivity_from_subset_objs,
-    get_shift_operators,
-    save_results,
-)
-from setr.scripts.dtnv_common import (
-    compute_kappa_squared_image_from_partitioned_objective,
-    get_algorithm,
-    get_block_objective,
-    get_callbacks,
-    get_probabilities,
-    get_s_inv_from_subset_objs,
-    normalise_kappa_squares,
-)
 from setr.utils import (
     get_pet_am,
     get_pet_data_multiple_bed_pos,
@@ -53,15 +66,34 @@ from setr.utils import (
     get_spect_data,
 )
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters
-
-AcquisitionData.set_storage_scheme("memory")
+from setr.utils.sirf import (
+    attach_prior_hessian,
+    compute_kappa_squared_image_from_partitioned_objective,
+    get_block_objective,
+    get_filters,
+    get_s_inv_from_subset_objs,
+    get_sensitivity_from_subset_objs,
+    normalise_kappa_squares,
+)
 
 cli = parse_cli()
 cfg_dict = load_config(cli.config)
 cfg_dict = apply_overrides(cfg_dict, cli.override)
 
 args = SimpleNamespace(**cfg_dict)
+
+os.makedirs(args.output_path, exist_ok=True)
+os.makedirs(args.working_path, exist_ok=True)
+
+# Attach the new update method to ISTA.
+ISTA.update = ista_update_step
+
+
+def configure_logging() -> None:
+    """Configure logging for the application."""
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
 
 def prepare_data(args):
@@ -118,14 +150,117 @@ def prepare_data(args):
     return umap, pet_data, spect_data, initial_estimates
 
 
-def get_prior(args, umap, pet_data, spect_data, initial_estimates, bo):
-    """Set up vectorial total variation prior for 2bpos."""
-    logging.info("Setting up prior")
+def get_shift_operator(pet_data):
+    """
+    Set up the shift operator for the image reconstruction.
 
-    # Get kappa weighting - simplified version
-    kappas = bo.direct(initial_estimates).get_uniform_copy(1.0)
+    Returns:
+        shift_operator: The constructed shift operator.
+    """
 
-    # multiply first kappa by alpha/beta for TNV prior
+    suffixes = ["_f1b1", "_f2b1"]
+
+    pet_shifts = [
+        CouchShiftOperator.get_couch_shift_from_sinogram(
+            pet_data["bed_positions"][suffix]["acquisition_data"]
+        )
+        for suffix in suffixes
+    ]
+
+    shift_ops = [
+        CouchShiftOperator(
+            pet_data["bed_positions"][suffix]["template_image"], pet_shift
+        )
+        for suffix, pet_shift in zip(suffixes, pet_shifts)
+    ]
+
+    shifted_images = [
+        op.direct(pet_data["bed_positions"][suffix]["template_image"])
+        for suffix, op in zip(suffixes, shift_ops)
+    ]
+
+    combine_op = ImageCombineOperator(EnhancedBlockDataContainer(*shifted_images))
+
+    unshift_ops = [AdjointOperator(op) for op in shift_ops]
+
+    uncombine_op = AdjointOperator(combine_op)
+
+    choose_op_0 = BlockOperator(
+        IdentityOperator(shifted_images[0]),
+        ZeroOperator(shifted_images[1], shifted_images[0]),
+        shape=(1, 2),
+    )
+
+    choose_op_1 = BlockOperator(
+        ZeroOperator(shifted_images[0], shifted_images[1]),
+        IdentityOperator(shifted_images[1]),
+        shape=(1, 2),
+    )
+
+    choose_ops = [choose_op_0, choose_op_1]
+
+    main_tmpl = pet_data["template_image"]
+    shift_combine = CouchShiftOperator(main_tmpl, 0)
+
+    return uncombine_op, unshift_ops, choose_ops
+
+
+def get_resampling_operators(
+    args,
+    pet_data,
+    spect_data,
+):
+    """
+    Set up resampling operators for SPECT images to PET images.
+
+    Returns:
+        spect2ct, zero_spect2ct operators.
+    """
+
+    return NiftyResampleOperator(
+        pet_data["initial_image"],
+        spect_data["initial_image"],
+        NiftiImageData3DDisplacement(
+            os.path.join(args.spect_data_path, "spect2pet.nii")
+        ),
+    )
+
+
+def get_prior(
+    args,
+    umap,
+    pet_data,
+    spect_data,
+    initial_estimates,
+    spect2pet,
+    kappas=None,
+):
+    """
+    Set up the prior function for image reconstruction.
+
+    Returns:
+        prior: The constructed prior function.
+        bo: The block operator used within the prior.
+    """
+    bo = BlockOperator(
+        IdentityOperator(pet_data["initial_image"]),  # pet2pet
+        ZeroOperator(
+            spect_data["initial_image"], pet_data["initial_image"]
+        ),  # zero_spect2pet
+        ZeroOperator(pet_data["initial_image"]),  # zero_pet2pet
+        spect2pet,  # spect2pet
+        shape=(2, 2),
+    )
+    logging.info("Block operator set up.")
+
+    if kappas is None:
+        kappas = EnhancedBlockDataContainer(
+            pet_data["initial_image"].get_uniform_copy(1),
+            spect_data["initial_image"].get_uniform_copy(1),
+        )
+
+    kappas = bo.direct(kappas)
+    logging.info("Kappa images set up.")
     for i, (ab, el) in enumerate(zip([args.alpha, args.beta], kappas.containers)):
         el *= float(ab)
         kappas.containers[i].fill(el)
@@ -138,7 +273,7 @@ def get_prior(args, umap, pet_data, spect_data, initial_estimates, bo):
         anatomical=umap,
         gpu=not args.no_gpu,
         stable=True,
-        tail_singular_values=getattr(args, "tail_singular_values", None),
+        tail_singular_values=args.tail_singular_values,
         diagonal=getattr(args, "tnv_diagonal", args.diagonal),
         both_directions=getattr(args, "tnv_both_directions", args.both_directions),
     )
@@ -190,14 +325,14 @@ def get_data_fidelity(
             pet_dfs[i][j].set_up(tmpl)
 
     # --- partition SPECT ---
-    spect_dfs = partitioner.data_partition(
+    _, _, spect_dfs = partitioner.data_partition(
         spect_data["acquisition_data"],
         spect_data["additive"],
         spect_data["acquisition_data"].get_uniform_copy(1),
         num_batches=num_subsets[1],
         mode="staggered",
         create_acq_model=get_spect_am,
-    )[2]
+    )
     for obj_fun in spect_dfs:
         obj_fun.set_up(spect_data["initial_image"])
 
@@ -215,11 +350,16 @@ def get_data_fidelity(
     # add across beds (Fisher additivity)
     pet_kappa_sq = uncombine_op.adjoint(
         EnhancedBlockDataContainer(
-            *[unshift_op.adjoint(pet_kappa_bed_sq[i]) for i, unshift_op in enumerate(unshift_ops)]
+            *[
+                unshift_op.adjoint(pet_kappa_bed_sq[i])
+                for i, unshift_op in enumerate(unshift_ops)
+            ]
         )
     )
 
-    logging.info(f"PET κ² images computed and uncombined with shape {pet_kappa_sq.shape}.")
+    logging.info(
+        f"PET κ² images computed and uncombined with shape {pet_kappa_sq.shape}."
+    )
 
     # SPECT κ²
     spect_kappa_sq = compute_kappa_squared_image_from_partitioned_objective(
@@ -228,7 +368,12 @@ def get_data_fidelity(
 
     logging.info(f"SPECT κ² image computed with shape {spect_kappa_sq.shape}.")
 
-    pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
+    pet_sens = [
+        get_sensitivity_from_subset_objs(
+            df, pet_data["bed_positions"][suffix]["template_image"]
+        )
+        for df, suffix in zip(pet_dfs, pet_data["bed_positions"])
+    ]
 
     spect_s_inv = get_s_inv_from_subset_objs(spect_dfs, spect_data["initial_image"])
 
@@ -298,7 +443,13 @@ def get_preconditioners(
     prior: Any,
     initial_estimates: EnhancedBlockDataContainer,
 ) -> Any:
-    """Set up preconditioners for 2bpos."""
+    """
+    Set up the preconditioners.
+
+    Returns:
+        The combined preconditioner.
+    """
+
     max_vals = [el.max() for el in initial_estimates.containers]
     epsilon = min(el.max() for el in initial_estimates.containers) * 1e-3
 
@@ -328,21 +479,99 @@ def get_preconditioners(
     )
 
 
-def main() -> None:
-    """Main DTNV 2bpos reconstruction pipeline."""
-    configure_logging()
+def get_probabilities(args, num_subsets, update_interval):
+    pet_probs = [1 / update_interval] * num_subsets[0] * 2
+    spect_probs = [1 / update_interval] * num_subsets[1]
+    probs = pet_probs + spect_probs
+    assert abs(sum(probs) - 1) < 1e-10, (
+        f"Probabilities do not sum to 1, got {sum(probs)}"
+    )
+    return probs
 
-    # Parse arguments and configuration
-    cli = parse_cli()
-    config = load_config(cli.config)
-    config = apply_overrides(config, cli.override)
-    args = argparse.Namespace(**config)
 
-    # Create output directory and save arguments
+def get_callbacks(args, update_interval: int) -> List[Any]:
+    """
+    Set up callbacks for the algorithm.
+
+    Returns:
+        A list of callback objects.
+    """
+    return [
+        SaveImageCallback(os.path.join(args.output_path, "image"), update_interval),
+        SaveGradientUpdateCallback(
+            os.path.join(args.output_path, "gradient"), update_interval
+        ),
+        SavePreconditionerCallback(
+            os.path.join(args.output_path, "preconditioner"), update_interval
+        ),
+        PrintObjectiveCallback(update_interval),
+        SaveObjectiveCallback(
+            os.path.join(args.output_path, "objective"), update_interval
+        ),
+    ]
+
+
+def get_algorithm(
+    init_solution: EnhancedBlockDataContainer,
+    f_obj: Any,
+    precond: Any,
+    step_size: float,
+    update_interval: int,
+    subiterations: int,
+    callbacks: List[Any],
+) -> ISTA:
+    """
+    Set up and run the ISTA algorithm.
+
+    Returns:
+        The ISTA instance.
+    """
+    algo = ISTA(
+        initial=init_solution,
+        f=f_obj,
+        g=BlockIndicatorBox(lower=0, upper=np.inf),
+        preconditioner=precond,
+        step_size=step_size,
+        update_objective_interval=update_interval,
+    )
+    logging.info("Running algorithm")
+    algo.run(subiterations, verbose=1, callbacks=callbacks)
+    return algo
+
+
+def save_results(bsrem: ISTA, args: argparse.Namespace) -> None:
+    """Save profiling information and results to disk."""
+
     os.makedirs(args.output_path, exist_ok=True)
-    save_args(args, "args.csv")
+    df_objective = pd.DataFrame(list(bsrem.loss))
+    df_objective.to_csv(
+        os.path.join(
+            args.output_path, f"bsrem_objective_a_{args.alpha}_b_{args.beta}.csv"
+        ),
+        index=False,
+    )
 
-    # Prepare data
+    for file in os.listdir(args.working_path):
+        if file.startswith("tmp_") and (file.endswith(".s") or file.endswith(".hs")):
+            os.remove(os.path.join(args.working_path, file))
+    for file in os.listdir(args.working_path):
+        if file.endswith((".hv", ".v", ".ahv")):
+            logging.info(f"Moving file {file} to {args.output_path}")
+            shutil.move(
+                os.path.join(args.working_path, file),
+                os.path.join(args.output_path, file),
+            )
+
+
+def main() -> None:
+    """Main function to execute the image reconstruction algorithm."""
+    configure_logging()
+    os.chdir(args.working_path)
+
+    # Redirect messages if needed.
+    msg = MessageRedirector()
+
+    # Data preparation.
     umap, pet_data, spect_data, initial_estimates = prepare_data(args)
 
     # find alpha weighting using dynamic range of the initial images (95th percentile)
@@ -351,44 +580,35 @@ def main() -> None:
     args.alpha = args.alpha * spect_max / pet_max
     logging.info(f"Setting alpha to {args.alpha} based on initial images")
 
-    # Set up operators for multiple bed positions
-    uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
+    save_args(args, "args.csv")
 
-    # Set up resampling operators
-    spect2pet = get_resampling_operators(pet_data, spect_data)
+    # Set up resampling operators.
+    spect2pet = get_resampling_operators(args, pet_data, spect_data)
 
-    # Create combined block operator
-    bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
-        ZeroOperator(pet_data["initial_image"]),
-        spect2pet,
-        shape=(2, 2),
+    get_pet_am_with_res = lambda: get_pet_am(
+        not args.no_gpu,
+        gauss_fwhm=args.pet_gauss_fwhm,
     )
 
-    def get_pet_am_with_res():
-        return get_pet_am(
-            not args.no_gpu,
-            gauss_fwhm=args.pet_gauss_fwhm,
-        )
+    uncombine_op, unshift_ops, choose_ops = get_shift_operator(pet_data)
 
-    def get_spect_am_with_res():
-        return get_spect_am(
-            spect_data,
-            res=args.spect_res,
-            keep_all_views_in_cache=args.stop_keep_all_views_in_cache,
-            gauss_fwhm=args.spect_gauss_fwhm,
-            attenuation=True,
-        )
+    get_spect_am_with_res = lambda: get_spect_am(
+        spect_data,
+        res=args.spect_res,
+        keep_all_views_in_cache=args.stop_keep_all_views_in_cache,
+        gauss_fwhm=args.spect_gauss_fwhm,
+        attenuation=True,
+    )
 
-    # Set up data fidelity
+    # Set up data fidelity functions.
+    num_subsets = [int(i) for i in args.num_subsets]
     all_funs, s_inv, kappa_sq_block = get_data_fidelity(
         args,
         pet_data,
         spect_data,
         get_pet_am_with_res,
         get_spect_am_with_res,
-        args.num_subsets,
+        num_subsets,
         uncombine_op,
         unshift_ops,
         choose_ops,
@@ -403,26 +623,43 @@ def main() -> None:
     # write κ² images
     for i, image in enumerate(kappa_sq_block.containers):
         image.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
+        try:
+            logging.info(image.get_info().get_geometrical_info())
+        except AttributeError:
+            logging.info("No geometrical info available for this image.")
 
-    if not args.no_prior:
-        # Set up prior
-        prior = get_prior(args, umap, pet_data, spect_data, initial_estimates, bo)
-
-        # Scale and attach Hessian to the prior
+    if args.no_prior:
+        prior = None
+    else:
+        # Set up the prior.
+        prior = get_prior(
+            args,
+            umap,
+            pet_data,
+            spect_data,
+            initial_estimates,
+            spect2pet,
+            kappa_sq_block,
+        )
+        logging.info("get_prior called.")
+        # Scale and attach Hessian to the prior if needed.
         prior = -1 / len(all_funs) * prior
-        attach_prior_hessian(prior)
+        attach_prior_hessian(prior, epsilon=1e-3)
+        logging.info("Prior Hessian attached.")
 
         for i, fun in enumerate(all_funs):
             all_funs[i] = SumFunction(fun, prior)
-    else:
-        prior = None
+
+    logging.info("Prior set up complete.")
 
     update_interval = len(all_funs)
 
-    # Set up preconditioners
-    precond = get_preconditioners(args, s_inv, all_funs, update_interval, prior, initial_estimates)
+    # Set up preconditioners.
+    precond = get_preconditioners(
+        args, s_inv, all_funs, update_interval, prior, initial_estimates
+    )
 
-    probs = get_probabilities(args, args.num_subsets, update_interval, bpos=2)
+    probs = get_probabilities(args, num_subsets, update_interval)
 
     f_obj = -SVRGFunction(
         all_funs,
@@ -430,35 +667,37 @@ def main() -> None:
             len(all_funs),
             prob=probs,
         ),
+        snapshot_update_interval=update_interval * 2,
+        store_gradients=True,
     )
+    # f_obj = -SAGAFunction(
+    #        all_funs, sampler=Sampler.random_with_replacement(len(all_funs), prob=probs,),
+    #    )
+    # f_obj.function.warm_start_approximate_gradients(initial_estimates)
+    # f_obj = -SGFunction(
+    #        all_funs, sampler=Sampler.random_with_replacement(len(all_funs), prob=probs,),
+    #    )
 
-    # Set up step size
-    step_size = LinearDecayStepSizeRule(
-        initial_step_size=args.initial_step_size,
-        relaxation_eta=args.relaxation_eta,
-    )
-
-    # Set up callbacks using shared function
     callbacks = get_callbacks(args, update_interval)
 
-    # Run algorithm using shared function
-    subiterations = args.num_epochs * len(all_funs)
-    bsrem = get_algorithm(
+    algo = get_algorithm(
         initial_estimates,
         f_obj,
         precond,
-        step_size,
+        LinearDecayStepSizeRule(
+            args.initial_step_size,
+            args.relaxation_eta,
+        ),
         update_interval,
-        subiterations,
+        args.num_epochs * update_interval,
         callbacks,
     )
 
-    # Save results using shared function
-    save_results(bsrem, args)
-
-    logging.info("Reconstruction complete")
+    save_results(algo, args)
+    logging.info("Done")
 
 
+# %%
 if __name__ == "__main__":
     if args.profile:
         logging.info("Profiling is enabled. This may slow down the execution.")
@@ -468,7 +707,7 @@ if __name__ == "__main__":
         main()
 
         profiler.disable()
-        profiler.dump_stats(f"{args.output_path}/profile_data.prof")
+        profiler.dump_stats(args.output_path + "/profile_data.prof")
         # Output results to a file
         output_file = os.path.join(args.output_path, "profiling_results.txt")
         with open(output_file, "w") as f:

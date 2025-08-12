@@ -4,16 +4,16 @@ setr.cil_extensions.operators
 
 from .operators import (
     AdjointOperator,
-    ScalingOperator,
-    ZeroEndSlicesOperator,
-    NaNToZeroOperator,
-    TruncationOperator,
-    DirectionalOperator,
-    NiftyResampleOperator,
     CouchShiftOperator,
+    DirectionalOperator,
     ImageCombineOperator,
     ImageResampleOperator,
     ImageSummationOperator,
+    NaNToZeroOperator,
+    NiftyResampleOperator,
+    ScalingOperator,
+    TruncationOperator,
+    ZeroEndSlicesOperator,
 )
 
 __all__ = [

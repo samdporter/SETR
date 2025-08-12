@@ -5,10 +5,10 @@ Top-level kernel package. Exposes factory and subpackages.
 """
 
 from .python import (
-    get_kernel_operator,
     BaseKernelOperator,
     KernelOperator as PythonKernelOperator,
     NumbaKernelOperator,
+    get_kernel_operator,
 )
 from .stir import STIRKernelOperator
 

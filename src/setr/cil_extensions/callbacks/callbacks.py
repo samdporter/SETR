@@ -1,12 +1,13 @@
-from cil.optimisation.utilities import callbacks
-from cil.framework import BlockDataContainer
-from sirf.STIR import ImageData
 import pandas as pd
+from cil.framework import BlockDataContainer
+from cil.optimisation.utilities import callbacks
+from sirf.STIR import ImageData
 
 
 class Callback(callbacks.Callback):
     """
-    CIL Callback but with `self.skip_iteration` checking `min(self.interval, algo.update_objective_interval)`.
+    CIL Callback but with `self.skip_iteration` checking `min(self.interval,
+    algo.update_objective_interval)`.
     TODO: backport this class to CIL.
     """
 
@@ -54,9 +55,7 @@ class SaveKernelisedImageCallback(Callback):
         if algo.iteration % self.interval != 0:
             return
         # Save the alpha image
-        image = self.kernel_op.recon.compute_kernelised_image(
-            algo.solution, algo.solution
-        )
+        image = self.kernel_op.recon.compute_kernelised_image(algo.solution, algo.solution)
         image.write(f"{self.filename}_{algo.iteration}.hv")
 
 
@@ -137,13 +136,11 @@ class SubsetValueCallback(Callback):
             return
         try:
             func_list = algo.f.functions
-        except:
+        except AttributeError:
             func_list = algo.f.function.functions
         for i, function in enumerate(func_list):
             # needs to add to new line for iteration algo.iteration
-            self.subset_values.at[algo.iteration, f"Subset {i}"] = function(
-                algo.solution
-            )
+            self.subset_values.at[algo.iteration, f"Subset {i}"] = function(algo.solution)
         # add a sum at first column
         self.subset_values.at[algo.iteration, "Sum"] = sum(
             [function(algo.solution) for function in func_list]

@@ -6,28 +6,39 @@ import numpy as np
 from cil.framework import BlockDataContainer
 from cil.optimisation.functions import KullbackLeibler, OperatorCompositionFunction
 from cil.optimisation.operators import BlockOperator, IdentityOperator, ZeroOperator
+from sirf.contrib import partitioner
+from sirf.Reg import NiftiImageData3DDisplacement
 from sirf.STIR import (
     AcquisitionData,
     AcquisitionModelUsingMatrix,
     AcquisitionModelUsingParallelproj,
     AcquisitionModelUsingRayTracingMatrix,
     ImageData,
-    SPECTUBMatrix,
     SeparableGaussianImageFilter,
+    SPECTUBMatrix,
     TruncateToCylinderProcessor,
 )
-from sirf.contrib import partitioner
+
 from setr.cil_extensions.operators import ScalingOperator
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def get_pet_am(
     gpu=True,
     gauss_fwhm=None,
 ):
+    """Create a PET acquisition model with optional Gaussian filtering.
+
+    Args:
+        gpu: If True, use GPU-accelerated parallel projection. If False, use
+            CPU-based ray tracing matrix.
+        gauss_fwhm: Optional Gaussian FWHM values for point spread function
+            modeling. If provided, applies separable Gaussian image filter.
+
+    Returns:
+        AcquisitionModel: Configured PET acquisition model.
+    """
     if gpu:
         pet_am = AcquisitionModelUsingParallelproj()
     else:
@@ -49,6 +60,21 @@ def get_spect_am(
     gauss_fwhm=None,
     attenuation=True,
 ):
+    """Create a SPECT acquisition model with collimator modeling and optional PSF.
+
+    Args:
+        spect_data: Dictionary containing SPECT data including attenuation image.
+        res: Optional resolution parameters [collimator_slope, collimator_intercept,
+            use_psf_correction]. If provided, enables analytical collimator resolution modeling.
+        keep_all_views_in_cache: If True, cache all projection views in memory for
+            faster computation.
+        gauss_fwhm: Optional Gaussian FWHM values for additional point spread function
+            modeling.
+        attenuation: If True, apply attenuation correction using data from spect_data.
+
+    Returns:
+        AcquisitionModel: Configured SPECT acquisition model with UB matrix backend.
+    """
     spect_am_mat = SPECTUBMatrix()
     spect_am_mat.set_keep_all_views_in_cache(keep_all_views_in_cache)
     if attenuation:
@@ -83,17 +109,12 @@ def get_pet_data(path: str, suffix: str = "") -> dict:
         "normalisation", "attenuation", "template_image", "initial_image", and
         optionally "spect".
     """
-    pet_data = {}
-    pet_data["acquisition_data"] = AcquisitionData(
-        os.path.join(path, f"prompts{suffix}.hs")
-    )
-    pet_data["additive"] = AcquisitionData(
-        os.path.join(path, f"additive_term{suffix}.hs")
-    )
-    pet_data["normalisation"] = AcquisitionData(
-        os.path.join(path, f"mult_factors{suffix}.hs")
-    )
-    pet_data["attenuation"] = ImageData(os.path.join(path, "umap_zoomed.hv"))
+    pet_data = {
+        "acquisition_data": AcquisitionData(os.path.join(path, f"prompts{suffix}.hs")),
+        "additive": AcquisitionData(os.path.join(path, f"additive_term{suffix}.hs")),
+        "normalisation": AcquisitionData(os.path.join(path, f"mult_factors{suffix}.hs")),
+        "attenuation": ImageData(os.path.join(path, "umap_zoomed.hv")),
+    }
 
     # Always load the template image.
     template_img_path = os.path.join(path, "template_image.hv")
@@ -133,16 +154,14 @@ def get_pet_data_multiple_bed_pos(
     Load PET data for multiple bed positions.
 
     Returns a dict with:
-      - "attenuation", "template_image", "initial_image", "spect" (optional)
-      - "bed_positions": mapping suffix → dict with keys
-         "acquisition_data", "additive", "normalisation",
-         "template_image", "initial_image", "attenuation", "spect" (optional)
+    - "attenuation", "template_image", "initial_image", "spect" (optional)
+    - "bed_positions": mapping suffix → dict with keys
+        "acquisition_data", "additive", "normalisation",
+        "template_image", "initial_image", "attenuation", "spect" (optional)
     """
     base = Path(path) / ("tof" if tof else "non_tof")
 
-    def load_image(
-        fp: Path, clamp: bool = True, required: bool = False
-    ) -> Optional[ImageData]:
+    def load_image(fp: Path, clamp: bool = True, required: bool = False) -> Optional[ImageData]:
         try:
             img = ImageData(str(fp))
             return img.maximum(0) if clamp else img
@@ -158,9 +177,7 @@ def get_pet_data_multiple_bed_pos(
     # shared data
     pet_data: Dict[str, object] = {}
     pet_data["attenuation"] = load_image(base / "umap_zoomed.hv")
-    pet_data["template_image"] = load_image(
-        base / "template_image.hv", clamp=False, required=True
-    )
+    pet_data["template_image"] = load_image(base / "template_image.hv", clamp=False, required=True)
     pet_data["initial_image"] = load_image(base / "initial_image.hv") or pet_data[
         "template_image"
     ].get_uniform_copy(1)
@@ -201,13 +218,12 @@ def get_spect_data(path: str) -> dict:
 
     Returns:
         dict: A dictionary with keys: "acquisition_data", "additive", "attenuation",
-        "template_image", and "initial_image".
+        "template_image", "initial_image", and "displacement".
     """
-    spect_data = {}
-    spect_data["acquisition_data"] = AcquisitionData(os.path.join(path, "peak.hs"))
+    spect_data = {"acquisition_data": AcquisitionData(os.path.join(path, "peak.hs"))}
 
     try:
-        spect_data["additive"] = AcquisitionData(os.path.join(path, "scatter.hs"))
+        spect_data["additive"] = AcquisitionData(os.path.join(path, "scatter_dl.hs"))
     except Exception as e_scatter:
         logging.warning("No scatter data found (%s). Using zeros.", str(e_scatter))
         spect_data["additive"] = AcquisitionData(spect_data["acquisition_data"])
@@ -237,6 +253,17 @@ def get_spect_data(path: str) -> dict:
             str(e_initial),
         )
         spect_data["initial_image"] = spect_data["template_image"].get_uniform_copy(1)
+
+    # Load displacement field for SPECT to PET registration
+    displacement_path = os.path.join(path, "spect2pet.nii")
+    try:
+        spect_data["displacement"] = NiftiImageData3DDisplacement(displacement_path)
+    except Exception as e_displacement:
+        logging.warning(
+            "No SPECT displacement field found (%s). Registration will not be available.",
+            str(e_displacement),
+        )
+        spect_data["displacement"] = None
 
     return spect_data
 
@@ -277,9 +304,18 @@ def create_spect_uniform_image(sinogram, origin=None):
 
 
 def compute_kappa_squared_image_from_partitioned_objective(obj_funs, init_img):
-    """
-    κ²(x) = Σ_i  H_i(init_img) · 1    (no scaling).
-    Works with your 3‑arg STIR signature.
+    """Compute kappa-squared weighting image from objective function Hessians.
+
+    Computes κ²(x) = Σ_i H_i(init_img) · 1 where H_i represents the Hessian
+    of each objective function component. This provides voxel-wise weighting
+    for cross-modal regularization in synergistic reconstruction.
+
+    Args:
+        obj_funs: List of objective functions that support multiply_with_Hessian method.
+        init_img: Initial image estimate used for Hessian evaluation.
+
+    Returns:
+        ImageData: Kappa-squared weighting image with absolute values applied.
     """
     out = init_img.get_uniform_copy(0)  # accumulator zeros
     ones = init_img.get_uniform_copy(1)  # vector of ones
@@ -363,13 +399,9 @@ def get_block_objective(desired_image, other_image, obj_fun, scale=1, order=0):
         d2d_id = ScalingOperator(scale, desired_image)
 
     if order == 0:
-        return OperatorCompositionFunction(
-            obj_fun, BlockOperator(d2d_id, o2d_zero, shape=(1, 2))
-        )
+        return OperatorCompositionFunction(obj_fun, BlockOperator(d2d_id, o2d_zero, shape=(1, 2)))
     elif order == 1:
-        return OperatorCompositionFunction(
-            obj_fun, BlockOperator(o2d_zero, d2d_id, shape=(1, 2))
-        )
+        return OperatorCompositionFunction(obj_fun, BlockOperator(o2d_zero, d2d_id, shape=(1, 2)))
     else:
         raise ValueError("Order must be 0 or 1")
 
@@ -394,15 +426,11 @@ def set_up_kl_objectives(
     spect_ams = [am.get_linear_acquisition_model() for am in spect_ams]
 
     pet_obj_funs = [
-        OperatorCompositionFunction(
-            KullbackLeibler(data, eta=add + add.max() / 1e3), am
-        )
+        OperatorCompositionFunction(KullbackLeibler(data, eta=add + add.max() / 1e3), am)
         for data, add, am in zip(pet_datas, pet_ads, pet_ams)
     ]
     spect_obj_funs = [
-        OperatorCompositionFunction(
-            KullbackLeibler(data, eta=add + add.max() / 1e3), am
-        )
+        OperatorCompositionFunction(KullbackLeibler(data, eta=add + add.max() / 1e3), am)
         for data, add, am in zip(spect_datas, spect_ads, spect_ams)
     ]
 
@@ -478,7 +506,7 @@ def get_sensitivity_from_subset_objs(obj_funs, initial_estimate):
 def get_sensitivities_from_subset_objs(obj_funs, initial_estimate):
     # get subset_sensitivity BDC for preconditioner
     sens_list = []
-    for j, obj_fun in enumerate(obj_funs):
+    for obj_fun in obj_funs:
         sens = obj_fun.get_subset_sensitivity(0)
         sens = sens.maximum(0)
         sens_list.append(sens)
@@ -511,12 +539,8 @@ def compute_inv_hessian_diagonals(bdc, obj_funs_list):
 def get_subset_data(data, num_subsets, stagger="staggered"):
     views = data.dimensions()[2]
     indices = list(range(views))
-    partitions_idxs = partitioner.partition_indices(
-        num_subsets, indices, stagger=stagger
-    )
-    datas = [data.get_subset(partitions_idxs[i]) for i in range(num_subsets)]
-
-    return datas
+    partitions_idxs = partitioner.partition_indices(num_subsets, indices, stagger=stagger)
+    return [data.get_subset(partitions_idxs[i]) for i in range(num_subsets)]
 
 
 def get_filters(fwhms=(10, 10, 10)):

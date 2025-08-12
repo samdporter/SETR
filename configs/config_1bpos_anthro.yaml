@@ -1,9 +1,9 @@
-alpha: 1
-beta: 1
+alpha: 10
+beta: 100
 delta: null
 num_subsets: [9, 12]
 no_prior: false
-num_epochs: 50
+num_epochs: 10
 use_kappa: true
 initial_step_size: 1.0
 relaxation_eta: 0.02
@@ -11,9 +11,23 @@ tail_singular_values: null
 diagonal: true
 both_directions: true
 
+# TNV (vectorial) prior settings
+use_tnv_prior: true
+gamma_tnv: 1.0
+tnv_diagonal: true
+tnv_both_directions: true
+
+# Modality-specific TV prior settings
+use_modality_specific_priors: false
+gamma_pet: 0.1
+gamma_spect: 0.1
+delta_tv: null  # defaults to delta if not set
+tv_diagonal: true
+tv_both_directions: true
+
 pet_gauss_fwhm: [5.1, 4.9, 4.9] # FROM Mediso Anyscan specifications at 10cm
-spect_gauss_fwhm: [13.4, 13.4, 13.4]
-spect_res: [1.22, 0.03, false] # Analytical collimator resolution for SPECT
+spect_gauss_fwhm: [6.7, 6.7, 6.7]
+spect_res: [0.81, 0.03, false] # Analytical collimator resolution for SPECT
 
 pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom"
 spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"

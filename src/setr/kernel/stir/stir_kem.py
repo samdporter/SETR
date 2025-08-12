@@ -1,8 +1,8 @@
 from cil.optimisation.operators import LinearOperator
 from sirf.STIR import (
+    AcquisitionModelUsingRayTracingMatrix,
     KOSMAPOSLReconstructor,
     make_Poisson_loglikelihood,
-    AcquisitionModelUsingRayTracingMatrix,
 )
 
 
@@ -47,10 +47,7 @@ class KernelOperator(LinearOperator):
         del tmp_acq_model, tmp_obj_fun
 
     def get_alpha(self, x):
-        if self.freeze_alpha:
-            return self.current_alpha
-        else:
-            return x
+        return self.current_alpha if self.freeze_alpha else x
 
     def direct(self, x, out=None):
         if out is None:

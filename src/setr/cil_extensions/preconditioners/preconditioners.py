@@ -1,7 +1,7 @@
 import numpy as np
 from cil.framework import BlockDataContainer
-from cil.optimisation.utilities import Preconditioner
 from cil.optimisation.functions import ScaledFunction
+from cil.optimisation.utilities import Preconditioner
 from sirf.STIR import SeparableGaussianImageFilter
 
 
@@ -19,7 +19,18 @@ class ConstantPreconditioner(Preconditioner):
 
 
 class PreconditionerWithInterval(Preconditioner):
-    """Preconditioner with support for update intervals and freezing behavior."""
+    """Base preconditioner class with update intervals and parameter freezing.
+
+    This abstract class extends CIL's Preconditioner to support:
+    - Periodic updates at specified intervals
+    - Parameter freezing after a given iteration count
+    - Caching of computed preconditioners for efficiency
+
+    Args:
+        update_interval: Number of iterations between preconditioner updates.
+        freeze_iter: Iteration number after which to freeze preconditioner parameters.
+            Set to np.inf to never freeze.
+    """
 
     def __init__(self, update_interval=1, freeze_iter=np.inf):
         self.update_interval = update_interval
@@ -155,7 +166,7 @@ class HarmonicMeanPreconditioner(PreconditionerWithInterval):
 
 
 class LehmerMeanPreconditioner(PreconditionerWithInterval):
-    """Combine two preconditioners via a Lehmer mean of order p."""
+    """Combine multiple preconditioners via a Lehmer mean of order p."""
 
     def __init__(
         self,
@@ -174,15 +185,22 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         if out is None:
             out = algorithm.solution.copy()
 
-        a = self.preconds[0].compute_preconditioner(algorithm)
-        b = self.preconds[1].compute_preconditioner(algorithm)
+        # Compute all preconditioners
+        precond_values = [p.compute_preconditioner(algorithm) for p in self.preconds]
 
-        # Lehmer mean: (a**p + b**p) / (a**(p-1) + b**(p-1))
+        # Generalized Lehmer mean: (Σ xᵢᵖ) / (Σ xᵢᵖ⁻¹)
         p = self.p
-        num = a.power(p) + b.power(p)
-        den = a.power(p - 1) + b.power(p - 1)
-        den = den.maximum(self.epsilon)  # avoid zero‐divide
 
+        # Initialize numerator and denominator with first preconditioner
+        num = precond_values[0].power(p)
+        den = precond_values[0].power(p - 1)
+
+        # Add contributions from remaining preconditioners
+        for precond in precond_values[1:]:
+            num += precond.power(p)
+            den += precond.power(p - 1)
+
+        den = den.maximum(self.epsilon)  # avoid zero‐divide
         num.divide(den, out=out)
         return out
 
@@ -293,8 +311,6 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
 
         if algorithm.iteration % self.update_interval == 0 or self.precond is None:
             self.precond = self.compute_preconditioner(algorithm).abs()
-        if out is None:
-            return gradient * self.precond
 
         if out is None:
             return gradient * self.precond
@@ -306,7 +322,7 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
         # for the kernelised EM, we need to freeze the alpha after a certain number of iterations
         # rather than freezing the whole preconditioner
         if algorithm.iteration >= self.freeze_kernel_iter:
-            for k in self.kernels:
+            for k in self.kernel:
                 k.freeze_alpha = True
 
         if isinstance(algorithm.f, ScaledFunction):
@@ -315,19 +331,18 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             sg = algorithm.f
         try:
             subset_idx = sg.data_passes_indices[-1][0]
-        except (
-            IndexError
-        ):  # can happen if the preconditioner is called before the first iteration
+        except IndexError:  # can happen if the preconditioner is called before the first iteration
             subset_idx = 0
 
         sens_bdc = self.sens_bdcs[subset_idx]
 
-        k_s = self.kernels[0].adjoint(sens_bdc.containers[0])
+        k_s = self.kernel[0].adjoint(sens_bdc.containers[0])
         total = self.uncombine_ops[0].adjoint(k_s)
         for i in range(1, len(sens_bdc.containers)):
-            k_s = self.kernels[i].adjoint(sens_bdc.containers[i])
+            k_s = self.kernel[i].adjoint(sens_bdc.containers[i])
             total += self.uncombine_ops[i].adjoint(k_s)
         total += self.epsilon  # to avoid division by zero
+        total = total.abs()
 
         if out is None:
             return algorithm.solution / total
@@ -382,6 +397,7 @@ class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             sg = algorithm.f
         adj = self.kernel.adjoint(self.sensitivities[sg.data_passes_indices[-1][0]])
         adj += self.epsilon
+        adj = adj.abs()
 
         if out is None:
             return algorithm.solution / adj

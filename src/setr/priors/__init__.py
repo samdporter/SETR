@@ -3,14 +3,13 @@ setr.priors
 Priors for synergistic reconstruction.
 """
 
-from .vtv.vtv import (
-    WeightedTotalVariation,
-    WeightedVectorialTotalVariation,
-)
-
 from .mutual_information import (
     MutualInformationGradientPrior,
     MutualInformationImagePrior,
+)
+from .vtv.vtv import (
+    WeightedTotalVariation,
+    WeightedVectorialTotalVariation,
 )
 
 __all__ = [

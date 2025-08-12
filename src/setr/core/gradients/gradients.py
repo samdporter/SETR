@@ -1,10 +1,12 @@
-# This is now almost purely for GPU gradient-based operators, but we keep the CPU operators for reference.
+# This is now almost purely for GPU gradient-based operators, but we keep the CPU
+# operators for reference.
 # Possibly, these will be re-introduced in the future.
 
 
 import numpy as np
-from numba import njit, prange, jit
 import torch
+import torch.nn.functional as F
+from numba import jit, njit, prange
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -14,7 +16,7 @@ def inner_product(x, y):
 
 
 class Operator:
-    def __init__():
+    def __init__(self):
         raise NotImplementedError
 
     def __call__(self, x):
@@ -35,9 +37,7 @@ class Operator:
     def calculate_norm(self, x, num_iterations=10):
         if not hasattr(self, "norm"):
             self.norm = power_iteration(self, x, num_iterations=num_iterations)
-            return self.norm
-        else:
-            return self.norm
+        return self.norm
 
     def get_adjoint(self):
         return AdjointOperator(self)
@@ -78,7 +78,7 @@ class ScaledOperator(Operator):
         return self.scale * self.operator.direct(x)
 
     def adjoint(self, x):
-        return 1 / self.scale * self.operator.adjoint(x)
+        return self.scale * self.operator.adjoint(x)
 
 
 class CompositionOperator(Operator):
@@ -126,7 +126,8 @@ class Jacobian:
                 for a in anatomical
             ]
             print(
-                "Multiple anatomical images detected. This will fail if different number of images are passed to direct and adjoint methods"
+                "Multiple anatomical images detected. This will fail if different number of "
+                "images are passed to direct and adjoint methods"
             )
         else:
             self.grad = self._initialise_gradient(
@@ -173,17 +174,15 @@ class Jacobian:
         # if gpu is enabled, convert images to torch tensor
         if self.gpu:
             images = (
-                torch.tensor(images, device=device)
-                if not isinstance(images, torch.Tensor)
-                else images.to(device)
+                images.to(device)
+                if isinstance(images, torch.Tensor)
+                else torch.tensor(images, device=device)
             )
 
         num_images = images.shape[-1]
         # if weights is a list of arrays, we need to expand dims
         if isinstance(self.grad, list):
-            jac_list = [
-                self.grad[idx].direct(images[..., idx]) for idx in range(num_images)
-            ]
+            jac_list = [self.grad[idx].direct(images[..., idx]) for idx in range(num_images)]
         else:
             jac_list = [self.grad.direct(images[..., idx]) for idx in range(num_images)]
 
@@ -241,11 +240,7 @@ class Jacobian:
         n_channels = len(directions) * len(modes)
 
         shape = (*images.shape[:-1], images.shape[-1], n_channels)
-        if self.gpu:
-            S = torch.ones(shape, device=images.device)
-        else:
-            S = np.ones(shape)
-
+        S = torch.ones(shape, device=images.device) if self.gpu else np.ones(shape)
         idx = 0
         for shift in directions:
             # Physical step size: Δℓ = sqrt(Σ(α_i * Δx_i)²)
@@ -284,7 +279,7 @@ class Gradient:
         self,
         voxel_sizes,
         method="forward",
-        bnd_cond="Periodic",
+        bnd_cond="Neumann",
         numpy_out=False,
         gpu=True,
         diagonal=False,
@@ -304,21 +299,28 @@ class Gradient:
 
     def diff_along(self, x, shift, mode="forward"):
         shift = torch.tensor(shift)
-        dims = (0, 1, 2)
-
         if mode not in ("forward", "backward"):
             raise ValueError("Unsupported mode")
 
         if self.bnd_cond == "Periodic":
             shift_amt = -shift if mode == "forward" else shift
-            shifted = torch.roll(
-                x, shifts=tuple(int(s.item()) for s in shift_amt), dims=dims
-            )
+            dims = (0, 1, 2)
+
+            shifted = torch.roll(x, shifts=tuple(int(s.item()) for s in shift_amt), dims=dims)
             return shifted - x if mode == "forward" else x - shifted
         elif self.bnd_cond == "Neumann":
-            raise NotImplementedError(
-                "Neumann boundary condition not implemented for GPU mode."
-            )
+            # Convert once to ints/tuple to avoid CPU tensor overhead
+            if isinstance(shift, torch.Tensor):
+                shift = tuple(int(s) for s in shift.tolist())
+            else:
+                shift = tuple(int(s) for s in shift)
+
+            if mode == "forward":
+                shifted = self._shift_neumann_3d(x, shift)  # samples at +shift
+                return shifted - x
+            else:  # "backward"
+                shifted = self._shift_neumann_3d(x, (-shift[0], -shift[1], -shift[2]))
+                return x - shifted
 
     def direct(self, x):
         if not self.gpu:
@@ -333,9 +335,7 @@ class Gradient:
             modes = ["forward", "backward"] if self.both_directions else [self.method]
             for mode in modes:
                 out = self.diff_along(x, shift, mode)
-                vnorm = np.sqrt(
-                    sum((s * v) ** 2 for s, v in zip(shift, self.voxel_sizes))
-                )
+                vnorm = np.sqrt(sum((s * v) ** 2 for s, v in zip(shift, self.voxel_sizes)))
                 out /= vnorm
                 results.append(out)
 
@@ -357,9 +357,7 @@ class Gradient:
             for mode in modes:
                 adj_mode = "backward" if mode == "forward" else "forward"
                 comp = self.diff_along(x[..., d_idx], shift, adj_mode)
-                vnorm = np.sqrt(
-                    sum((s * v) ** 2 for s, v in zip(shift, self.voxel_sizes))
-                )
+                vnorm = np.sqrt(sum((s * v) ** 2 for s, v in zip(shift, self.voxel_sizes)))
                 result -= comp / vnorm
                 d_idx += 1
 
@@ -375,6 +373,25 @@ class Gradient:
                 sum(sum((s / v) ** 2 for s, v in zip(shift, vs)) for shift in shifts)
             )
         return self._norm
+
+    def _shift_neumann_3d(self, x, shift: tuple[int, int, int]) -> torch.Tensor:
+        """
+        Return x shifted by 'shift' with Neumann (replicate) BCs.
+        x: (X, Y, Z) tensor on CPU or CUDA.
+        shift: each component in {-1, 0, 1}. Positive means +axis direction.
+        """
+        if x.ndim != 3:
+            raise ValueError("Expected a 3D tensor shaped (X, Y, Z).")
+        dx, dy, dz = (int(shift[0]), int(shift[1]), int(shift[2]))
+        X, Y, Z = x.shape
+
+        # Pad by one voxel on all sides; 'replicate' enforces zero normal derivative.
+        x5 = x.unsqueeze(0).unsqueeze(0)
+        xpad = F.pad(x5, (1, 1, 1, 1, 1, 1), mode="replicate")
+
+        # Slice the padded tensor with the requested shift.
+        out = xpad[:, :, 1 + dx : 1 + dx + X, 1 + dy : 1 + dy + Y, 1 + dz : 1 + dz + Z]
+        return out.squeeze(0).squeeze(0)
 
 
 class DirectionalGradient(Operator):
@@ -473,9 +490,7 @@ class CPUFiniteDifferenceOperator(Operator):
     Numpy implementation of finite difference operator
     """
 
-    def __init__(
-        self, voxel_size, direction=None, method="forward", bnd_cond="Neumann"
-    ):
+    def __init__(self, voxel_size, direction=None, method="forward", bnd_cond="Neumann"):
         self.voxel_size = voxel_size
         self.direction = direction
         self.method = method
@@ -530,10 +545,6 @@ class CPUFiniteDifferenceOperator(Operator):
             else:
                 raise ValueError("Not implemented")
 
-        #######################################################################
-        ##################### Backward differences ############################
-        #######################################################################
-
         elif self.method == "backward":
             # interior nodes
             np.subtract(
@@ -568,10 +579,6 @@ class CPUFiniteDifferenceOperator(Operator):
             else:
                 raise ValueError("Not implemented")
 
-        #######################################################################
-        ##################### central differences ############################
-        #######################################################################
-
         elif self.method == "central":
             # interior nodes
             np.subtract(
@@ -600,8 +607,6 @@ class CPUFiniteDifferenceOperator(Operator):
                 outa[tuple(self.get_slice(x, -1, None))] /= 2.0
 
             elif self.bnd_cond == "Periodic":
-                pass
-
                 # left boundary
                 np.subtract(
                     x[tuple(self.get_slice(x, 1, 2))],
@@ -651,9 +656,7 @@ class CPUFiniteDifferenceOperator(Operator):
                 outa[tuple(self.get_slice(x, 0, 1))] = x[tuple(self.get_slice(x, 0, 1))]
 
                 # right boundary
-                outa[tuple(self.get_slice(x, -1, None))] = -x[
-                    tuple(self.get_slice(x, -2, -1))
-                ]
+                outa[tuple(self.get_slice(x, -1, None))] = -x[tuple(self.get_slice(x, -2, -1))]
 
             elif self.bnd_cond == "Periodic":
                 # left boundary
@@ -689,9 +692,7 @@ class CPUFiniteDifferenceOperator(Operator):
                 outa[tuple(self.get_slice(x, 0, 1))] = x[tuple(self.get_slice(x, 1, 2))]
 
                 # right boundary
-                outa[tuple(self.get_slice(x, -1, None))] = -x[
-                    tuple(self.get_slice(x, -1, None))
-                ]
+                outa[tuple(self.get_slice(x, -1, None))] = -x[tuple(self.get_slice(x, -1, None))]
 
             elif self.bnd_cond == "Periodic":
                 # left boundary
@@ -790,8 +791,7 @@ def directional_op(image_gradient, anatomical_gradient, gamma=1, eta=1e-6):
                     np.sqrt(np.sum(anatomical_gradient[d, h, w] ** 2)) + eta**2
                 )
                 out[d, h, w] = (
-                    image_gradient[d, h, w]
-                    - gamma * np.dot(image_gradient[d, h, w], xi) * xi
+                    image_gradient[d, h, w] - gamma * np.dot(image_gradient[d, h, w], xi) * xi
                 )
     return out
 
@@ -803,15 +803,9 @@ def gpu_directional_op(image_gradient, anatomical_gradient, gamma=1, eta=1e-6):
     anatomical_gradient: 3D array of anatomical gradients
     """
 
-    xi = anatomical_gradient / (
-        torch.norm(anatomical_gradient, p=2, dim=-1, keepdim=True) + eta**2
-    )
+    xi = anatomical_gradient / (torch.norm(anatomical_gradient, p=2, dim=-1, keepdim=True) + eta**2)
 
-    out = (
-        image_gradient
-        - gamma * torch.sum(image_gradient * xi, dim=-1, keepdim=True) * xi
-    )
-    return out
+    return image_gradient - gamma * torch.sum(image_gradient * xi, dim=-1, keepdim=True) * xi
 
 
 @jit(forceobj=True)

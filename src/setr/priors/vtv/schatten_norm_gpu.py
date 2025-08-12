@@ -1,9 +1,8 @@
 # schatten_norm_gpu.py
-from cil.optimisation.functions import Function
-
-import torch
-from torch import vmap
 import numpy as np
+import torch
+from cil.optimisation.functions import Function
+from torch import vmap
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -99,9 +98,7 @@ def eigenvectors_2x2_torch(H, eigenvalues):
     e1_candidate2 = torch.stack([λ1 - d, c], dim=0)  # if (not b_nonzero but c_nonzero)
     e1_default = torch.tensor([1.0, 0.0], device=device, dtype=H.dtype)
 
-    e1 = torch.where(
-        b_nonzero, e1_candidate1, torch.where(c_nonzero, e1_candidate2, e1_default)
-    )
+    e1 = torch.where(b_nonzero, e1_candidate1, torch.where(c_nonzero, e1_candidate2, e1_default))
     e1_norm = torch.linalg.norm(e1)
     e1 = e1 / torch.where(e1_norm > 1e-9, e1_norm, torch.tensor(1.0, device=e1.device))
 
@@ -110,9 +107,7 @@ def eigenvectors_2x2_torch(H, eigenvalues):
     e2_candidate2 = torch.stack([λ2 - d, c], dim=0)
     e2_default = torch.tensor([0.0, 1.0], device=device, dtype=H.dtype)
 
-    e2 = torch.where(
-        b_nonzero, e2_candidate1, torch.where(c_nonzero, e2_candidate2, e2_default)
-    )
+    e2 = torch.where(b_nonzero, e2_candidate1, torch.where(c_nonzero, e2_candidate2, e2_default))
     e2_norm = torch.linalg.norm(e2)
     e2 = e2 / torch.where(e2_norm > 1e-9, e2_norm, torch.tensor(1.0, device=e2.device))
 
@@ -221,15 +216,9 @@ def nothing_hessian_diag_torch(x, eps=0):
 
 
 def norm_torch(H, func, smoothing_func, order, eps, tail=None):
-    if order == 0:
-        M = H
-        Hsym = M.T @ M
-        Hsym = add_identity_torch(Hsym, eps / 1e3)
-    else:
-        M = H
-        Hsym = M @ M.T
-        Hsym = add_identity_torch(Hsym, eps / 1e3)
-
+    M = H
+    Hsym = M.T @ M if order == 0 else M @ M.T
+    Hsym = add_identity_torch(Hsym, eps / 1e3)
     if Hsym.shape[-2:] == (2, 2):
         eig = eigenvalues_2x2_torch(Hsym)
     elif Hsym.shape[-2:] == (3, 3):
@@ -248,9 +237,7 @@ def norm_torch(H, func, smoothing_func, order, eps, tail=None):
         mask_sorted = torch.cat(
             [
                 torch.ones(tail, device=sigma.device, dtype=sigma.dtype),
-                torch.zeros(
-                    sigma.shape[0] - tail, device=sigma.device, dtype=sigma.dtype
-                ),
+                torch.zeros(sigma.shape[0] - tail, device=sigma.device, dtype=sigma.dtype),
             ]
         )
 

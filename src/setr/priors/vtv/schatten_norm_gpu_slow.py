@@ -1,9 +1,8 @@
 # schatten_norm_gpu_slow.py
 
-from cil.optimisation.functions import Function
-
-import torch
 import numpy as np
+import torch
+from cil.optimisation.functions import Function
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -192,11 +191,7 @@ class GPUVectorialTotalVariation(Function):
 
         # If tailing, only apply prox to the tail values.
         if self.tail is not None:
-            mask = torch.zeros_like(S)
-            num_singular_values = S.shape[-1]
-            start_index = max(0, num_singular_values - self.tail)
-            mask[..., start_index:] = 1.0
-
+            mask = self._get_sv_tail_mask(S)
             # Combine original head with processed tail
             S_final = S * (1 - mask) + S_prox_values * mask
         else:
@@ -229,10 +224,7 @@ class GPUVectorialTotalVariation(Function):
 
         # If tailing, the gradient for non-tailed values is 0
         if self.tail is not None:
-            mask = torch.zeros_like(S)
-            num_singular_values = S.shape[-1]
-            start_index = max(0, num_singular_values - self.tail)
-            mask[..., start_index:] = 1.0
+            mask = self._get_sv_tail_mask(S)
             S_grad_values = S_grad_values * mask
 
         # Reconstruct the gradient matrix: U diag(h'(s)) V^T
@@ -271,19 +263,14 @@ class GPUVectorialTotalVariation(Function):
         hess_coeffs = hessian_diag_func(S, self.eps)  # Shape: (..., r)
 
         if self.tail is not None:
-            mask = torch.zeros_like(S)
-            num_singular_values = S.shape[-1]
-            start_index = max(0, num_singular_values - self.tail)
-            mask[..., start_index:] = 1.0
+            mask = self._get_sv_tail_mask(S)
             hess_coeffs = hess_coeffs * mask
 
         # --- Step 3: Construct the field of rank-1 basis matrices u_k v_k^T ---
         # Target shape: (..., r, M, d)
 
         # U shape is (..., M, r). We need k to be an outer dimension.
-        U_perm = U.permute(
-            *range(U.ndim - 2), -1, -2
-        )  # Swap last two dims -> (..., r, M)
+        U_perm = U.permute(*range(U.ndim - 2), -1, -2)  # Swap last two dims -> (..., r, M)
 
         # Unsqueeze to prepare for batched matrix multiplication (outer product)
         # U_perm becomes (..., r, M, 1)
@@ -295,3 +282,11 @@ class GPUVectorialTotalVariation(Function):
         rank_one_fields = U_unsqueezed @ Vh_unsqueezed  # Shape: (..., r, M, d)
 
         return hess_coeffs, rank_one_fields
+
+    # TODO Rename this here and in `proximal`, `gradient` and `hessian_components`
+    def _get_sv_tail_mask(self, S):
+        result = torch.zeros_like(S)
+        num_singular_values = S.shape[-1]
+        start_index = max(0, num_singular_values - self.tail)
+        result[..., start_index:] = 1.0
+        return result

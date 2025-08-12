@@ -1,5 +1,6 @@
 import os
 import re
+
 import numpy as np
 from cil.framework import BlockDataContainer, BlockGeometry
 from cil.optimisation.operators import LinearOperator
@@ -102,9 +103,7 @@ class TruncationOperator(LinearOperator):
     """CIL Wrapper for SIRF TruncateToCylinderProcessor."""
 
     def __init__(self, domain_geometry, **kwargs):
-        super().__init__(
-            domain_geometry=domain_geometry, range_geometry=domain_geometry
-        )
+        super().__init__(domain_geometry=domain_geometry, range_geometry=domain_geometry)
 
         self.truncate = TruncateToCylinderProcessor()
         self.truncate.set_strictly_less_than_radius(True)
@@ -133,8 +132,7 @@ class DirectionalOperator(LinearOperator):
         self.gamma = gamma
 
         self.xi = (
-            self.anatomical_gradient
-            / (self.anatomical_gradient.pnorm().power(2) + eta**2).sqrt()
+            self.anatomical_gradient / (self.anatomical_gradient.pnorm().power(2) + eta**2).sqrt()
         )
 
         self.calculate_norm = lambda _: 1
@@ -176,13 +174,13 @@ class NiftyResampleOperator(LinearOperator):
 
     def direct(self, x, out=None):
         res = self.resampler.forward(x)
-        res = res.maximum(0)
-        if out is not None:
-            out.fill(res)
-        return res
+        return self._project_and_fill(res, out)
 
     def adjoint(self, x, out=None):
         res = self.resampler.backward(x)
+        return self._project_and_fill(res, out)
+
+    def _project_and_fill(self, res, out):
         res = res.maximum(0)
         if out is not None:
             out.fill(res)
@@ -229,37 +227,27 @@ class CouchShiftOperator(LinearOperator):
 
     def initialise_shift(self, x, out=None):
         """
-        Apply the couch shift to the input image.
-
-        Parameters:
-        -----------
-        x : ImageData
-            The input image to be shifted.
-        out : ImageData, optional
-            If provided, the result will be stored in this object. Otherwise, a new
-            ImageData object will be created.
-
-        Returns:
-        --------
-        ImageData
-            The shifted image.
+        Apply the couch shift using an isolated temp directory.
+        Returns a new ImageData with updated geometry if out is None.
+        If out is provided, copies voxel data into out (geometry unchanged).
         """
-        # Write the input image to a temporary file
-        x.write("tmp_shifted.hv")
+        import tempfile
+        from pathlib import Path
 
-        # Modify the 'first pixel offset (mm) [3]' in the temporary file
-        self.modify_pixel_offset("tmp_shifted.hv", self.shift, 3)
+        with tempfile.TemporaryDirectory(prefix="couchshift_") as td:
+            td = Path(td)
+            hv_path = td / "shifted.hv"  # writer will place the paired .v alongside
 
-        # If `out` is provided, update it
-        if out is not None:
-            out.read_from_file("tmp_shifted.hv")
-        else:
-            out = ImageData("tmp_shifted.hv")
+            x.write(str(hv_path))
+            self.modify_pixel_offset(str(hv_path), self.shift, 3)
 
-        # Delete the temporary file
-        os.remove("tmp_shifted.hv")
+            shifted = ImageData(str(hv_path))
 
-        return out
+            if out is None:
+                return shifted
+
+            out.fill(shifted.as_array())
+            return out
 
     def direct(self, x, out=None):
         x_arr = x.as_array()
@@ -294,7 +282,8 @@ class CouchShiftOperator(LinearOperator):
         delete_file = False
         if isinstance(file_path, ImageData):
             print(
-                "This is supposed to be a file path but got an ImageData object. Writing to a temporary file."
+                "This is supposed to be a file path but got an ImageData object. "
+                "Writing to a temporary file."
             )
             delete_file = True
             file_path.write("tmp_shift.hv")
@@ -306,12 +295,8 @@ class CouchShiftOperator(LinearOperator):
 
             # Modify the specific line
             for i, line in enumerate(lines):
-                if line.strip().startswith(
-                    f"first pixel offset (mm) [{pixel_index}] :="
-                ):
-                    lines[i] = (
-                        f"first pixel offset (mm) [{pixel_index}] := {new_offset}\n"
-                    )
+                if line.strip().startswith(f"first pixel offset (mm) [{pixel_index}] :="):
+                    lines[i] = f"first pixel offset (mm) [{pixel_index}] := {new_offset}\n"
                     break
 
             # Write the updated content back to the file
@@ -349,9 +334,7 @@ class CouchShiftOperator(LinearOperator):
     def get_couch_shift_from_acqusition_data(sinogram) -> float:
         header = sinogram.get_info()
 
-        pattern = (
-            r"start\s+horizontal\s+bed\s+position\s+\(mm\)\s*:=\s*([-+]?\d*\.?\d+)"
-        )
+        pattern = r"start\s+horizontal\s+bed\s+position\s+\(mm\)\s*:=\s*([-+]?\d*\.?\d+)"
         match = re.search(pattern, header)
         if match is None:
             raise ValueError("Horizontal bed position not found.")
@@ -375,7 +358,7 @@ class ImageCombineOperator(LinearOperator):
         self.reference = ImageData()
         dim_xy = images.containers[0].dimensions()[1]
         dim_z = ImageCombineOperator.get_combined_length_voxels(images)
-        offset_xy = images.containers[0].get_geometrical_info().get_offset()[0]
+        # offset_xy = images.containers[0].get_geometrical_info().get_offset()[0]
         offset_z = -images.containers[-1].get_geometrical_info().get_offset()[2]
         print(
             f"setting offset_z to {-offset_z}. If something goes wrong try swapping the image order"
@@ -390,43 +373,35 @@ class ImageCombineOperator(LinearOperator):
 
         # Ensure all images have the same voxel size as the reference
         assert all(
-            img.voxel_sizes() == self.reference.voxel_sizes()
-            for img in images.containers
+            img.voxel_sizes() == self.reference.voxel_sizes() for img in images.containers
         ), "All images must have the same voxel size as the reference"
 
         # Ensure the combined image length matches the reference dimensions
-        assert (
-            self.get_combined_length_voxels(images) == self.reference.dimensions()[0]
-        ), (
-            f"Combined image length and reference dimensions do not match. Something is wrong \n Combined image length: {self.get_combined_length_voxels(images)} \n Reference dimensions: {self.reference.dimensions()[0]}"
+        assert self.get_combined_length_voxels(images) == self.reference.dimensions()[0], (
+            f"Combined image length and reference dimensions do not match. Something is wrong \n"
+            f"Combined image length: {self.get_combined_length_voxels(images)} \n"
+            f"Reference dimensions: {self.reference.dimensions()[0]}"
         )
 
         super().__init__(domain_geometry=images, range_geometry=self.reference)
 
     @staticmethod
     def get_combined_length(images):
-        offsets = [
-            img.get_geometrical_info().get_offset()[2] for img in images.containers
-        ]
-        lengths = [
-            img.dimensions()[0] * img.voxel_sizes()[0] for img in images.containers
-        ]
+        offsets = [img.get_geometrical_info().get_offset()[2] for img in images.containers]
+        lengths = [img.dimensions()[0] * img.voxel_sizes()[0] for img in images.containers]
 
-        return max(offset + length for offset, length in zip(offsets, lengths)) - min(
-            offsets
-        )
+        return max(offset + length for offset, length in zip(offsets, lengths)) - min(offsets)
 
     @staticmethod
     def get_combined_length_voxels(images):
         voxel_size = images.containers[0].voxel_sizes()[0]
         assert all(
-            img.voxel_sizes() == images.containers[0].voxel_sizes()
-            for img in images.containers
+            img.voxel_sizes() == images.containers[0].voxel_sizes() for img in images.containers
         )
 
         length = ImageCombineOperator.get_combined_length(images)
 
-        assert ((length / voxel_size) % 1) - 1 < 1e-3
+        assert (length / voxel_size) % 1 < 1.001
         return int(round(length / voxel_size))
 
     @staticmethod
@@ -444,9 +419,7 @@ class ImageCombineOperator(LinearOperator):
         Else does plain ∑_i[f_i].
         """
         # zoom all images
-        zoomed_imgs = [
-            img.zoom_image_as_template(reference) for img in images.containers
-        ]
+        zoomed_imgs = [img.zoom_image_as_template(reference) for img in images.containers]
 
         if not weight_overlap:
             out = reference.get_uniform_copy(0)
@@ -456,17 +429,14 @@ class ImageCombineOperator(LinearOperator):
 
         # 1) build coverage masks (1 inside each img's FOV, 0 outside)
         zoomed_masks = [
-            img.get_uniform_copy(1).zoom_image_as_template(reference)
-            for img in images.containers
+            img.get_uniform_copy(1).zoom_image_as_template(reference) for img in images.containers
         ]
         cov_arrs = [m.as_array() for m in zoomed_masks]
         coverage = sum(cov_arrs)  # integer count
         overlap = coverage >= 2  # boolean mask
 
         # 2) zoom sensitivities and pull raw arrays
-        zoomed_sens = [
-            s.zoom_image_as_template(reference) for s in sens_images.containers
-        ]
+        zoomed_sens = [s.zoom_image_as_template(reference) for s in sens_images.containers]
         img_arrs = [z.as_array() for z in zoomed_imgs]
         sens_arrs = [s.as_array() for s in zoomed_sens]
 
@@ -490,16 +460,17 @@ class ImageCombineOperator(LinearOperator):
         Parameters:
             combined_image: The image obtained from combine_images.
             original_references: List of original image references.
-            weight_overlap: If True, adjust for overlapping regions. Default is False (ignore weighting).
+            weight_overlap: If True, adjust for overlapping regions. Default is False
+                           (ignore weighting).
 
         Returns:
             original_images: List of images zoomed to the original references.
         """
         original_images = []
 
-        for ref in original_references:
-            original_images.append(combined_image.zoom_image_as_template(ref))
-
+        original_images.extend(
+            combined_image.zoom_image_as_template(ref) for ref in original_references
+        )
         return original_images
 
     def direct(self, images: BlockDataContainer, out=None):
@@ -511,13 +482,9 @@ class ImageCombineOperator(LinearOperator):
 
     def adjoint(self, image, out=None):
         if out is None:
-            out = BlockDataContainer(
-                *[img.get_uniform_copy(0) for img in self.images.containers]
-            )
+            out = BlockDataContainer(*[img.get_uniform_copy(0) for img in self.images.containers])
 
-        original_images = ImageCombineOperator.retrieve_original_images(
-            image, self.images
-        )
+        original_images = ImageCombineOperator.retrieve_original_images(image, self.images)
 
         for img, container in zip(original_images, out.containers):
             container.fill(img)
@@ -565,13 +532,11 @@ class ImageResampleOperator(LinearOperator):
 
         # Perform sanity checks
         assert all(
-            img.voxel_sizes() == self.reference.voxel_sizes()
-            for img in images.containers
+            img.voxel_sizes() == self.reference.voxel_sizes() for img in images.containers
         ), "All images must have the same voxel size as the reference"
-        assert (
-            self.get_combined_length_voxels(images) == self.reference.dimensions()[0]
-        ), (
-            f"Combined image length {self.get_combined_length_voxels(images)} and reference Z-dimension "
+        assert self.get_combined_length_voxels(images) == self.reference.dimensions()[0], (
+            f"Combined image length {self.get_combined_length_voxels(images)} and "
+            f"reference Z-dimension "
             f"{self.reference.dimensions()[0]} do not match."
         )
 
@@ -587,15 +552,9 @@ class ImageResampleOperator(LinearOperator):
     @staticmethod
     def get_combined_length(images: BlockDataContainer):
         """Calculates the physical length of the combined image space."""
-        offsets = [
-            img.get_geometrical_info().get_offset()[2] for img in images.containers
-        ]
-        lengths = [
-            img.dimensions()[0] * img.voxel_sizes()[0] for img in images.containers
-        ]
-        return max(offset + length for offset, length in zip(offsets, lengths)) - min(
-            offsets
-        )
+        offsets = [img.get_geometrical_info().get_offset()[2] for img in images.containers]
+        lengths = [img.dimensions()[0] * img.voxel_sizes()[0] for img in images.containers]
+        return max(offset + length for offset, length in zip(offsets, lengths)) - min(offsets)
 
     @staticmethod
     def get_combined_length_voxels(images: BlockDataContainer):
@@ -607,10 +566,7 @@ class ImageResampleOperator(LinearOperator):
         length = ImageResampleOperator.get_combined_length(images)
 
         # Check if the total length is a near-integer multiple of the voxel size
-        assert (
-            abs((length / voxel_size) % 1) < 1e-3
-            or abs(((length / voxel_size) % 1) - 1) < 1e-3
-        )
+        assert abs((length / voxel_size) % 1) < 1e-3 or abs(((length / voxel_size) % 1) - 1) < 1e-3
         return int(round(length / voxel_size))
 
     def direct(self, images: BlockDataContainer, out: BlockDataContainer = None):
@@ -627,9 +583,7 @@ class ImageResampleOperator(LinearOperator):
 
         return out
 
-    def adjoint(
-        self, warped_images: BlockDataContainer, out: BlockDataContainer = None
-    ):
+    def adjoint(self, warped_images: BlockDataContainer, out: BlockDataContainer = None):
         """
         Resamples each image from the common grid back to its original geometry.
         """
@@ -661,9 +615,7 @@ class ImageSummationOperator(LinearOperator):
     original combined operator's adjoint.
     """
 
-    def __init__(
-        self, domain_geometry: BlockDataContainer, weight_overlap: bool = False
-    ):
+    def __init__(self, domain_geometry: BlockDataContainer, weight_overlap: bool = False):
         self.weight_overlap = weight_overlap
 
         # All images in the domain are expected to have the same geometry
@@ -713,9 +665,7 @@ class ImageSummationOperator(LinearOperator):
         sens_arrs = [s.as_array() for s in sens_images.containers]
 
         # 3) Calculate components for the weighted sum formula
-        num = sum(
-            f * s for f, s in zip(img_arrs, sens_arrs)
-        )  # Numerator: ∑ (S_i * f_i)
+        num = sum(f * s for f, s in zip(img_arrs, sens_arrs))  # Numerator: ∑ (S_i * f_i)
         den = sum(sens_arrs)  # Denominator: ∑ S_i
         # Handle division by zero in denominator, though unlikely with sens maps
         den[den == 0] = 1e-9

@@ -251,9 +251,7 @@ class GPUVectorNorm(Function):
             grad_magnitudes = norm_func(modality_gradients)
 
             # Avoid division by zero
-            grad_mag_safe = torch.maximum(
-                grad_magnitudes, torch.tensor(1e-9, device=x.device)
-            )
+            grad_mag_safe = torch.maximum(grad_magnitudes, torch.tensor(1e-9, device=x.device))
 
             # Compute derivative of smoothing function
             smooth_deriv = grad_func(grad_magnitudes, self.eps)
@@ -261,9 +259,7 @@ class GPUVectorNorm(Function):
             # Chain rule: derivative w.r.t. original gradients
             if self.norm == "l1":
                 # For L1 norm: ∂||g||₁/∂g = sign(g)
-                gradient[..., m, :] = smooth_deriv.unsqueeze(-1) * torch.sign(
-                    modality_gradients
-                )
+                gradient[..., m, :] = smooth_deriv.unsqueeze(-1) * torch.sign(modality_gradients)
             elif self.norm == "l2":
                 # For L2 norm: ∂||g||₂/∂g = g/||g||₂
                 gradient[..., m, :] = (smooth_deriv / grad_mag_safe).unsqueeze(

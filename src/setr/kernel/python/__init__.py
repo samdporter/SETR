@@ -5,10 +5,10 @@ Pure-Python and Numba-based kernel operators.
 """
 
 from .my_kem import (
-    get_kernel_operator,
     BaseKernelOperator,
     KernelOperator,
     NumbaKernelOperator,
+    get_kernel_operator,
 )
 
 __all__ = [

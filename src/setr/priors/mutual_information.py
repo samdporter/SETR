@@ -1,5 +1,6 @@
 import torch
 from torch.autograd import Function
+
 from setr.core.gradients import Jacobian
 from setr.utils import BlockDataContainerToArray
 
@@ -105,9 +106,7 @@ class MutualInformationGradientPrior(Function):
             mean = J.mean(dim=0, keepdim=True)
             std = J.std(dim=0, unbiased=False, keepdim=True).clamp(min=self.norm_eps)
             dL_dJ = (grad_w / std) - (
-                (J - mean)
-                * (grad_w * (J - mean)).sum(dim=0, keepdim=True)
-                / (std**3 * J.shape[0])
+                (J - mean) * (grad_w * (J - mean)).sum(dim=0, keepdim=True) / (std**3 * J.shape[0])
             )
             grad_flat = dL_dJ
         else:
@@ -116,9 +115,7 @@ class MutualInformationGradientPrior(Function):
             # not chaining back through whiten
             # user may accept approximate
         # scatter back
-        grad_full = torch.zeros(
-            (full_shape[0], 6), device=grad_flat.device, dtype=grad_flat.dtype
-        )
+        grad_full = torch.zeros((full_shape[0], 6), device=grad_flat.device, dtype=grad_flat.dtype)
         grad_full[idx] = grad_flat
         grad = grad_full.view(*self.jacobian.direct(self.bdc2a.direct(x)).shape)
         result = self.bdc2a.adjoint(self.jacobian.adjoint(grad))
@@ -254,9 +251,7 @@ class MutualInformationImagePrior(Function):
             mean = V.mean(dim=0, keepdim=True)
             std = V.std(dim=0, unbiased=False, keepdim=True).clamp(min=1e-6)
             dL_dV = (grad_w / std) - (
-                (V - mean)
-                * (grad_w * (V - mean)).sum(dim=0, keepdim=True)
-                / (std**3 * V.shape[0])
+                (V - mean) * (grad_w * (V - mean)).sum(dim=0, keepdim=True) / (std**3 * V.shape[0])
             )
             grad_flat = dL_dV
         else:

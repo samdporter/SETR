@@ -3,18 +3,18 @@ setr.cil_extensions.preconditioners
 """
 
 from .preconditioners import (
-    ConstantPreconditioner,
-    PreconditionerWithInterval,
-    BSREMPreconditioner,
-    ImageFunctionPreconditioner,
-    HarmonicMeanPreconditioner,
-    LehmerMeanPreconditioner,
     ArithmeticMeanPreconditioner,
-    IdentityPreconditioner,
-    SubsetPreconditioner,
-    SubsetEMPreconditioner,
+    BSREMPreconditioner,
+    ConstantPreconditioner,
     DualModalitySubsetKernelisedEMPreconditioner,
+    HarmonicMeanPreconditioner,
+    IdentityPreconditioner,
+    ImageFunctionPreconditioner,
+    LehmerMeanPreconditioner,
+    PreconditionerWithInterval,
+    SubsetEMPreconditioner,
     SubsetKernelisedEMPreconditioner,
+    SubsetPreconditioner,
 )
 
 __all__ = [

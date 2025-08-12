@@ -50,12 +50,8 @@ class ArmijoStepSearchRule(StepSizeRule):
         # Check if we're within the initial steps or at an update interval
         if self.counter < self.steps:
             if self.f_x is None:
-                self.f_x = algorithm.f(algorithm.solution) + algorithm.g(
-                    algorithm.solution
-                )
-            precond_grad = algorithm.preconditioner.apply(
-                algorithm, algorithm.gradient_update
-            )
+                self.f_x = algorithm.f(algorithm.solution) + algorithm.g(algorithm.solution)
+            precond_grad = algorithm.preconditioner.apply(algorithm, algorithm.gradient_update)
 
             # if x is zero and the gradient is zero, we should ignore the gradient
             is_zero = algorithm.solution.power(0)
@@ -95,7 +91,8 @@ class ArmijoStepSearchRule(StepSizeRule):
 
                 print(f"Step size: {step_size}")
 
-            # Update the internal state with the new step size as the minimum of the current and previous step sizes
+            # Update the internal state with the new step size as the minimum of the
+            # current and previous step sizes
             self.min_step_size = min(step_size, self.min_step_size)
 
             if self.counter < self.steps:

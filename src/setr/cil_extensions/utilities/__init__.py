@@ -3,8 +3,8 @@ setr.cil_extensions.utilities
 """
 
 from .utilities import (
-    LinearDecayStepSizeRule,
     ArmijoStepSearchRule,
+    LinearDecayStepSizeRule,
 )
 
 __all__ = [

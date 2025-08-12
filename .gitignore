@@ -116,6 +116,7 @@ results/
 output/
 figures/
 plots/
+test_results/
 *.png
 *.jpg
 *.jpeg
@@ -148,3 +149,10 @@ temp/
 dist/
 build/
 *.egg-info/
+
+# AI created files
+CLAUDE.md
+CODING_STANDARDS.md
+
+# Notebooks
+*.ipynb

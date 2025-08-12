@@ -14,6 +14,12 @@ tail_singular_values: null
 diagonal: true
 both_directions: true
 
+# TNV (vectorial) prior settings
+use_tnv_prior: true
+gamma_tnv: 1.0
+tnv_diagonal: true
+tnv_both_directions: true
+
 pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
 spect_gauss_fwhm: [6.7, 6.7, 6.7] # FROM bremss data anyscan
 spect_res: [1.68, 0.03, false] # Analytical collimator resolution for SPECT

@@ -1,0 +1,19 @@
+# Resampling Configuration - 2 Bed Position
+# Configuration for resampling SPECT reconstruction to PET space (2 bed position case)
+
+# Data paths (these can be overridden via --override)
+data_dir: "/home/storage/prepared_data/oxford_patient_data/sirt3"
+results_dir: "/home/sam/working/synergistic_recon/results"
+
+# Resampling paths (modify these for your specific dataset)
+pet_template: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET/template_image.hv"
+spect_reconstruction: "/home/sam/working/synergistic_recon/results/hkem_spect_1bpos/reconstruction_x.hv"
+transform_file: "/home/storage/prepared_data/oxford_patient_data/sirt3/SPECT/spect2pet.nii"
+output_file: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET/spect.hv"
+
+# Alternative paths for different datasets
+# Uncomment and modify as needed:
+# pet_template: "${data_dir}/PET/template_image.hv"
+# spect_reconstruction: "${results_dir}/hkem_spect_1bpos/reconstruction_x.hv"
+# transform_file: "${data_dir}/SPECT/spect2pet.nii"
+# output_file: "${data_dir}/PET/spect.hv"

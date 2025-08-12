@@ -10,6 +10,7 @@ except ImportError:
     device = "cpu"
 import numpy as np
 from sirf.STIR import ImageData
+
 from setr.core.gradients import Jacobian
 from setr.utils import BlockDataContainerToArray
 
@@ -60,9 +61,7 @@ class WeightedVectorialTotalVariation(Function):
         # Inverse‐weight is used in inv_hessian_diag
         if gpu:
             self.inv_weights = torch.reciprocal(self.weights)
-            self.inv_weights = torch.nan_to_num(
-                self.inv_weights, nan=0.0, neginf=0.0, posinf=0.0
-            )
+            self.inv_weights = torch.nan_to_num(self.inv_weights, nan=0.0, neginf=0.0, posinf=0.0)
         else:
             self.inv_weights = np.reciprocal(self.weights, where=self.weights != 0)
 
@@ -121,9 +120,7 @@ class WeightedVectorialTotalVariation(Function):
         U = w * J  # (..., M, d)
 
         # 5) Compute inner gradient: shape (..., M, d)
-        inner = w * self.vtv.gradient(
-            U
-        )  # the vtv.gradient already accounts for smoothing etc.
+        inner = w * self.vtv.gradient(U)  # the vtv.gradient already accounts for smoothing etc.
 
         # 7) Push back to image‐space: J^* (−divergence)
         # In our code, Jacobian.adjoint performs exactly −divg
@@ -173,9 +170,7 @@ class WeightedVectorialTotalVariation(Function):
 
             # The rank-one fields are u_k v_k^T from A=wJx. We need to compute J^T(w * u_k v_k^T).
             # Since J is the gradient operator and w is a per-modality weight, J^T(w*...) is correct.
-            influence_image = self.jacobian.adjoint(
-                w * C_k_field
-            )  # Shape: (nx, ny, nz, M)
+            influence_image = self.jacobian.adjoint(w * C_k_field)  # Shape: (nx, ny, nz, M)
 
             # c) Get the corresponding h''(s_k) coefficients for this mode.
             #    Shape: (nx, ny, nz)
@@ -184,9 +179,7 @@ class WeightedVectorialTotalVariation(Function):
             # d) Unsqueeze the coefficient to broadcast over the M modalities.
             #    Shape becomes (nx, ny, nz, 1)
             h_double_prime_k = (
-                h_double_prime_k.unsqueeze(-1)
-                if self.gpu
-                else np.expand_dims(h_double_prime_k, -1)
+                h_double_prime_k.unsqueeze(-1) if self.gpu else np.expand_dims(h_double_prime_k, -1)
             )
 
             # e) Accumulate the contribution for this mode: h''(s_k) * (J^T u_k v_k^T)^2
@@ -303,9 +296,7 @@ class WeightedTotalVariation(Function):
         # Inverse‐weight is used in inv_hessian_diag
         if gpu:
             self.inv_weights = torch.reciprocal(self.weights)
-            self.inv_weights = torch.nan_to_num(
-                self.inv_weights, nan=0.0, neginf=0.0, posinf=0.0
-            )
+            self.inv_weights = torch.nan_to_num(self.inv_weights, nan=0.0, neginf=0.0, posinf=0.0)
         else:
             self.inv_weights = np.reciprocal(self.weights, where=self.weights != 0)
 
@@ -338,9 +329,7 @@ class WeightedTotalVariation(Function):
         U = w * J  # (..., M, d)
 
         # 4) Compute inner gradient: shape (..., M, d)
-        inner = w * self.tv.gradient(
-            U
-        )  # the tv.gradient already accounts for smoothing etc.
+        inner = w * self.tv.gradient(U)  # the tv.gradient already accounts for smoothing etc.
 
         # 5) Push back to image‐space: J^* (−divergence)
         ret = self.jacobian.adjoint(inner)  # shape (nx,ny,nz,M)
@@ -388,40 +377,6 @@ class WeightedTotalVariation(Function):
             P_diag[..., m] = hess_coeffs[..., m] * (influence_image_m**2)
 
         return P_diag
-
-    def hessian_diag(self, x, out=None):
-        """
-        Computes a diagonal approximation of the Hessian for total variation.
-        """
-        x_arr = self.bdc2a.direct(x)
-        diag_arr = self._preconditioner_weights_core(x_arr)
-
-        result = self.bdc2a.adjoint(diag_arr)
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
-
-    def inv_hessian_diag(self, x, out=None, epsilon=1e-9):
-        """
-        Computes the action of the inverse of the diagonal Hessian approximation.
-        """
-        # 1. Get the preconditioner weights
-        diag_arr = self._preconditioner_weights_core(self.bdc2a.direct(x))
-
-        # 2. Invert the weights, adding epsilon for stability
-        if self.gpu:
-            inv_arr = torch.reciprocal(diag_arr + epsilon)
-            torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0, out=inv_arr)
-        else:
-            inv_arr = np.reciprocal(diag_arr + epsilon)
-
-        # 3. Convert back to BlockDataContainer
-        result = self.bdc2a.adjoint(inv_arr)
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
 
     def proximal(self, x, tau, out=None):
         """
@@ -479,9 +434,7 @@ class WeightedTotalVariation(Function):
         hess_arr = self.hessian_diag(x, out=None)  # BDC or array
         # if it’s a numpy array, convert to torch:
         H = torch.as_tensor(
-            hess_arr
-            if isinstance(hess_arr, torch.Tensor)
-            else self.bdc2a.direct(hess_arr),
+            hess_arr if isinstance(hess_arr, torch.Tensor) else self.bdc2a.direct(hess_arr),
             device=device,
         )
         inv_arr = torch.reciprocal(H + epsilon)

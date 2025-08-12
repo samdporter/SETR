@@ -1,0 +1,54 @@
+# HKEM (Hybrid Kernelized EM) Configuration - Single Bed Position
+# This configuration supports both KOSMAPOSL and ISTA-based HKEM reconstruction
+
+# Basic reconstruction parameters
+modality: "SPECT"  # Options: "PET", "SPECT"
+method: "ista"   # Options: "kosmaposl", "ista"
+guidance: "attenuation"  # Options: "attenuation", "emission"
+
+# Data paths
+data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+output_path: "/home/sam/working/synergistic_recon/results/hkem_spect_1bpos"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+# Algorithm parameters
+num_subsets: 9
+num_epochs: 30
+step_size: 0.1
+sampling: "sequential"  # Options: "sequential", "staggered"
+
+# Kernel operator parameters
+num_neighbours: 5
+num_non_zero_features: 1
+sigma_anatomical: 1.0              # Anatomical similarity parameter (sigma_m in old code)
+sigma_emission: 0.1                # Emission similarity parameter (sigma_p in old code)
+sigma_distance_anatomical: 5.0     # Distance weighting parameter for anatomical features
+sigma_distance_emission: 5.0       # Distance weighting parameter for emission features
+normalize_features: true           # Normalize features before kernel computation
+normalize_kernel: true             # Normalize kernel before application
+use_mask: false                    # Use k-nearest neighbor masking
+mask_k: null                       # Number of neighbors for masking (null = use all)
+recalc_mask: false                 # Recalculate mask at each iteration
+distance_weighting: false          # Apply distance-based weighting to kernel
+hybrid: true                       # Enable hybrid anatomical+emission kernel
+kernel_backend: "auto"             # Options: "auto", "numba", "python"
+only_2D: false  # Use 2D kernels only (true = only_2D in old code)
+
+# Preconditioner parameters
+freeze_iter: 72  # Iteration to freeze kernel parameters (inf = never freeze)
+
+# Image processing parameters
+gauss_fwhm: [6.7, 6.7, 6.7]
+spect_res: [0.81, 0.03, false] # Analytical collimator resolution for SPECT
+
+# System parameters
+no_gpu: false        # Disable GPU acceleration
+seed: null           # Random seed for reproducibility
+
+# Advanced parameters (usually don't need to change)
+tail_singular_values: null
+delta: null
+use_tof: false
+diagonal: false
+both_directions: false

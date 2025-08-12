@@ -1,16 +1,16 @@
 import argparse
 import ast
-import yaml
-import os
-import pandas as pd
+import contextlib
 import logging
+import os
+
+import pandas as pd
+import yaml
 
 
 def parse_cli():
     p = argparse.ArgumentParser(description="BSREM (YAML‑driven)")
-    p.add_argument(
-        "--config", "-c", type=str, required=True, help="Path to YAML config file"
-    )
+    p.add_argument("--config", "-c", type=str, required=True, help="Path to YAML config file")
     p.add_argument(
         "--override",
         "-o",
@@ -34,10 +34,8 @@ def apply_overrides(cfg: dict, overrides: list[str]) -> dict:
     """
     for ov in overrides or []:
         key, val = ov.split("=", 1)
-        try:
+        with contextlib.suppress(Exception):
             val = ast.literal_eval(val)
-        except Exception:
-            pass
         parts = key.split(".")
         d = cfg
         for p in parts[:-1]:
@@ -52,6 +50,4 @@ def save_args(args, output_filename):
     df_args.to_csv(os.path.join(args.output_path, output_filename), index=False)
     for key, value in vars(args).items():
         logging.info(f"{key}: {value}")
-    logging.info(
-        f"Arguments saved to {os.path.join(args.output_path, output_filename)}"
-    )
+    logging.info(f"Arguments saved to {os.path.join(args.output_path, output_filename)}")

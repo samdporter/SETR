@@ -1,8 +1,8 @@
 # schatten_norm_cpu.py
 
+import numpy as np
 from cil.optimisation.functions import Function
 from numba import njit, prange
-import numpy as np
 
 # -----------------------------------------------------------
 # 1) NUMBA-ACCELERATED HELPERS (Corrected Gradient and New Hessian)
@@ -83,9 +83,7 @@ def cpu_gradient(x, h_prime_func, eps, out_grad):
 
 # --- New Hessian Components Calculation ---
 @njit(parallel=True)
-def cpu_hessian_components(
-    x, h_double_prime_func, eps, out_hess_coeffs, out_rank_one_fields
-):
+def cpu_hessian_components(x, h_double_prime_func, eps, out_hess_coeffs, out_rank_one_fields):
     """
     Calculates the building blocks for the diagonal preconditioner.
     1. Hessian coefficients: h''(s_k)
@@ -125,7 +123,7 @@ def cpu_nuc_norm_proximal(x, tau, out):
                 diag_vals = np.zeros(r, dtype=block.dtype)
                 for idx in range(r):
                     val = s[idx] - tau
-                    diag_vals[idx] = val if val > 0.0 else 0.0
+                    diag_vals[idx] = max(val, 0.0)
 
                 temp = u * diag_vals  # u @ diag(...)
                 prox_block = temp @ vt
@@ -192,9 +190,7 @@ class CPUVectorialTotalVariation(Function):
 
         # Allocate output arrays
         out_hess_coeffs = np.zeros(x.shape[:-2] + (r,), dtype=x.dtype)
-        out_rank_one_fields = np.zeros(
-            x.shape[:-2] + (r,) + x.shape[-2:], dtype=x.dtype
-        )
+        out_rank_one_fields = np.zeros(x.shape[:-2] + (r,) + x.shape[-2:], dtype=x.dtype)
 
         cpu_hessian_components(
             x, self.h_double_prime_func, self.eps, out_hess_coeffs, out_rank_one_fields

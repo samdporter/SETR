@@ -1,49 +1,89 @@
 #!/usr/bin/env python3
-"""SETR DTNV reconstruction for single bed position - Simplified version using shared modules."""
+# run_dtnv_1bpos.py
 
+import argparse
 import cProfile
 import logging
 import os
 import pstats
+import shutil
 from types import SimpleNamespace
+from typing import Any, List
 
 import numpy as np
+import pandas as pd
+from sirf.contrib.partitioner import partitioner
+from sirf.Reg import NiftiImageData3DDisplacement
+
+# SIRF imports
+from sirf.STIR import AcquisitionData, ImageData, MessageRedirector
+
+AcquisitionData.set_storage_scheme("memory")
+
+# CIL imports
+from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import (
     OperatorCompositionFunction,
     ScaledFunction,
     SumFunction,
     SVRGFunction,
 )
-from cil.optimisation.operators import BlockOperator, IdentityOperator, ZeroOperator
+from cil.optimisation.operators import (
+    BlockOperator,
+    CompositionOperator,
+    IdentityOperator,
+    ZeroOperator,
+)
 from cil.optimisation.utilities import Sampler
-from sirf.contrib.partitioner import partitioner
-from sirf.STIR import ImageData, MessageRedirector
 
+# SETR imports
+from setr.cil_extensions.algorithms import ista_update_step
+from setr.cil_extensions.callbacks import (
+    PrintObjectiveCallback,
+    SaveGradientUpdateCallback,
+    SaveImageCallback,
+    SaveObjectiveCallback,
+    SavePreconditionerCallback,
+)
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
+from setr.cil_extensions.functions import BlockIndicatorBox
+from setr.cil_extensions.operators import NaNToZeroOperator, NiftyResampleOperator
+from setr.cil_extensions.preconditioners import (
+    BSREMPreconditioner,
+    ImageFunctionPreconditioner,
+    LehmerMeanPreconditioner,
+)
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.priors import WeightedTotalVariation, WeightedVectorialTotalVariation
-from setr.scripts.common import (
-    attach_prior_hessian,
-    configure_logging,
-    get_resampling_operators,
-    init_run_env,
-    save_results,
-)
-from setr.scripts.dtnv_common import (
-    get_algorithm,
-    get_block_objective,
-    get_callbacks,
-    get_kappa_squareds,
-    get_preconditioners,
-    get_probabilities,
-    get_s_inv_from_objs,
-    normalise_kappa_squares,
-)
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import (
+    attach_prior_hessian,
+    compute_kappa_squared_image_from_partitioned_objective,
+    get_block_objective,
     get_filters,
+    get_s_inv_from_objs,
+    normalise_kappa_squares,
 )
+
+cli = parse_cli()
+cfg_dict = load_config(cli.config)
+cfg_dict = apply_overrides(cfg_dict, cli.override)
+
+args = SimpleNamespace(**cfg_dict)
+
+os.makedirs(args.output_path, exist_ok=True)
+os.makedirs(args.working_path, exist_ok=True)
+
+# Attach the new update method to ISTA.
+ISTA.update = ista_update_step
+
+
+def configure_logging() -> None:
+    """Configure logging for the application."""
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
 
 def prepare_data(args):
@@ -96,6 +136,29 @@ def prepare_data(args):
     return ct, pet_data, spect_data
 
 
+def get_resampling_operators(
+    args,
+    pet_data,
+    spect_data,
+):
+    """
+    Set up resampling operators for SPECT images to PET images.
+
+    Returns:
+        spect2ct, zero_spect2ct operators.
+    """
+    return CompositionOperator(
+        NiftyResampleOperator(
+            pet_data["initial_image"],
+            spect_data["initial_image"],
+            NiftiImageData3DDisplacement(
+                os.path.join(args.spect_data_path, "spect2pet.nii")
+            ),
+        ),
+        NaNToZeroOperator(pet_data["initial_image"]),
+    )
+
+
 def get_prior(
     args,
     ct,
@@ -121,7 +184,9 @@ def get_prior(
     """
     bo = BlockOperator(
         IdentityOperator(pet_data["initial_image"]),  # pet2pet
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),  # zero_spect2pet
+        ZeroOperator(
+            spect_data["initial_image"], pet_data["initial_image"]
+        ),  # zero_spect2pet
         ZeroOperator(pet_data["initial_image"]),  # zero_pet2pet
         spect2pet,  # spect2pet
         shape=(2, 2),
@@ -198,7 +263,9 @@ def get_prior(
         return SumFunction(*priors), priors
 
 
-def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets):
+def get_data_fidelity(
+    args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets
+):
     """
     Set up data fidelity (objective) functions.
 
@@ -235,7 +302,9 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     # Get sensitivity image ^ -1 now before we complicate things
     s_inv = get_s_inv_from_objs(
         [pet_obj_funs, spect_obj_funs],
-        EnhancedBlockDataContainer(pet_data["initial_image"], spect_data["initial_image"]),
+        EnhancedBlockDataContainer(
+            pet_data["initial_image"], spect_data["initial_image"]
+        ),
     )
 
     for i, el in enumerate(s_inv.containers):
@@ -277,12 +346,165 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     return all_funs, s_inv, kappa
 
 
+def get_kappa_squareds(obj_funs_list, image_list, normalise=True):
+    """
+    Compute the kappa squared images for each objective function.
+
+    Returns:
+        kappa_squareds: List of kappa squared images.
+    """
+    kappa_squareds = []
+    kappa_squareds.extend(
+        compute_kappa_squared_image_from_partitioned_objective(obj_funs, image)
+        for obj_funs, image in zip(obj_funs_list, image_list)
+    )
+    return EnhancedBlockDataContainer(*kappa_squareds)
+
+
+def get_preconditioners(
+    args: argparse.Namespace,
+    s_inv: Any,
+    all_funs: List[Any],
+    update_interval: int,
+    priors_list: List[Any],
+    initial_estimates: EnhancedBlockDataContainer,
+) -> Any:
+    """
+    Set up the preconditioners.
+
+    Args:
+        priors_list: List of individual prior functions (before combining with SumFunction)
+
+    Returns:
+        The combined preconditioner.
+    """
+
+    max_vals = [el.max() for el in initial_estimates.containers]
+    minmax_val = min(max_vals)
+
+    bsrem_precond = BSREMPreconditioner(
+        s_inv,
+        1,
+        np.inf,
+        epsilon=minmax_val / 1000,
+        max_vals=max_vals,
+        smooth=True,
+    )
+
+    if not priors_list:
+        return bsrem_precond
+
+    # Create preconditioners for each individual prior's Hessian
+    precond_list = [bsrem_precond]
+
+    for prior in priors_list:
+        prior_precond = ImageFunctionPreconditioner(
+            prior.inv_hessian_diag,
+            1.0,
+            update_interval=update_interval,
+            epsilon=0,
+            freeze_iter=np.inf,
+        )
+        precond_list.append(prior_precond)
+
+    return LehmerMeanPreconditioner(
+        precond_list,
+        update_interval=update_interval,
+        freeze_iter=len(all_funs) * 10,
+    )
+
+
+def get_probabilities(args, num_subsets, update_interval):
+    pet_probs = [1 / update_interval] * num_subsets[0]
+    spect_probs = [1 / update_interval] * num_subsets[1]
+    probs = pet_probs + spect_probs
+    assert abs(sum(probs) - 1) < 1e-10, (
+        f"Probabilities do not sum to 1, got {sum(probs)}"
+    )
+    return probs
+
+
+def get_callbacks(args, update_interval: int) -> List[Any]:
+    """
+    Set up callbacks for the algorithm.
+
+    Returns:
+        A list of callback objects.
+    """
+    return [
+        SaveImageCallback(os.path.join(args.output_path, "image"), update_interval),
+        SaveGradientUpdateCallback(
+            os.path.join(args.output_path, "gradient"), update_interval
+        ),
+        SavePreconditionerCallback(
+            os.path.join(args.output_path, "preconditioner"), update_interval
+        ),
+        PrintObjectiveCallback(update_interval),
+        SaveObjectiveCallback(
+            os.path.join(args.output_path, "objective"), update_interval
+        ),
+    ]
+
+
+def get_algorithm(
+    init_solution: EnhancedBlockDataContainer,
+    f_obj: Any,
+    precond: Any,
+    step_size: float,
+    update_interval: int,
+    subiterations: int,
+    callbacks: List[Any],
+) -> ISTA:
+    """
+    Set up and run the ISTA algorithm.
+
+    Returns:
+        The ISTA instance.
+    """
+    algo = ISTA(
+        initial=init_solution,
+        f=f_obj,
+        g=BlockIndicatorBox(lower=0, upper=np.inf),
+        preconditioner=precond,
+        step_size=step_size,
+        update_objective_interval=update_interval,
+    )
+    logging.info("Running algorithm")
+    algo.run(subiterations, verbose=1, callbacks=callbacks)
+    return algo
+
+
+def save_results(bsrem: ISTA, args: argparse.Namespace) -> None:
+    """Save profiling information and results to disk."""
+
+    os.makedirs(args.output_path, exist_ok=True)
+    df_objective = pd.DataFrame(list(bsrem.loss))
+    df_objective.to_csv(
+        os.path.join(
+            args.output_path, f"bsrem_objective_a_{args.alpha}_b_{args.beta}.csv"
+        ),
+        index=False,
+    )
+
+    for file in os.listdir(args.working_path):
+        if file.startswith("tmp_") and (file.endswith(".s") or file.endswith(".hs")):
+            os.remove(os.path.join(args.working_path, file))
+    for file in os.listdir(args.working_path):
+        if file.endswith((".hv", ".v", ".ahv")):
+            logging.info(f"Moving file {file} to {args.output_path}")
+            shutil.move(
+                os.path.join(args.working_path, file),
+                os.path.join(args.output_path, file),
+            )
+
+
 def main() -> None:
     """Main function to execute the image reconstruction algorithm."""
     configure_logging()
+    os.chdir(args.working_path)
 
     # Redirect messages if needed.
-    MessageRedirector()
+    msg = MessageRedirector()
 
     # Data preparation.
     ct, pet_data, spect_data = prepare_data(args)
@@ -302,8 +524,7 @@ def main() -> None:
 
         # Set delta (smoothing parameter) if not provided
     if args.delta is None:
-        # set delta as 1000 times smaller than maximum of the minimum dynamic
-        # range of initial images
+        # set delta as 1000 times smaller than maximum of the minimum dynamic range of initial images
         # multiplied by the weighted alpha/beta
         args.delta = (
             min(
@@ -316,22 +537,20 @@ def main() -> None:
     save_args(args, "args.csv")
 
     # Set up resampling operators.
-    spect2pet = get_resampling_operators(pet_data, spect_data)
+    spect2pet = get_resampling_operators(args, pet_data, spect_data)
 
-    def get_pet_am_with_res():
-        return get_pet_am(
-            not args.no_gpu,
-            gauss_fwhm=args.pet_gauss_fwhm,
-        )
+    get_pet_am_with_res = lambda: get_pet_am(
+        not args.no_gpu,
+        gauss_fwhm=args.pet_gauss_fwhm,
+    )
 
-    def get_spect_am_with_res():
-        return get_spect_am(
-            spect_data,
-            res=args.spect_res,
-            keep_all_views_in_cache=args.keep_all_views_in_cache,
-            gauss_fwhm=args.spect_gauss_fwhm,
-            attenuation=True,
-        )
+    get_spect_am_with_res = lambda: get_spect_am(
+        spect_data,
+        res=args.spect_res,
+        keep_all_views_in_cache=args.keep_all_views_in_cache,
+        gauss_fwhm=args.spect_gauss_fwhm,
+        attenuation=True,
+    )
 
     # Set up data fidelity functions.
     num_subsets = [int(i) for i in args.num_subsets]
@@ -416,23 +635,15 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    cli = parse_cli()
-    cfg_dict = load_config(cli.config)
-    cfg_dict = apply_overrides(cfg_dict, cli.override)
-
-    args = SimpleNamespace(**cfg_dict)
-
-    init_run_env(args)
-
     if args.profile:
         logging.info("Profiling is enabled. This may slow down the execution.")
         profiler = cProfile.Profile()
         profiler.enable()
         main()
         profiler.disable()
-        profiler.dump_stats(f"{args.output_path}/profile_data.prof")
+        profiler.dump_stats(args.output_path + "/profile_data.prof")
 
-        with open(f"{args.output_path}/profiling_results.txt", "w") as f:
+        with open(args.output_path + "/profiling_results.txt", "w") as f:
             logging.info("Writing profiling results to 'profiling_results.txt'")
             ps = pstats.Stats(profiler, stream=f)
             ps.strip_dirs()  # remove extraneous path info
