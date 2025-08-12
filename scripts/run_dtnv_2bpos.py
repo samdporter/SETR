@@ -6,7 +6,6 @@ import cProfile
 import logging
 import os
 import pstats
-from types import SimpleNamespace
 from typing import Any, List
 
 import numpy as np
@@ -19,7 +18,6 @@ from cil.optimisation.operators import (
 )
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
-from sirf.STIR import AcquisitionData
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.preconditioners import (
@@ -35,6 +33,7 @@ from setr.scripts.common import (
     get_resampling_operators,
     get_sensitivity_from_subset_objs,
     get_shift_operators,
+    init_run_env,
     save_results,
 )
 from setr.scripts.dtnv_common import (
@@ -54,14 +53,6 @@ from setr.utils import (
 )
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_filters
-
-AcquisitionData.set_storage_scheme("memory")
-
-cli = parse_cli()
-cfg_dict = load_config(cli.config)
-cfg_dict = apply_overrides(cfg_dict, cli.override)
-
-args = SimpleNamespace(**cfg_dict)
 
 
 def prepare_data(args):
@@ -327,18 +318,12 @@ def get_preconditioners(
     )
 
 
-def main() -> None:
+def main(args) -> None:
     """Main DTNV 2bpos reconstruction pipeline."""
     configure_logging()
 
-    # Parse arguments and configuration
-    cli = parse_cli()
-    config = load_config(cli.config)
-    config = apply_overrides(config, cli.override)
-    args = argparse.Namespace(**config)
-
-    # Create output directory and save arguments
-    os.makedirs(args.output_path, exist_ok=True)
+    # Initialize run environment (creates dirs, sets storage scheme, redirects messages)
+    init_run_env(args)
     save_args(args, "args.csv")
 
     # Prepare data
@@ -365,18 +350,20 @@ def main() -> None:
         shape=(2, 2),
     )
 
-    get_pet_am_with_res = lambda: get_pet_am(
-        not args.no_gpu,
-        gauss_fwhm=args.pet_gauss_fwhm,
-    )
+    def get_pet_am_with_res():
+        return get_pet_am(
+            not args.no_gpu,
+            gauss_fwhm=args.pet_gauss_fwhm,
+        )
 
-    get_spect_am_with_res = lambda: get_spect_am(
-        spect_data,
-        res=args.spect_res,
-        keep_all_views_in_cache=args.stop_keep_all_views_in_cache,
-        gauss_fwhm=args.spect_gauss_fwhm,
-        attenuation=True,
-    )
+    def get_spect_am_with_res():
+        return get_spect_am(
+            spect_data,
+            res=args.spect_res,
+            keep_all_views_in_cache=args.stop_keep_all_views_in_cache,
+            gauss_fwhm=args.spect_gauss_fwhm,
+            attenuation=True,
+        )
 
     # Set up data fidelity
     all_funs, s_inv, kappa_sq_block = get_data_fidelity(
@@ -451,12 +438,17 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if args.profile:
+    cli = parse_cli()
+    config = load_config(cli.config)
+    config = apply_overrides(config, cli.override)
+    args = argparse.Namespace(**config)
+
+    if getattr(args, "profile", False):
         logging.info("Profiling is enabled. This may slow down the execution.")
         profiler = cProfile.Profile()
         profiler.enable()
 
-        main()
+        main(args)
 
         profiler.disable()
         profiler.dump_stats(f"{args.output_path}/profile_data.prof")
@@ -468,5 +460,5 @@ if __name__ == "__main__":
         logging.info(f"Profiling results saved to {output_file}")
     else:
         logging.info("Profiling is disabled.")
-        main()
+        main(args)
     logging.info("Execution completed.")
