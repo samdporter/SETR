@@ -1,0 +1,32 @@
+# RDP (Relative Difference Prior) Configuration - Single Bed Position SPECT
+# This configuration supports RDP-based reconstruction for SPECT data
+
+# Basic reconstruction parameters
+modality: "SPECT"  # Modality: SPECT
+
+# Data paths
+data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom"
+output_path: "/home/sam/working/synergistic_recon/results/rdp_spect_1bpos"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+# Algorithm parameters
+num_subsets: 12
+num_epochs: 30
+initial_step_size: 0.1
+relaxation_eta: 0.02
+sampling: "sequential"  # Options: "sequential", "staggered"
+
+# RDP prior parameters
+beta: 5.0               # RDP penalty factor (regularization strength)
+gamma: 0.1              # RDP shape parameter (edge preservation vs smoothing)
+stencil: "6"           # Stencil connectivity: "6" (faces), "18" (faces+edges), "26" (faces+edges+corners)
+both_directions: false  # Include both forward and backward differences
+directional: true  # Use directional differences (true = use directional differences)
+
+# SPECT-specific parameters
+spect_res: [1.68, 0.03, false]  # [FWHM_mm, intrinsic_tilt, rotate_xy]
+gauss_fwhm: [6.7, 6.7, 6.7]
+
+# System parameters
+no_gpu: false           # Disable GPU acceleration
+save_images: true       # Save intermediate images during reconstruction

@@ -1,0 +1,34 @@
+# RDP (Relative Difference Prior) Configuration - Multiple Bed Position PET
+# This configuration supports RDP-based reconstruction for multi-bed PET data
+
+# Basic reconstruction parameters
+modality: "PET"  # Multiple bed position PET only
+
+# Data paths
+pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
+output_path: "/home/sam/working/synergistic_recon/results/rdp_pet_2bpos"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+# Algorithm parameters
+num_subsets: 9
+num_epochs: 30
+initial_step_size: 0.1
+relaxation_eta: 0.02
+
+# RDP prior parameters
+beta: 500.0               # RDP penalty factor (regularization strength)
+gamma: 1.              # RDP shape parameter (edge preservation vs smoothing)
+stencil: "26"           # Stencil connectivity: "6" (faces), "18" (faces+edges), "26" (faces+edges+corners)
+both_directions: true  # Include both forward and backward differences
+directional: true  # Use directional differences (true = use directional differences)
+
+# Multi-bed PET parameters
+pet_gauss_fwhm: [5.61, 4.83, 4.93]
+use_tof: false
+
+# System parameters
+no_gpu: false           # Disable GPU acceleration
+save_images: true       # Save intermediate images during reconstruction
+
+# Advanced parameters
+seed: null
