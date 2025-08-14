@@ -26,7 +26,7 @@ from setr.cil_extensions.preconditioners import (
     LehmerMeanPreconditioner,
 )
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
-from setr.priors import WeightedVectorialTotalVariation
+from setr.priors import WeightedVectorialTotalVariation, WeightedTotalVariation, WeightedRDP
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,

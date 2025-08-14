@@ -1,5 +1,5 @@
 alpha: 0.5
-beta: 0.5
+beta: 1
 delta: null
 num_subsets: [9, 12]
 no_prior: false
@@ -15,6 +15,7 @@ both_directions: true
 
 # Modality-specific TV prior settings
 use_modality_specific_priors: false
+prior: "tv" # can be tv or rdp
 gamma_pet: 0.1
 gamma_spect: 0.1
 delta_tv: null  # defaults to delta if not set

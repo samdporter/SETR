@@ -21,7 +21,11 @@ from sirf.STIR import ImageData, MessageRedirector
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
-from setr.priors import WeightedTotalVariation, WeightedVectorialTotalVariation
+from setr.priors import (
+    WeightedTotalVariation, 
+    WeightedVectorialTotalVariation, 
+    WeightedRDP,
+)
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,
@@ -172,11 +176,19 @@ def get_prior(
         combined_weights.containers[0].fill(pet_weight_value)  # PET component
         combined_weights.containers[1].fill(spect_weight_value)  # SPECT component
 
-        combined_tv = WeightedTotalVariation(
-            bo.direct(initial_estimates),
-            combined_weights,
-            getattr(args, "delta_tv", args.delta),
-            anatomical=ct,
+        if getattr(args, "prior", "tv") == "rdp":
+            combined_tv = WeightedRDP(
+                bo.direct(initial_estimates),
+                combined_weights,
+                getattr(args, "delta_tv", args.delta),
+                anatomical=ct,
+            )
+        else:
+            combined_tv = WeightedTotalVariation(
+                bo.direct(initial_estimates),
+                combined_weights,
+                getattr(args, "delta_tv", args.delta),
+                anatomical=ct,
             stencil=getattr(args, "tv_stencil", args.stencil),
             both_directions=getattr(args, "tv_both_directions", args.both_directions),
         )
