@@ -1,5 +1,8 @@
 # schatten_norm_cpu.py
 
+## OBSOLETE AND NOT GETTING UPDATED ##
+## 13/08/25 - SP
+
 import numpy as np
 from cil.optimisation.functions import Function
 from numba import njit, prange

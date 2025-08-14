@@ -83,8 +83,12 @@ def prepare_data(args):
     gauss.apply(pet_data["initial_image"])
     cyl.apply(pet_data["initial_image"])
 
-    pet_data["initial_image"].write("initial_image_0.hv")
-    spect_data["initial_image"].write("initial_image_1.hv")
+    pet_data["initial_image"].write(
+        os.path.join(args.output_path, 'initial_image_0.hv')
+    )
+    spect_data["initial_image"].write(
+        os.path.join(args.output_path, 'initial_image_1.hv')
+    )
 
     # Set delta (smoothing parameter) if not provided
     if args.delta is None:
@@ -114,7 +118,8 @@ def get_prior(args, umap, pet_data, spect_data, initial_estimates, bo):
     logging.info("Setting up prior")
 
     # Get kappa weighting - simplified version
-    kappas = bo.direct(initial_estimates).get_uniform_copy(1.0)
+    kappa_bdc = bo.direct(initial_estimates)
+    kappas = EnhancedBlockDataContainer(*kappa_bdc.containers).get_uniform_copy(1.0)
 
     # multiply first kappa by alpha/beta for TNV prior
     for i, (ab, el) in enumerate(zip([args.alpha, args.beta], kappas.containers)):
@@ -126,10 +131,9 @@ def get_prior(args, umap, pet_data, spect_data, initial_estimates, bo):
         kappas,
         args.delta,
         anatomical=umap,
-        gpu=not args.no_gpu,
         stable=True,
         tail_singular_values=getattr(args, "tail_singular_values", None),
-        diagonal=getattr(args, "tnv_diagonal", args.diagonal),
+        stencil=getattr(args, "tnv_stencil", args.stencil),
         both_directions=getattr(args, "tnv_both_directions", args.both_directions),
     )
     logging.info("Weighted Vectorial Total Variation prior set up.")
@@ -323,7 +327,7 @@ def main(args) -> None:
     configure_logging()
 
     # Initialize run environment (creates dirs, sets storage scheme, redirects messages)
-    init_run_env(args)
+    msg = init_run_env(args)
     save_args(args, "args.csv")
 
     # Prepare data
@@ -419,7 +423,7 @@ def main(args) -> None:
     # Set up step size
     step_size = LinearDecayStepSizeRule(
         initial_step_size=args.initial_step_size,
-        relaxation_eta=args.relaxation_eta,
+        decay=args.relaxation_eta,
     )
 
     # Set up callbacks using shared function

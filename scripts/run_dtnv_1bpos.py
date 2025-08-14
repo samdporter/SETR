@@ -148,11 +148,10 @@ def get_prior(
             kappas,
             args.delta,
             anatomical=ct,
-            gpu=not args.no_gpu,
             stable=True,
             tail_singular_values=args.tail_singular_values,
             both_directions=getattr(args, "tnv_both_directions", args.both_directions),
-            diagonal=getattr(args, "tnv_diagonal", args.diagonal),
+            stencil=getattr(args, "tnv_stencil", args.stencil),
         )
         tnv_prior = OperatorCompositionFunction(vtv, bo)
 
@@ -178,8 +177,7 @@ def get_prior(
             combined_weights,
             getattr(args, "delta_tv", args.delta),
             anatomical=ct,
-            gpu=not args.no_gpu,
-            diagonal=getattr(args, "tv_diagonal", args.diagonal),
+            stencil=getattr(args, "tv_stencil", args.stencil),
             both_directions=getattr(args, "tv_both_directions", args.both_directions),
         )
 
@@ -421,7 +419,7 @@ if __name__ == "__main__":
 
     args = SimpleNamespace(**cfg_dict)
 
-    init_run_env(args)
+    msg = init_run_env(args)
 
     if args.profile:
         logging.info("Profiling is enabled. This may slow down the execution.")

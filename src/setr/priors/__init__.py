@@ -7,6 +7,7 @@ from .mutual_information import (
     MutualInformationGradientPrior,
     MutualInformationImagePrior,
 )
+from .rdp import RelativeDifferencePrior
 from .vtv.vtv import (
     WeightedTotalVariation,
     WeightedVectorialTotalVariation,
@@ -17,4 +18,5 @@ __all__ = [
     "WeightedVectorialTotalVariation",
     "MutualInformationGradientPrior",
     "MutualInformationImagePrior",
+    "RelativeDifferencePrior",
 ]

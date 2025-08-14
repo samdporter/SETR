@@ -52,5 +52,5 @@ seed: null
 # Advanced parameters
 tail_singular_values: null
 delta: null
-diagonal: false
+stencil: "6"
 both_directions: false

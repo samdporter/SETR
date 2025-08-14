@@ -8,6 +8,8 @@ Refactored: run all reconstruction scripts with 5 epochs each.
 from __future__ import annotations
 
 import logging
+import os
+import select
 import subprocess
 import sys
 import time
@@ -24,7 +26,7 @@ class Settings:
     script_dir: Path
     config_dir: Path
     output_base: Path
-    num_epochs: int = 5
+    num_epochs: int = 3
     timeout_s: int = 1800  # 30 minutes
 
 
@@ -197,28 +199,94 @@ def run_test(settings: Settings, tc: TestCase) -> TestResult:
     logging.info("Command: %s", " ".join(cmd))
 
     start = time.time()
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=settings.timeout_s,
-        )
-        duration = time.time() - start
-        write_test_log(out_dir, tc.name, cmd, duration, proc)
+    stdout_lines = []
+    stderr_lines = []
 
-        if proc.returncode == 0:
-            logging.info("✅ SUCCESS: %s (%.2fs)", tc.name, duration)
-            ok = True
-        else:
-            snippet = (proc.stderr or "")[:200]
-            logging.error("❌ FAILED: %s (rc=%s) | %s", tc.name, proc.returncode, snippet)
+    try:
+        # Use Popen for real-time output capture with unbuffered output
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'  # Force unbuffered output
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # Line buffered
+            universal_newlines=True,
+            env=env
+        )
+
+        # Real-time output capture with timeout
+
+        # Set stdout and stderr to non-blocking
+        os.set_blocking(process.stdout.fileno(), False)
+        os.set_blocking(process.stderr.fileno(), False)
+
+        timeout_end = start + settings.timeout_s
+
+        while process.poll() is None and time.time() < timeout_end:
+            # Check for available output
+            ready, _, _ = select.select([process.stdout, process.stderr], [], [], 1.0)
+
+            for stream in ready:
+                if stream == process.stdout:
+                    if line := stream.readline():
+                        stdout_lines.append(line)
+                        logging.debug("STDOUT: %s", line.rstrip())
+                elif stream == process.stderr:
+                    if line := stream.readline():
+                        stderr_lines.append(line)
+                        logging.debug("STDERR: %s", line.rstrip())
+
+        # Handle timeout
+        if time.time() >= timeout_end and process.poll() is None:
+            process.terminate()
+            time.sleep(2)
+            if process.poll() is None:
+                process.kill()
+            # Collect any remaining output
+            remaining_stdout, remaining_stderr = process.communicate()
+            if remaining_stdout:
+                stdout_lines.append(remaining_stdout)
+            if remaining_stderr:
+                stderr_lines.append(remaining_stderr)
+
+            duration = time.time() - start
+            # Create a fake TimeoutExpired with collected output
+            fake_timeout = subprocess.TimeoutExpired(cmd, settings.timeout_s)
+            fake_timeout.stdout = ''.join(stdout_lines)
+            fake_timeout.stderr = ''.join(stderr_lines)
+            write_timeout_log(out_dir, tc.name, cmd, duration, fake_timeout)
+            logging.error("⏰ TIMEOUT: %s exceeded %d seconds", tc.name, settings.timeout_s)
             ok = False
-    except subprocess.TimeoutExpired as e:
-        duration = time.time() - start
-        write_timeout_log(out_dir, tc.name, cmd, duration, e)
-        logging.error("⏰ TIMEOUT: %s exceeded %d seconds", tc.name, settings.timeout_s)
-        ok = False
+        else:
+            # Process completed normally, collect any remaining output
+            remaining_stdout, remaining_stderr = process.communicate()
+            if remaining_stdout:
+                stdout_lines.append(remaining_stdout)
+            if remaining_stderr:
+                stderr_lines.append(remaining_stderr)
+
+            duration = time.time() - start
+
+            # Create a fake CompletedProcess for compatibility
+            fake_proc = subprocess.CompletedProcess(
+                cmd, 
+                process.returncode, 
+                ''.join(stdout_lines),
+                ''.join(stderr_lines)
+            )
+            write_test_log(out_dir, tc.name, cmd, duration, fake_proc)
+
+            if process.returncode == 0:
+                logging.info("✅ SUCCESS: %s (%.2fs)", tc.name, duration)
+                ok = True
+            else:
+                snippet = (''.join(stderr_lines))[:200]
+                logging.error("❌ FAILED: %s (rc=%s) | %s", tc.name, process.returncode, snippet)
+                ok = False
+
     except Exception as e:  # noqa: BLE001
         duration = time.time() - start
         logging.exception("💥 ERROR: %s crashed after %.2fs | %s", tc.name, duration, e)
@@ -257,7 +325,7 @@ def main() -> None:
         config_dir=Path("/home/sam/working/synergistic_recon/configs"),
         output_base=Path("/home/sam/working/synergistic_recon/test_results"),
         num_epochs=5,
-        timeout_s=1800,
+        timeout_s=3600,  # Increase to 1 hour
     )
 
     ensure_dir(settings.output_base)

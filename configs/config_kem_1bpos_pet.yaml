@@ -50,5 +50,5 @@ seed: null           # Random seed for reproducibility
 tail_singular_values: null
 delta: null
 use_tof: false
-diagonal: false
+stencil: "6"
 both_directions: false

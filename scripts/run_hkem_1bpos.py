@@ -62,7 +62,9 @@ def prepare_data(args):
     gauss.apply(data["initial_image"])
     cyl.apply(data["initial_image"])
 
-    data["initial_image"].write("initial_image.hv")
+    data["initial_image"].write(
+        os.path.join(args.output_path, "initial_image.hv")
+    )
 
     # Check for NaNs in all data
     for key, value in data.items():
@@ -233,5 +235,6 @@ if __name__ == "__main__":
 
     args = SimpleNamespace(**cfg_dict)
 
-    init_run_env(args)
+    msg = init_run_env(args)
+    
     main(args)

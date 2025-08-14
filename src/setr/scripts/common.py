@@ -35,11 +35,12 @@ def save_results(bsrem: ISTA, args: argparse.Namespace) -> None:
     """Save final reconstruction results (identical in DTNV scripts)."""
     logging.info("Saving final image")
     final_image = bsrem.solution
-    final_image.write(os.path.join(args.output_path, "final_image.hv"))
 
     if hasattr(final_image, "containers"):
         for i, container in enumerate(final_image.containers):
             container.write(os.path.join(args.output_path, f"final_image_{i}.hv"))
+    else:
+        final_image.write(os.path.join(args.output_path, "final_image.hv"))
 
 
 def get_resampling_operators(pet_data: dict, spect_data: dict):

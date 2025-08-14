@@ -1,5 +1,5 @@
 alpha: 0.5
-beta: 50
+beta: 0.5
 delta: null
 num_subsets: [9, 12]
 no_prior: false
@@ -11,18 +11,23 @@ iterations: 250
 update_interval: null
 relaxation_eta: 0.02
 tail_singular_values: null
-diagonal: true
 both_directions: true
+
+# Modality-specific TV prior settings
+use_modality_specific_priors: false
+gamma_pet: 0.1
+gamma_spect: 0.1
+delta_tv: null  # defaults to delta if not set
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true
 gamma_tnv: 1.0
-tnv_diagonal: true
+stencil: "6"
 tnv_both_directions: true
 
 pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
 spect_gauss_fwhm: [6.7, 6.7, 6.7] # FROM bremss data anyscan
-spect_res: [1.68, 0.03, false] # Analytical collimator resolution for SPECT
+spect_res: [0.81, 0.03, false] # Analytical collimator resolution for SPECT
 
 use_tof: false
 

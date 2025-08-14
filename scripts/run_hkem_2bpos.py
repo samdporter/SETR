@@ -47,7 +47,9 @@ def prepare_data(args):
     gauss.apply(pet_data["initial_image"])
     cyl.apply(pet_data["initial_image"])
 
-    pet_data["initial_image"].write("initial_image.hv")
+    pet_data["initial_image"].write(
+        os.path.join(args.output_path, "initial_image.hv")
+    )
 
     # Create initial estimates - for HKEM we just need PET
     initial_estimates = pet_data["initial_image"]
@@ -90,8 +92,8 @@ def get_data_fidelity(
 
     # Get sensitivities for each bed position
     pet_sens = [
-        get_sensitivity_from_subset_objs(df, pet_data["bed_positions"][suffix]["template_image"])
-        for df, suffix in zip(pet_dfs, pet_data["bed_positions"])
+        get_sensitivity_from_subset_objs(df)
+        for df in pet_dfs
     ]
 
     # Unshift and combine PET sensitivities to common PET grid
@@ -188,7 +190,6 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
             pet_data["bed_positions"][suffix]["acquisition_data"],
             hyperparams,
         )
-        kernel.set_anatomical_image(guidance)  # Use same guidance for all beds
         kernels.append(kernel)
 
     # Set up objective function
@@ -254,10 +255,7 @@ def main():
     args = SimpleNamespace(**config)
 
     # Initialize run environment
-    init_run_env(args)
-
-    # Redirect messages
-    MessageRedirector()
+    msg = init_run_env(args)
 
     # Save arguments
     save_args(args, "hkem_2bpos_args.csv")

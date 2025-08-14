@@ -15,7 +15,7 @@ from sirf.STIR import MessageRedirector
 
 from setr.cil_extensions.functions import BlockIndicatorBox
 from setr.cil_extensions.operators import TruncationOperator
-from setr.kernel.python.my_kem import MyKernelisedEM
+from setr.kernel.python.my_kem import KernelOperator
 from setr.scripts.common import configure_logging, init_run_env
 from setr.scripts.hkem_common import get_attn_and_normalise, get_kernel_hyperparams
 from setr.utils import get_pet_data, get_spect_data
@@ -44,7 +44,9 @@ def prepare_data(args):
     gauss.apply(data["initial_image"])
     cyl.apply(data["initial_image"])
 
-    data["initial_image"].write("initial_image.hv")
+    data["initial_image"].write(
+        os.path.join(args.output_path, "initial_image.hv")
+    )
 
     # Check for NaNs in all data
     for key, value in data.items():
@@ -89,7 +91,8 @@ def run_ista(args, data, guidance, hyperparams):
         obj.set_up(data["initial_image"])
 
     # Create kernel operator
-    K = MyKernelisedEM(data["initial_image"], guidance, **hyperparams)
+    K = KernelOperator(data["initial_image"], **hyperparams)
+    K.set_anatomical_image(guidance)
 
     # Set up objective functions with kernel operator
     truncate = TruncationOperator(data["initial_image"])
@@ -140,7 +143,7 @@ def main():
     args = SimpleNamespace(**config)
 
     # Initialize run environment
-    init_run_env(args)
+    msg = init_run_env(args)
 
     # Redirect messages
     MessageRedirector()

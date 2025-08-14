@@ -115,7 +115,7 @@ class ImageFunctionPreconditioner(PreconditionerWithInterval):
     def __init__(
         self,
         function,
-        scale,
+        scale=1.,
         update_interval=1,
         freeze_iter=np.inf,
         epsilon=0,
