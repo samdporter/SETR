@@ -32,7 +32,7 @@ class WeightedVectorialTotalVariation(Function):
         stencil="6",
         both_directions=False,
         tail_singular_values=None,
-        hessian="diagonal",
+        hessian="slow",
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if isinstance(anatomical, ImageData):
@@ -62,7 +62,7 @@ class WeightedVectorialTotalVariation(Function):
         if stable:
             from .schatten_norm_gpu_slow import GPUVectorialTotalVariation as GpuVTV
         else:
-            from .schatten_norm_gpu import GPUVectorialTotalVariation as GpuVTV
+            from .schatten_norm_gpu_stable import GPUVectorialTotalVariation as GpuVTV
         self.vtv = GpuVTV(
             eps=delta,
             norm=norm,
@@ -96,11 +96,11 @@ class WeightedVectorialTotalVariation(Function):
             return out
         return ret
 
-    def _preconditioner_weights_core(self, x_arr, eta: float = 0.7, eps_P: float = 1e-8):
+    def _preconditioner_weights_core_fast(self, x_arr, eta: float = 0.7, epsilon: float = 1e-8):
         """
         Diagonal MM/IRLS preconditioner for (directional) TNV with a directional Jacobian:
 
-            P_{j,m} = eta * [ omega_j * S_jm ] * b_{j,m}^2 , floored by eps_P,
+            P_{j,m} = eta * [ omega_j * S_jm ] * b_{j,m}^2 , floored by epsilon,
 
         where:
         - omega_j = sum_ell w(sigma_{j,ell}) from self.vtv.hessian_surrogate(A),
@@ -171,10 +171,151 @@ class WeightedVectorialTotalVariation(Function):
         # ----- 6) Final diagonal with damping and floor
         P_diag = (omega.unsqueeze(-1) * S_jm) * (self.weights * self.weights)  # (..., M)
         P_diag = eta * P_diag
-        P_diag = torch.clamp(P_diag, min=eps_P)
+        P_diag = torch.clamp(P_diag, min=epsilon)
+
+        return P_diag
+    
+    def _hessian_diag_fast(self, x, eta: float = 0.7, epsilon: float = 1e-8, out=None):
+        """
+        Returns a BlockDataContainer holding a diagonal positive surrogate H ≈ ∇²V(x).
+        Shape matches x (nx,ny,nz,M). Guaranteed H >= epsilon.
+        """
+        x_arr = self.bdc2a.direct(x)                               # (nx,ny,nz,M)
+        H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)   # torch tensor (...,M)
+        H_bdc = self.bdc2a.adjoint(H)                              # back to container type
+        if out is not None:
+            out.fill(H_bdc)
+            return out
+        return H_bdc
+
+    def _inv_hessian_diag_fast(self, x, eta: float = 0.7, epsilon: float = 1e-8, out=None):
+        """
+        Returns a BlockDataContainer with the elementwise inverse of hessian_diag(x).
+        Since H is floored by epsilon, inv(H) is bounded above by 1/epsilon.
+        """
+        x_arr = self.bdc2a.direct(x)
+        H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)
+        Hinv = torch.reciprocal(H)
+        Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=1.0/epsilon, neginf=0.0)
+        Hinv_bdc = self.bdc2a.adjoint(Hinv)
+        if out is not None:
+            out.fill(Hinv_bdc)
+            return out
+        return Hinv_bdc
+
+    def _preconditioner_weights_core_slow(self, x_arr):
+        """
+        Core implementation to calculate the diagonal preconditioner weights
+        based on the corrected Hessian derivation.
+        """
+        # 1. Compute the Jacobian field, Jx.
+        #    We do not apply normalization here as the Hessian is for the unnormalized functional.
+        J = self.jacobian.direct(x_arr)
+
+        # 2. Apply the data-fidelity weights. This becomes the input 'A' for the VTV function.
+        #    A = w * Jx
+        w = self.weights.unsqueeze(-1)
+        A_field = w * J
+
+        # 3. Call the backend to get the Hessian components from the SVD of A_field.
+        #    - hess_coeffs is h''(s_k)
+        #    - rank_one_fields is the collection of u_k v_k^T matrices for each k
+        hess_coeffs, rank_one_fields = self.vtv.hessian_components(A_field)
+        # hess_coeffs shape: (nx, ny, nz, r)
+        # rank_one_fields shape: (nx, ny, nz, r, M, d)
+
+        num_singular_values = rank_one_fields.shape[-3]
+
+        # 4. Initialize the final diagonal preconditioner tensor P.
+        #    The result should have the same shape as the input image array.
+        P_diag = torch.zeros_like(x_arr)
+
+        # 5. Loop over each singular mode k, calculate its contribution, and accumulate.
+        for k in range(num_singular_values):
+            # a) Get the field of rank-1 matrices for this mode
+            C_k_field = rank_one_fields[..., k, :, :]  # Shape: (nx, ny, nz, M, d)
+
+            # b) The formula is p_i = sum_k h''(s_k) * ( (J^T u_k v_k^T)_i )^2
+            #    The weights `w` are already baked into the SVD components (u_k, v_k, s_k).
+            #    The operator is effectively `wJ`. The adjoint is `(wJ)^T = J^T w`.
+            #    So we need to compute J^T (w * C_k).
+
+            # The rank-one fields are u_k v_k^T from A=wJx. We need to compute J^T(w * u_k v_k^T).
+            # Since J is the gradient operator and w is a per-modality weight, J^T(w*...) is correct.
+            influence_image = self.jacobian.adjoint(
+                w * C_k_field
+            )  # Shape: (nx, ny, nz, M)
+
+            # c) Get the corresponding h''(s_k) coefficients for this mode.
+            #    Shape: (nx, ny, nz)
+            h_double_prime_k = hess_coeffs[..., k]
+
+            # d) Unsqueeze the coefficient to broadcast over the M modalities.
+            #    Shape becomes (nx, ny, nz, 1)
+            h_double_prime_k = h_double_prime_k.unsqueeze(-1)
+            
+            # e) Accumulate the contribution for this mode: h''(s_k) * (J^T u_k v_k^T)^2
+            P_diag += h_double_prime_k * (influence_image**2)
 
         return P_diag
 
+    def _hessian_diag_slow(self, x, out=None):
+        """
+        Computes a diagonal approximation of the Hessian, suitable for preconditioning.
+        This method implements the formula:
+        p_i = sum_k h''(s_k) * ( (J^T u_k v_k^T)_i )^2
+        """
+        x_arr = self.bdc2a.direct(x)
+        diag_arr = self._preconditioner_weights_core_slow(x_arr)
+
+        # According to the derivation, no extra weighting is needed here.
+        # The weights `w` were correctly applied to the input of the SVD.
+
+        result = self.bdc2a.adjoint(diag_arr)
+        if out is not None:
+            out.fill(result)
+            return out
+        return result
+
+    def _inv_hessian_diag_slow(self, x, out=None, epsilon=1e-9):
+        """
+        Computes the action of the inverse of the diagonal Hessian approximation.
+        This is a simple element-wise division by the preconditioner weights.
+        """
+        # 1. Get the preconditioner weights
+        diag_arr = self._preconditioner_weights_core_slow(self.bdc2a.direct(x))
+
+        # 2. Invert the weights, adding epsilon for stability
+        inv_arr = torch.reciprocal(diag_arr + epsilon)
+        torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0, out=inv_arr)
+
+        # 3. Convert back to BlockDataContainer
+        result = self.bdc2a.adjoint(inv_arr)
+        if out is not None:
+            # Note: This operation does not apply to the input 'x', but returns a scaling array.
+            # The typical use is P^-1 * g. So here we return the scaling array.
+            # The calling function should multiply this by the gradient.
+            # To match the expected 'Function' API, perhaps it should act on x?
+            # Assuming the goal is to return the inverted diagonal P^-1 itself.
+            out.fill(result)
+            return out
+        return result
+
+    def hessian_diag(self, x, out=None):
+        if self.hessian == "slow":
+            return self._hessian_diag_slow(x, out=out)
+        elif self.hessian == "fast":
+            return self._hessian_diag_fast(x, out=out)
+        else:
+            raise ValueError("Unknown Hessian type")
+        
+    def inv_hessian_diag(self, x, out=None, epsilon=1e-9):
+        if self.hessian == "slow":
+            return self._inv_hessian_diag_slow(x, out=out, epsilon=epsilon)
+        elif self.hessian == "fast":
+            return self._inv_hessian_diag_fast(x, out=out, epsilon=epsilon)
+        else:
+            raise ValueError("Unknown Hessian type")
 
 
 class WeightedTotalVariation(Function):
@@ -193,7 +334,8 @@ class WeightedTotalVariation(Function):
         anatomical=None,
         diagonal=False,
         both_directions=False,
-        hessian="diagonal",
+        hessian="slow",
+        stencil='6'
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if hasattr(anatomical, "as_array"):  # ImageData
@@ -203,8 +345,8 @@ class WeightedTotalVariation(Function):
         self.jacobian = Jacobian(
             voxel_sizes,
             anatomical=anatomical,
-            diagonal=diagonal,
             both_directions=both_directions,
+            stencil=stencil,
         )
 
         self.smoothing = smoothing
@@ -270,6 +412,7 @@ class WeightedTotalVariation(Function):
             return out
         return ret
 
+
     def hessian_diag(self, x, out=None):
 
         x_arr = self.bdc2a.direct(x)  # (nx,ny,nz,M)
@@ -309,3 +452,4 @@ class WeightedTotalVariation(Function):
             out.fill(result)
             return out
         return result
+

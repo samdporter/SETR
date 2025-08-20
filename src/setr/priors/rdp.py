@@ -74,7 +74,6 @@ class RelativeDifferencePrior(Function):
     def __init__(
         self,
         domain_geometry,
-        beta: float = 1.0,
         gamma: float = 0.1,
         stencil: str = "6",
         both_directions: bool = False,
@@ -85,7 +84,6 @@ class RelativeDifferencePrior(Function):
         bnd_cond: str = "Neumann",
     ):
         super().__init__()
-        self.beta = beta
         self.gamma = gamma
         self.stencil = stencil
         self.both_directions = both_directions
@@ -161,14 +159,14 @@ class RelativeDifferencePrior(Function):
 
     def _value_tensor(self, x_t: torch.Tensor) -> torch.Tensor:
         Δ_t, _, D_t = self._edges(x_t)
-        return -self.beta * self.edge_factor * torch.sum((Δ_t * Δ_t) / D_t)
+        return -self.edge_factor * torch.sum((Δ_t * Δ_t) / D_t)
 
     def _grad_tensor(self, x_t: torch.Tensor) -> torch.Tensor:
         Δ_t, _, D_t = self._edges(x_t)
         dφ_dΔ, dφ_dΣ, _, _, _ = self._partials_phi(Δ_t, D_t, self.gamma)
         cG = self.edge_factor * dφ_dΔ
         cS = self.edge_factor * dφ_dΣ
-        return -self.beta * (self.gradient_op.adjoint(cG) + self.sum_op.adjoint(cS))
+        return -(self.gradient_op.adjoint(cG) + self.sum_op.adjoint(cS))
 
     def _hess_vec_tensor(self, x_t: torch.Tensor, v_t: torch.Tensor) -> torch.Tensor:
         Δ_t, _, D_t = self._edges(x_t)
@@ -180,14 +178,14 @@ class RelativeDifferencePrior(Function):
         φ_ss *= self.edge_factor
         y_edges = φ_dd * Gv + φ_ds * Sv
         z_edges = φ_ds * Gv + φ_ss * Sv
-        return -self.beta * (self.gradient_op.adjoint(y_edges) + self.sum_op.adjoint(z_edges))
+        return -(self.gradient_op.adjoint(y_edges) + self.sum_op.adjoint(z_edges))
 
     def _hess_diag_tensor(self, x_t: torch.Tensor) -> torch.Tensor:
         Δ_t, _, D_t = self._edges(x_t)
         _, _, φ_dd, φ_ds, φ_ss = self._partials_phi(Δ_t, D_t, self.gamma)
         # per-edge endpoint contributions (forward orientation)
-        plus  = -(self.beta) * self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)  # source j
-        minus = -(self.beta) * self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)  # sink   k
+        plus  = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)  # source j
+        minus = -self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)  # sink   k
         # Scatter distinct src/sink values via combination of Dᵀ and Sᵀ:
         # For arrays s,t on edges: Dᵀ s + Sᵀ t gives (src: s+t, sink: -s+t).
         # Choose s=(plus-minus)/2, t=(plus+minus)/2 to realise (src: plus, sink: minus).
@@ -293,16 +291,13 @@ class WeightedRDP(Function):
         self,
         geometry,                 # BlockDataContainer geometry
         weights,                  # BlockDataContainer of per-modality weights
-        beta: float,
-        gamma: float,
+        gamma: float = 1,
         stencil: str = "6",
         both_directions: bool = False,
         epsilon: float = 1e-12,
         anatomical=None,          # optional, forwarded to Jacobian
         bnd_cond: str = "Neumann",
     ):
-        super().__init__()
-        self.beta = beta
         self.gamma = gamma
         self.stencil = stencil
         self.both_directions = both_directions
@@ -380,7 +375,7 @@ class WeightedRDP(Function):
 
     def _value_tensor(self, X_t: torch.Tensor) -> torch.Tensor:
         U, _, D, _, _ = self._edges(X_t)
-        return -self.beta * self.edge_factor * torch.sum((U * U) / D)
+        return -self.edge_factor * torch.sum((U * U) / D)
 
     def _grad_tensor(self, X_t: torch.Tensor) -> torch.Tensor:
         U, Σ, D, w, _ = self._edges(X_t)
@@ -390,7 +385,7 @@ class WeightedRDP(Function):
         # adjoints:
         Jt = torch.as_tensor(self.jacobian.adjoint(cJ), device=_DEVICE, dtype=_DTYPE)  # (..., M)
         St = self._sum_adjoint_multi(cS)                                                       # (..., M)
-        return -self.beta * (Jt + St)
+        return -(Jt + St)
 
     def _hess_vec_tensor(self, X_t: torch.Tensor, V_t: torch.Tensor) -> torch.Tensor:
         U, Σ, D, w, G = self._edges(X_t)
@@ -408,14 +403,14 @@ class WeightedRDP(Function):
                                 device=_DEVICE, dtype=_DTYPE)
         part_S = self._sum_adjoint_multi(Z)
 
-        return -self.beta * self.edge_factor * (part_J + part_S)
+        return -self.edge_factor * (part_J + part_S)
 
     def _hess_diag_tensor(self, X_t: torch.Tensor) -> torch.Tensor:
         U, Σ, D, w, _ = self._edges(X_t)
         _, _, φ_dd, φ_ds, φ_ss = self._partials_phi(U, D, self.gamma)
 
-        plus  = -(self.beta) * self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)
-        minus = -(self.beta) * self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)
+        plus  = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)
+        minus = -self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)
 
         # Scatter distinct src/sink adds via combination of Jᵀ and Sᵀ:
         s = 0.5 * (plus - minus)    # for Jᵀ (difference)

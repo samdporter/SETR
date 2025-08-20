@@ -6,22 +6,26 @@ from cil.optimisation.functions import Function
 
 from .common import (
     to_tensor,
-    l1_norm_torch,
-    l1_norm_prox_torch,
-    l2_norm_torch,
-    l2_norm_prox_torch,
-    charbonnier_torch,
-    charbonnier_grad_torch,
+    l1_norm,
+    l1_norm_prox,
+    l2_norm,
+    l2_norm_prox,
+    charbonnier,
+    charbonnier_grad,
     charbonnier_hessian_surrogate,
-    fair_torch,
-    fair_grad_torch,
+    charbonnier_hessian_diag,
+    fair,
+    fair_grad,
     fair_hessian_surrogate,
-    perona_malik_torch,
-    perona_malik_grad_torch,
+    fair_hessian_diag,
+    perona_malik,
+    perona_malik_grad,
     perona_malik_hessian_surrogate,
-    nothing_torch,
-    nothing_grad_torch,
-    get_sv_tail_mask,
+    perona_malik_hessian_diag,
+    nothing,
+    nothing_grad,
+    get_mask,
+    nothing_hessian_diag
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -52,32 +56,29 @@ class GPUVectorialTotalVariation(Function):
     def direct(self, x):
         # --- Select appropriate functions ---
         if self.norm == "nuclear":
-            norm_func = l1_norm_torch
+            norm_func = l1_norm
         elif self.norm == "frobenius":
-            norm_func = l2_norm_torch
+            norm_func = l2_norm
         else:
             raise ValueError("Norm not defined")
 
         if self.smoothing_function == "fair":
-            smoothing_func = fair_torch
+            smoothing_func = fair
         elif self.smoothing_function == "charbonnier":
-            smoothing_func = charbonnier_torch
+            smoothing_func = charbonnier
         elif self.smoothing_function == "perona_malik":
-            smoothing_func = perona_malik_torch
+            smoothing_func = perona_malik
         else:
-            smoothing_func = nothing_torch
+            smoothing_func = nothing
 
-        # --- Efficient Batched Calculation ---
-        # 1. Compute singular values for all voxels
-        S = torch.linalg.svdvals(x)  # S shape: (nx, ny, nz, min(M,d))
-
-        # 2. Apply tailing if specified
-        S_tailed = S * get_sv_tail_mask(S, self.tail) if self.tail is not None else S
-        # 3. Apply smoothing function h(s)
-        s_smoothed = smoothing_func(S_tailed, self.eps)
-
-        # 4. Apply norm function (e.g., sum for nuclear norm)
-        out = norm_func(s_smoothed)
+        S = torch.linalg.svdvals(x)
+        if self.tail is not None:
+            mask = get_mask(S, self.tail)         # 1 on the smallest `tail` σ
+            s_smoothed = smoothing_func(S * mask, self.eps)
+            s_to_norm  = s_smoothed + S * (1 - mask)      # <-- pass head through
+        else:
+            s_to_norm  = smoothing_func(S, self.eps)      # (or just S if smoothing=None)
+        out = norm_func(s_to_norm)
 
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -94,9 +95,9 @@ class GPUVectorialTotalVariation(Function):
             x = x.to(device, dtype=torch.float32)
 
         if self.norm == "nuclear":
-            prox_func = l1_norm_prox_torch
+            prox_func = l1_norm_prox
         elif self.norm == "frobenius":
-            prox_func = l2_norm_prox_torch
+            prox_func = l2_norm_prox
         else:
             raise ValueError("Norm not defined")
 
@@ -107,13 +108,13 @@ class GPUVectorialTotalVariation(Function):
 
         # If tailing, only apply prox to the tail values.
         if self.tail is not None:
-            mask = get_sv_tail_mask(S, self.tail)
+            mask = get_mask(S, self.tail)
             # Combine original head with processed tail
             S_final = S * (1 - mask) + S_prox_values * mask
         else:
             S_final = S_prox_values
 
-        out = torch.matmul(U, torch.matmul(torch.diag_embed(S_final), Vh))
+        out = torch.matmul(U, Vh * S_final[..., None])
 
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -121,14 +122,14 @@ class GPUVectorialTotalVariation(Function):
         x = to_tensor(x)
 
         if self.smoothing_function == "fair":
-            grad_func = fair_grad_torch
+            grad_func = fair_grad
         elif self.smoothing_function == "charbonnier":
-            grad_func = charbonnier_grad_torch
+            grad_func = charbonnier_grad
         elif self.smoothing_function == "perona_malik":
-            grad_func = perona_malik_grad_torch
+            grad_func = perona_malik_grad
         else:  # Default to non-smoothed
             # The gradient of h(s)=s is h'(s)=1
-            grad_func = nothing_grad_torch
+            grad_func = nothing_grad
 
         U, S, Vh = torch.linalg.svd(x, full_matrices=False)
 
@@ -136,11 +137,11 @@ class GPUVectorialTotalVariation(Function):
         S_grad_values = grad_func(S, self.eps)
 
         # If tailing, the gradient for non-tailed values is 0
-        mask = torch.ones_like(S) if self.tail is None else get_sv_tail_mask(S, self.tail)
+        mask = torch.ones_like(S) if self.tail is None else get_mask(S, self.tail)
         S_grad_values = S_grad_values * mask
 
         # Reconstruct the gradient matrix: U diag(h'(s)) V^T
-        out = torch.matmul(U, torch.matmul(torch.diag_embed(S_grad_values), Vh))
+        out = torch.matmul(U, Vh * S_grad_values[..., None])
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
     
     def hessian_surrogate(self, x):
@@ -157,8 +158,61 @@ class GPUVectorialTotalVariation(Function):
 
         S = torch.linalg.svdvals(x)
 
-        mask = torch.ones_like(S) if self.tail is None else get_sv_tail_mask(S, self.tail)
+        mask = torch.ones_like(S) if self.tail is None else get_mask(S, self.tail)
         # Compute the Hessian surrogate
         out = hessian_func(S, self.eps)
 
-        return out * mask
+        return torch.nan_to_num(out * mask, nan=0.0, posinf=0.0, neginf=0.0)
+
+    def hessian_components(self, x):
+        """
+        Calculates the components needed for the diagonal preconditioner.
+        Returns the building blocks for the calling class to use.
+
+        Returns:
+            tuple: A tuple containing:
+                - hess_coeffs (torch.Tensor): h''(s_k), shape (..., num_singular_values).
+                - rank_one_fields (torch.Tensor): u_k v_k^T, shape (..., num_singular_values, M, d).
+        """
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, device=device, dtype=torch.float32)
+        else:
+            x = x.to(device, dtype=torch.float32)
+
+        if self.smoothing_function == "fair":
+            hessian_diag_func = fair_hessian_diag
+        elif self.smoothing_function == "charbonnier":
+            hessian_diag_func = charbonnier_hessian_diag
+        elif self.smoothing_function == "perona_malik":
+            hessian_diag_func = perona_malik_hessian_diag
+        else:
+            hessian_diag_func = nothing_hessian_diag
+
+        # --- Step 1: Perform SVD on the entire field of matrices ---
+        U, S, Vh = torch.linalg.svd(x, full_matrices=False)
+        # U shape: (..., M, r), S shape: (..., r), Vh shape: (..., r, d)
+
+        # --- Step 2: Calculate Hessian coefficients h''(s_k) ---
+        hess_coeffs = hessian_diag_func(S, self.eps)  # Shape: (..., r)
+
+        mask = get_mask(S, self.tail)
+        hess_coeffs = hess_coeffs * mask
+
+        # --- Step 3: Construct the field of rank-1 basis matrices u_k v_k^T ---
+        # Target shape: (..., r, M, d)
+
+        # U shape is (..., M, r). We need k to be an outer dimension.
+        U_perm = U.permute(
+            *range(U.ndim - 2), -1, -2
+        )  # Swap last two dims -> (..., r, M)
+
+        # Unsqueeze to prepare for batched matrix multiplication (outer product)
+        # U_perm becomes (..., r, M, 1)
+        # Vh becomes     (..., r, 1, d)
+        U_unsqueezed = U_perm.unsqueeze(-1)
+        Vh_unsqueezed = Vh.unsqueeze(-2)
+
+        # This performs a batch of r outer products for each voxel
+        rank_one_fields = U_unsqueezed @ Vh_unsqueezed  # Shape: (..., r, M, d)
+
+        return hess_coeffs, rank_one_fields

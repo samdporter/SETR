@@ -12,6 +12,11 @@ from .vtv.vtv import (
     WeightedTotalVariation,
     WeightedVectorialTotalVariation,
 )
+from .vtv import (
+    schatten_norm_gpu_slow,
+    schatten_norm_gpu_stable,
+    schatten_norm_gpu,
+)
 
 __all__ = [
     "WeightedTotalVariation",
@@ -20,4 +25,7 @@ __all__ = [
     "MutualInformationImagePrior",
     "RelativeDifferencePrior",
     "WeightedRDP",
+    "schatten_norm_gpu_slow",
+    "schatten_norm_gpu_stable",
+    "schatten_norm_gpu",
 ]
