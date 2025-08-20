@@ -1,44 +1,53 @@
-alpha: 0.5
-beta: 1
-delta: null
+#== Reconstruction settings
 num_subsets: [9, 12]
-no_prior: false
-num_epochs: 30
-use_kappa: false
-rho_max: 8.0   # Upper bound on |κ_PET / κ_SPECT|; keeps the ratio within [1/8, 8]. ## NOT CURRENTLY USED
+num_epochs: 50
 initial_step_size: 0.1
-iterations: 250
 update_interval: null
 relaxation_eta: 0.02
-tail_singular_values: null
-both_directions: true
+
+#== Regularisation
+no_prior: false
+use_kappa: true
 
 # Modality-specific TV prior settings
-use_modality_specific_priors: false
+use_modality_specific_priors: true
 prior: "tv" # can be tv or rdp
-gamma_pet: 0.1
-gamma_spect: 0.1
+gamma_pet: 100.0
+gamma_spect: 50.0
+tv_stencil: "26" # can be 6, 18, or 26
 delta_tv: null  # defaults to delta if not set
+directional_tv: true
+tv_both_directions: false
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true
-gamma_tnv: 1.0
-stencil: "6"
-tnv_both_directions: true
+gamma_tnv: 100.0
+alpha: 1
+beta: 1
+delta: null
+tnv_stencil: "6"
+tnv_both_directions: false
+tail_singular_values: 1
+directional_tnv: false
+stable: false
 
+#== Image processing
 pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
 spect_gauss_fwhm: [6.7, 6.7, 6.7] # FROM bremss data anyscan
 spect_res: [0.81, 0.03, false] # Analytical collimator resolution for SPECT
 
+#== Forward models
+no_gpu: false
+stop_keep_all_views_in_cache: true
 use_tof: false
 
+#== Data paths
 pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
 spect_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/SPECT"
 output_path: "/home/sam/working/synergistic_recon/output/test"
 working_path: "/home/sam/working/synergistic_recon/tmp"
 
+#== Miscellaneous
 save_images: true
 seed: null
-no_gpu: false
-stop_keep_all_views_in_cache: true
 profile: false
