@@ -1,65 +1,142 @@
 #!/bin/bash
 
-# --- SETR Sweep Monitoring Script ---
-# Usage: ./monitor_sweep.sh [sweep_name]
+# --- SETR Sweep Launcher Script ---
+# Usage: ./launch_sweep.sh <sweep_config.yaml> [test]
+
+set -euo pipefail
 
 # Auto-detect base directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-SWEEP_OUTPUT_DIR="$SCRIPT_DIR/output"
+BASE_DIR="$(dirname "$SCRIPT_DIR")"
+SWEEPS_DIR="$SCRIPT_DIR"
+CONFIG_DIR="$SWEEPS_DIR/configs"
+PARAM_DIR="$SWEEPS_DIR/parameters"
+SCRIPTS_DIR="$SWEEPS_DIR/scripts"
 
-# Get sweep name from argument or show help
-SWEEP_NAME="$1"
+# Get sweep config from argument
+SWEEP_CONFIG="$1"
+TEST_MODE="${2:-}"
 
-if [ -z "$SWEEP_NAME" ]; then
-    echo "=== SETR Sweep Monitor ==="
-    echo "Usage: $0 <sweep_name>"
+if [ -z "$SWEEP_CONFIG" ]; then
+    echo "=== SETR Sweep Launcher ==="
+    echo "Usage: $0 <sweep_config.yaml> [test]"
     echo ""
-    echo "Available sweep names (from output directories):"
-    ls -1 $SWEEP_OUTPUT_DIR/ 2>/dev/null | sed 's/^/  /' || echo "  No sweeps found"
+    echo "Available sweep configs:"
+    ls -1 "$CONFIG_DIR"/*.yaml 2>/dev/null | sed 's/^/  /' || echo "  No configs found"
     echo ""
-    echo "Current SGE jobs:"
-    qstat -u $USER 2>/dev/null || echo "  qstat not available"
-    exit 0
+    echo "Use 'test' as second argument to submit only one test job"
+    exit 1
 fi
 
-echo "=== Sweep Monitor: $SWEEP_NAME ==="
-echo ""
+# Check if config exists
+SWEEP_CONFIG_PATH="$CONFIG_DIR/$SWEEP_CONFIG"
+if [ ! -f "$SWEEP_CONFIG_PATH" ]; then
+    echo "Error: Sweep config not found: $SWEEP_CONFIG_PATH"
+    exit 1
+fi
 
-# Show SGE queue status for this sweep
-echo "SGE Queue Status:"
-if command -v qstat >/dev/null 2>&1; then
-    JOBS=$(qstat -u $USER 2>/dev/null | grep "$SWEEP_NAME")
-    if [ -n "$JOBS" ]; then
-        echo "$JOBS"
-        echo ""
-        echo "Job Summary:"
-        echo "  Running (r): $(echo "$JOBS" | grep -c ' r ')"
-        echo "  Queued (qw): $(echo "$JOBS" | grep -c ' qw ')"
-        echo "  Error (Eqw): $(echo "$JOBS" | grep -c ' Eqw ')"
-        echo "  Total: $(echo "$JOBS" | wc -l)"
-    else
-        echo "  No jobs found for sweep: $SWEEP_NAME"
-    fi
+echo "=== SETR Sweep Launcher ==="
+echo "Config: $SWEEP_CONFIG"
+echo "Base directory: $BASE_DIR"
+
+# Parse YAML config using Python
+CONFIG_VALUES=$(python3 -c "
+import yaml, sys
+with open('$SWEEP_CONFIG_PATH', 'r') as f:
+    config = yaml.safe_load(f)
+
+print('SWEEP_NAME=' + config['sweep_name'])
+print('BASE_CONFIG=' + config['base_config'])
+print('RECON_SCRIPT=' + config['script'])
+print('ALPHA_FILE=' + config['parameters']['alpha_file'])
+print('BETA_FILE=' + config['parameters']['beta_file'])
+print('SGE_RUNTIME=' + config['sge']['runtime'])
+print('SGE_MEMORY=' + config['sge']['memory'])
+print('SGE_CORES=' + str(config['sge']['cores']))
+print('SGE_QUEUE=' + (config['sge']['queue'] or 'default'))
+")
+
+# Source the config values
+eval "$CONFIG_VALUES"
+
+echo "Sweep name: $SWEEP_NAME"
+echo "Base config: $BASE_CONFIG"
+echo "Script: $RECON_SCRIPT"
+echo "SGE resources: $SGE_RUNTIME, $SGE_MEMORY, $SGE_CORES cores"
+
+# Check parameter files exist
+if [ ! -f "$PARAM_DIR/$ALPHA_FILE" ]; then
+    echo "Error: Alpha parameter file not found: $PARAM_DIR/$ALPHA_FILE"
+    exit 1
+fi
+
+if [ ! -f "$PARAM_DIR/$BETA_FILE" ]; then
+    echo "Error: Beta parameter file not found: $PARAM_DIR/$BETA_FILE"
+    exit 1
+fi
+
+# Count parameters (excluding header)
+NUM_ALPHAS=$(tail -n +2 "$PARAM_DIR/$ALPHA_FILE" | wc -l)
+NUM_BETAS=$(tail -n +2 "$PARAM_DIR/$BETA_FILE" | wc -l)
+TOTAL_JOBS=$((NUM_ALPHAS * NUM_BETAS))
+
+echo "Parameters: $NUM_ALPHAS alphas × $NUM_BETAS betas = $TOTAL_JOBS total jobs"
+
+if [ "$TOTAL_JOBS" -eq 0 ]; then
+    echo "Error: No parameter combinations found"
+    exit 1
+fi
+
+# Prepare output directory
+OUTPUT_DIR="$SWEEPS_DIR/output/$SWEEP_NAME"
+mkdir -p "$OUTPUT_DIR"
+
+# Set job array range
+if [ "$TEST_MODE" = "test" ]; then
+    JOB_RANGE="1"
+    echo "TEST MODE: Submitting only 1 job"
 else
-    echo "  qstat not available"
+    JOB_RANGE="1-$TOTAL_JOBS"
+    echo "FULL MODE: Submitting $TOTAL_JOBS jobs"
 fi
-echo ""
 
-# Check output directory if it exists
-if [ -d "$SWEEP_OUTPUT_DIR/$SWEEP_NAME" ]; then
-    echo "Output Directory Status:"
-    RESULT_DIRS=$(find "$SWEEP_OUTPUT_DIR/$SWEEP_NAME" -name "alpha_*_beta_*" -type d 2>/dev/null | wc -l)
-    COMPLETED=$(find "$SWEEP_OUTPUT_DIR/$SWEEP_NAME" -name "job_completion.txt" 2>/dev/null | wc -l)
-    
-    echo "  Results directories: $RESULT_DIRS"
-    echo "  Completed jobs: $COMPLETED"
-    echo "  Directory: $SWEEP_OUTPUT_DIR/$SWEEP_NAME"
-    echo ""
-    
-    # Show disk usage
-    echo "Disk Usage:"
-    du -sh "$SWEEP_OUTPUT_DIR/$SWEEP_NAME" 2>/dev/null || echo "  Unable to calculate"
-else
-    echo "Output directory not found: $SWEEP_OUTPUT_DIR/$SWEEP_NAME"
-    echo "Sweep may not have started yet or different name used."
+# Build qsub command
+QSUB_SCRIPT="$SCRIPTS_DIR/sweep_alpha_beta.qsub.sh"
+if [ ! -f "$QSUB_SCRIPT" ]; then
+    echo "Error: SGE script not found: $QSUB_SCRIPT"
+    exit 1
 fi
+
+# Set SGE queue option
+QUEUE_OPTION=""
+if [ "$SGE_QUEUE" != "default" ]; then
+    QUEUE_OPTION="-q $SGE_QUEUE"
+fi
+
+# Set parallel environment option - only use smp if cores > 1
+PE_OPTION=""
+if [ "$SGE_CORES" -gt 1 ]; then
+    PE_OPTION="-pe smp $SGE_CORES"
+fi
+
+# Submit to SGE
+echo ""
+echo "Submitting jobs to SGE..."
+echo "Command: qsub -t $JOB_RANGE -l h_rt=$SGE_RUNTIME -l h_vmem=$SGE_MEMORY $PE_OPTION $QUEUE_OPTION ..."
+
+qsub \
+    -t "$JOB_RANGE" \
+    -l h_rt="$SGE_RUNTIME" \
+    -l h_vmem="$SGE_MEMORY" \
+    $PE_OPTION \
+    $QUEUE_OPTION \
+    -N "setr_$SWEEP_NAME" \
+    -o "$OUTPUT_DIR/logs" \
+    -e "$OUTPUT_DIR/logs" \
+    -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=$SWEEP_NAME,BASE_CONFIG_FILE=$BASE_CONFIG,RECON_SCRIPT=$RECON_SCRIPT,ALPHA_FILE=$ALPHA_FILE,BETA_FILE=$BETA_FILE" \
+    "$QSUB_SCRIPT"
+
+echo ""
+echo "Jobs submitted successfully!"
+echo "Monitor with: ./monitor_sweep.sh $SWEEP_NAME"
+echo "Output directory: $OUTPUT_DIR"
