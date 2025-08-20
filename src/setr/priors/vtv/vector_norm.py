@@ -2,99 +2,34 @@
 
 from cil.optimisation.functions import Function
 
-try:
-    import torch
-    from torch import vmap
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-except ImportError:
-    device = "cpu"
+import torch
+from functorch import vmap
 import numpy as np
 
+from .common import (
+    l1_norm,
+    l2_norm,
+    l1_norm_prox,
+    l2_norm_prox,
+    fair,
+    charbonnier,
+    perona_malik,
+    nothing,
+    fair_grad,
+    charbonnier_grad,
+    perona_malik_grad,
+    nothing_grad,
+    fair_hessian_diag,
+    charbonnier_hessian_diag,
+    perona_malik_hessian_diag,
+    nothing_hessian_diag,
+    fair_hessian_surrogate,
+    charbonnier_hessian_surrogate,
+    perona_malik_hessian_surrogate,
+    to_tensor,
+)
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-def pseudo_inverse_torch(H):
-    """Inverse except when element is zero."""
-    return torch.where(H != 0, 1.0 / H, torch.zeros_like(H))
-
-
-def l1_norm_torch(x):
-    return torch.sum(torch.abs(x), dim=-1)
-
-
-def l1_norm_prox_torch(x, eps):
-    return torch.sign(x) * torch.clamp(torch.abs(x) - eps, min=0)
-
-
-def l2_norm_torch(x):
-    return torch.sqrt(torch.sum(x**2, dim=-1))
-
-
-def l2_norm_prox_torch(x, eps):
-    # Unsqueeze eps for broadcasting
-    eps_unsqueezed = eps.unsqueeze(-1)
-
-    # Calculate norms along the last dimension
-    norms = torch.linalg.norm(x, dim=-1, keepdim=True)
-    # Avoid division by zero
-    norms = torch.maximum(norms, torch.tensor(1e-9, device=x.device))
-
-    # Calculate scaling factor
-    factor = torch.clamp(norms - eps_unsqueezed, min=0.0) / norms
-    return x * factor
-
-
-def charbonnier_torch(x, eps):
-    return torch.sqrt(x**2 + eps**2) - eps
-
-
-def charbonnier_grad_torch(x, eps):
-    # Add small epsilon to denominator for stability
-    return x / torch.sqrt(x**2 + eps**2)
-
-
-def charbonnier_hessian_diag_torch(x, eps):
-    # Returns g''(x) for Charbonnier: eps²/(x² + eps²)^(3/2)
-    return eps**2 / (x**2 + eps**2) ** 1.5
-
-
-def fair_torch(x, eps):
-    return eps * (torch.abs(x) / eps - torch.log1p(torch.abs(x) / eps))
-
-
-def fair_grad_torch(x, eps):
-    return x / (eps + torch.abs(x))
-
-
-def fair_hessian_diag_torch(x, eps):
-    # Returns g''(x) for Fair: eps/(eps + |x|)^2
-    return eps / (eps + torch.abs(x)) ** 2
-
-
-def perona_malik_torch(x, eps):
-    return (eps / 2) * (1 - torch.exp(-(x**2) / (eps**2)))
-
-
-def perona_malik_grad_torch(x, eps):
-    return x * torch.exp(-(x**2) / (eps**2)) / (eps**2)
-
-
-def perona_malik_hessian_diag_torch(x, eps):
-    # Returns g''(x) for Perona-Malik: (eps² − 2x²) e^(−x²/eps²)/eps³
-    return (eps**2 - 2 * x**2) * torch.exp(-(x**2) / (eps**2)) / (eps**3)
-
-
-def nothing_torch(x, eps=0):
-    return x
-
-
-def nothing_grad_torch(x, eps=0):
-    return torch.ones_like(x)
-
-
-def nothing_hessian_diag_torch(x, eps=0):
-    return torch.zeros_like(x)
 
 
 class GPUVectorNorm(Function):
@@ -129,20 +64,20 @@ class GPUVectorNorm(Function):
         """
         # Select appropriate functions
         if self.norm == "l1":
-            norm_func = l1_norm_torch
+            norm_func = l1_norm
         elif self.norm == "l2":
-            norm_func = l2_norm_torch
+            norm_func = l2_norm
         else:
             raise ValueError("Norm not defined")
 
         if self.smoothing_function == "fair":
-            smoothing_func = fair_torch
+            smoothing_func = fair
         elif self.smoothing_function == "charbonnier":
-            smoothing_func = charbonnier_torch
+            smoothing_func = charbonnier
         elif self.smoothing_function == "perona_malik":
-            smoothing_func = perona_malik_torch
+            smoothing_func = perona_malik
         else:
-            smoothing_func = nothing_torch
+            smoothing_func = nothing
 
         # x shape: (nx, ny, nz, M, d)
         # We want to process each modality separately
@@ -191,9 +126,9 @@ class GPUVectorNorm(Function):
             x = x.to(device, dtype=torch.float32)
 
         if self.norm == "l1":
-            prox_func = l1_norm_prox_torch
+            prox_func = l1_norm_prox
         elif self.norm == "l2":
-            prox_func = l2_norm_prox_torch
+            prox_func = l2_norm_prox
         else:
             raise ValueError("Norm not defined")
 
@@ -225,20 +160,20 @@ class GPUVectorNorm(Function):
             x = x.to(device, dtype=torch.float32)
 
         if self.norm == "l1":
-            norm_func = l1_norm_torch
+            norm_func = l1_norm
         elif self.norm == "l2":
-            norm_func = l2_norm_torch
+            norm_func = l2_norm
         else:
             raise ValueError("Norm not defined")
 
         if self.smoothing_function == "fair":
-            grad_func = fair_grad_torch
+            grad_func = fair_grad
         elif self.smoothing_function == "charbonnier":
-            grad_func = charbonnier_grad_torch
+            grad_func = charbonnier_grad
         elif self.smoothing_function == "perona_malik":
-            grad_func = perona_malik_grad_torch
+            grad_func = perona_malik_grad
         else:
-            grad_func = nothing_grad_torch
+            grad_func = nothing_grad
 
         gradient = torch.zeros_like(x)
 
@@ -268,28 +203,45 @@ class GPUVectorNorm(Function):
 
         return torch.nan_to_num(gradient, nan=0.0, posinf=0.0, neginf=0.0)
 
-    def phi_hessian(self, U):
+    def radial_derivatives(self, U, stabiliser: float = 1e-9, positive: bool = True):
         """
-        Compute φ''(‖u‖) for each vector u in U.
-        U: tensor of shape (..., d)
-        returns: tensor of shape (...)
+        For U[..., d], return (r2, r, alpha, beta) where
+        r2 = ||U||^2, r = sqrt(r2 + stabiliser),
+        alpha = phi'(r)/r, beta = phi''(r) - alpha.
         """
-        # flatten all but last dim
-        orig_shape, d = U.shape[:-1], U.shape[-1]
-        U_flat = U.reshape(-1, d)
+        U = to_tensor(U)
+        r2 = torch.sum(U * U, dim=-1)                  # (...,)
+        r  = torch.sqrt(r2 + stabiliser)               # (...,)
 
-        # per‐vector φ'' using your existing torch kernels
-        def phi2_vec(u):
-            r = torch.linalg.norm(u)
-            if self.smoothing_function == "charbonnier":
-                return charbonnier_hessian_diag_torch(r, self.eps)
-            elif self.smoothing_function == "fair":
-                return fair_hessian_diag_torch(r, self.eps)
-            elif self.smoothing_function == "perona_malik":
-                return perona_malik_hessian_diag_torch(r, self.eps)
-            else:
-                return nothing_hessian_diag_torch(r, self.eps)
+        eps = self.eps
+        if self.smoothing_function == "charbonnier":
+            phi1 = charbonnier_grad
+            phi2 = charbonnier_hessian_surrogate if positive else charbonnier_hessian_diag
+        elif self.smoothing_function == "fair":
+            phi1 = fair_grad
+            phi2 = fair_hessian_surrogate if positive else fair_hessian_diag
+        elif self.smoothing_function == "perona_malik":
+            phi1 = perona_malik_grad
+            phi2 = perona_malik_hessian_surrogate if positive else perona_malik_hessian_diag
+        else:
+            phi1 = nothing_grad
+            phi2 = nothing_hessian_diag
 
-        # vmap over the batch axis
-        phi2_flat = vmap(phi2_vec)(U_flat)  # shape (prod(orig_shape),)
-        return phi2_flat.reshape(*orig_shape)
+        phi1_r = phi1(r, eps)                          # (...,)
+        phi2_r = phi2(r, eps)                          # (...,)
+        alpha  = phi1_r / r                            # (...,)
+        beta   = phi2_r - alpha                        # (...,)
+        return r2, r, alpha, beta
+
+    def hessian_dir_diag(self, U, stabiliser: float = 1e-9, positive: bool = True):
+        """
+        Return per-direction diagonal in U-space:
+            h_j = alpha + beta * (u_j^2 / (||u||^2 + stabiliser))
+        Shape: input U[..., d] -> output (..., d)
+        """
+        U = to_tensor(U)
+        r2, r, alpha, beta = self.radial_derivatives(U, stabiliser=stabiliser, positive=positive)
+        frac = (U * U) / (r2.unsqueeze(-1) + stabiliser)   # (..., d)
+        h_dir = alpha.unsqueeze(-1) + beta.unsqueeze(-1) * frac
+        return torch.nan_to_num(h_dir, nan=0.0, posinf=0.0, neginf=0.0)
+

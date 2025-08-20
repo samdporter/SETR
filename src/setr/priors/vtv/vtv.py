@@ -412,27 +412,27 @@ class WeightedTotalVariation(Function):
             return out
         return ret
 
+    def hessian_diag(self, x, out=None, stabiliser: float = 1e-9, positive: bool = True):
+        """
+        Diagonal approximation in image space:
+        sum_j (w^2 * s_j^2) * h_j(U), with U = w * (Jx).
+        Requires jacobian.sensitivity(...) -> (..., M, d) per-direction sensitivities.
+        """
+        x_arr = self.bdc2a.direct(x)             # (..., M)
+        J     = self.jacobian.direct(x_arr)      # (..., M, d)
+        w     = self.weights.unsqueeze(-1)       # (..., M, 1)
+        U     = w * J                            # (..., M, d)
 
-    def hessian_diag(self, x, out=None):
+        # Per-direction U-space diagonal h_j
+        h_dir = self.tv.hessian_dir_diag(U, stabiliser=stabiliser, positive=positive)  # (..., M, d)
 
-        x_arr = self.bdc2a.direct(x)  # (nx,ny,nz,M)
-        J = self.jacobian.direct(x_arr)  # (nx,ny,nz,M,d)
+        # Finite-difference sensitivities per direction
+        S = torch.as_tensor(self.jacobian.sensitivity(x_arr), device=U.device, dtype=U.dtype)  # (..., M, d)
+        S2 = S * S
+        w2 = (self.weights ** 2).unsqueeze(-1)   # (..., M, 1)
 
-        w = self.weights.unsqueeze(-1)  # (nx,ny,nz,M,1)
-        U = w * J  # (nx,ny,nz,M,d)
-
-        S_np = self.jacobian.sensitivity(x_arr)  # numpy or torch
-        S = torch.as_tensor(S_np, device=U.device)
-
-        batch_shape = U.shape[:-1]  # (...,M)
-        U_flat = U.reshape(-1, U.shape[-1])  # (B, d)
-        phi2 = self.tv.phi_hessian(U_flat)  # (B,)
-        phi2 = phi2.reshape(*batch_shape)  # (...,M)
-
-        S2_sum = torch.sum(S * S, dim=-1)  # (...,M)
-        hess_arr = phi2 * (self.weights**2) * S2_sum
-
-        result = self.bdc2a.adjoint(hess_arr)
+        h_img = torch.sum(w2 * S2 * h_dir, dim=-1)  # (..., M)
+        result = self.bdc2a.adjoint(h_img)
         if out is not None:
             out.fill(result)
             return out

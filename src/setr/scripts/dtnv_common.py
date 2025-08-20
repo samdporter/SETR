@@ -465,6 +465,7 @@ def get_prior(
     # TNV (vectorial) prior - uses alpha/beta weighting
     if getattr(args, "use_tnv_prior", True) and getattr(args, "gamma_tnv", 1.0) > 0:
         # Create kappa weights for TNV with alpha/beta scaling
+        logging.info(f"Using TNV prior with alpha={args.alpha}, beta={args.beta}, gamma_tnv={args.gamma_tnv}")
         tnv_kappas = EnhancedBlockDataContainer(
             initial_estimates[0].get_uniform_copy(args.alpha*args.gamma_tnv),
             initial_estimates[1].get_uniform_copy(args.beta*args.gamma_tnv),
@@ -509,15 +510,17 @@ def get_prior(
                 el.fill(kappas.containers[i] * el)
 
             if getattr(args, "prior", "tv") == "rdp":
+                logging.info(f"Using RDP prior with gamma_pet={gamma_pet}, gamma_spect={gamma_spect}")
                 combined_tv = WeightedRDP(
                     initial_estimates,
                     tv_kappas,
-                    epsilon=getattr(args, "delta_tv"),
+                    epsilon=args.delta,
                     anatomical=umap if args.directional_tv else None,
                     stencil=getattr(args, "tv_stencil", '6'),
                     both_directions=getattr(args, "tv_both_directions", False),
                 )
             else:
+                logging.info(f"Using TV prior with gamma_pet={gamma_pet}, gamma_spect={gamma_spect}")
                 combined_tv = WeightedTotalVariation(
                     initial_estimates,
                     tv_kappas,

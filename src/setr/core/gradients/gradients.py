@@ -270,7 +270,7 @@ class Sum:
         for ch, sh in enumerate(self.directions):
             edge = Y[..., ch]
             out = out + edge
-            out = out + self._shift(edge, sh)
+            out = out + self._shift(edge, (-sh[0], -sh[1], -sh[2]))  # ← use inverse shift
         return _to_numpy(out) if self.numpy_out else out
 
     def calculate_norm(self):
