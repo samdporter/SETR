@@ -26,7 +26,6 @@ from setr.cil_extensions.preconditioners import (
     LehmerMeanPreconditioner,
 )
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
-from setr.priors import WeightedVectorialTotalVariation, WeightedTotalVariation, WeightedRDP
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,
@@ -44,6 +43,10 @@ from setr.scripts.dtnv_common import (
     get_probabilities,
     get_s_inv_from_subset_objs,
     normalise_kappa_squares,
+    gradient_energy_scale_sirf,
+    get_preconditioners,
+    get_prior,
+    apply_gradient_energy_scaling,
 )
 from setr.utils import (
     get_pet_am,
@@ -53,7 +56,6 @@ from setr.utils import (
 )
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_filters
-
 
 def prepare_data(args):
     """
@@ -113,35 +115,6 @@ def prepare_data(args):
     return umap, pet_data, spect_data, initial_estimates
 
 
-def get_prior(args, umap, pet_data, spect_data, initial_estimates, bo):
-    """Set up vectorial total variation prior for 2bpos."""
-    logging.info("Setting up prior")
-
-    # Get kappa weighting - simplified version
-    kappa_bdc = bo.direct(initial_estimates)
-    kappas = EnhancedBlockDataContainer(*kappa_bdc.containers).get_uniform_copy(1.0)
-
-    # multiply first kappa by alpha/beta for TNV prior
-    for i, (ab, el) in enumerate(zip([args.alpha, args.beta], kappas.containers)):
-        kappas.containers[i].fill(float(ab) * el)
-    logging.info("Kappa images scaled.")
-
-    vtv = WeightedVectorialTotalVariation(
-        bo.direct(initial_estimates),
-        kappas,
-        args.delta,
-        anatomical=umap,
-        stable=True,
-        tail_singular_values=getattr(args, "tail_singular_values", None),
-        stencil=getattr(args, "tnv_stencil", args.stencil),
-        both_directions=getattr(args, "tnv_both_directions", args.both_directions),
-    )
-    logging.info("Weighted Vectorial Total Variation prior set up.")
-    prior = OperatorCompositionFunction(vtv, bo)
-    logging.info("Prior function composed with block operator.")
-    return prior
-
-
 def get_data_fidelity(
     args,
     pet_data,
@@ -159,7 +132,7 @@ def get_data_fidelity(
     Returns:
         all_funs: list of block objective functions (PET all beds, then SPECT).
         s_inv:    EnhancedBlockDataContainer of 1/sensitivity images (PET,SPECT).
-        kappa_sq_block: EnhancedBlockDataContainer of κ² images (PET,SPECT) in common PET space.
+        kappas: EnhancedBlockDataContainer of κ² images (PET,SPECT) in common PET space.
     """
     # --- partition PET by bed ---
     pet_dfs = [
@@ -279,47 +252,9 @@ def get_data_fidelity(
     all_funs = pet_dfs_block + spect_dfs_block
 
     # bundle κ² (PET in PET space; SPECT still in SPECT space—transform later in get_prior)
-    kappa_sq_block = EnhancedBlockDataContainer(pet_kappa_sq, spect_kappa_sq)
+    kappas = EnhancedBlockDataContainer(pet_kappa_sq, spect_kappa_sq)
 
-    return all_funs, s_inv, kappa_sq_block
-
-
-def get_preconditioners(
-    args: argparse.Namespace,
-    s_inv: Any,
-    all_funs: List[Any],
-    update_interval: int,
-    prior: Any,
-    initial_estimates: EnhancedBlockDataContainer,
-) -> Any:
-    """Set up preconditioners for 2bpos."""
-    max_vals = [el.max() for el in initial_estimates.containers]
-    epsilon = min(el.max() for el in initial_estimates.containers) * 1e-3
-
-    bsrem_precond = BSREMPreconditioner(
-        s_inv,
-        1,
-        np.inf,
-        epsilon=epsilon,
-        max_vals=max_vals,
-        smooth=True,
-    )
-    if prior is None:
-        return bsrem_precond
-
-    prior_precond = ImageFunctionPreconditioner(
-        prior.inv_hessian_diag,
-        1.0,
-        update_interval,
-        freeze_iter=np.inf,
-        epsilon=epsilon,
-    )
-
-    return LehmerMeanPreconditioner(
-        [bsrem_precond, prior_precond],
-        update_interval=update_interval,
-        freeze_iter=len(all_funs) * 10,
-    )
+    return all_funs, s_inv, kappas
 
 
 def main(args) -> None:
@@ -333,27 +268,12 @@ def main(args) -> None:
     # Prepare data
     umap, pet_data, spect_data, initial_estimates = prepare_data(args)
 
-    # find alpha weighting using dynamic range of the initial images (95th percentile)
-    pet_max = np.percentile(pet_data["initial_image"].as_array(), 95)
-    spect_max = np.percentile(spect_data["initial_image"].as_array(), 95)
-    args.alpha = args.alpha * spect_max / pet_max
-    logging.info(f"Setting alpha to {args.alpha} based on initial images")
-
     # Set up operators for multiple bed positions
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
 
     # Set up resampling operators
     spect2pet = get_resampling_operators(pet_data, spect_data)
-
-    # Create combined block operator
-    bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
-        ZeroOperator(pet_data["initial_image"]),
-        spect2pet,
-        shape=(2, 2),
-    )
-
+    
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
@@ -370,7 +290,7 @@ def main(args) -> None:
         )
 
     # Set up data fidelity
-    all_funs, s_inv, kappa_sq_block = get_data_fidelity(
+    all_funs, s_inv, kappas = get_data_fidelity(
         args,
         pet_data,
         spect_data,
@@ -382,33 +302,61 @@ def main(args) -> None:
         choose_ops,
     )
 
-    # cross-modal scaling (XXth pct)
-    kappa_sq_block = normalise_kappa_squares(
-        kappa_sq_block,
-        pct=50,
+    # Create combined block operator
+    bo = BlockOperator(
+        IdentityOperator(pet_data["initial_image"]),
+        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
+        ZeroOperator(pet_data["initial_image"]),
+        spect2pet,
+        shape=(2, 2),
     )
+    
+    # cross-modal scaling (XXth pct)
+    kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
+    combined = bo.direct(initial_estimates)
+    scale = gradient_energy_scale_sirf(
+        combined[0], combined[1], 
+        mask=None,
+        kappa_pet=kappas.containers[0] if kappas else None,
+        kappa_spect=kappas.containers[1] if kappas else None,
+    )
+    # Apply consistent scaling to all prior weights
+    apply_gradient_energy_scaling(args, scale)
+
+    # now (re)compute delta if it depends on alpha
+    if args.delta is None:
+        args.delta = max(
+            pet_data["initial_image"].max() / 1e4,
+            spect_data["initial_image"].max() / 1e4,
+        ) * min(args.alpha, args.beta)
 
     # write κ² images
-    for i, image in enumerate(kappa_sq_block.containers):
+    for i, image in enumerate(kappas.containers):
         image.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
 
-    if not args.no_prior:
-        # Set up prior
-        prior = get_prior(args, umap, pet_data, spect_data, initial_estimates, bo)
+    if args.no_prior:
+        prior = None
+        priors_list = []
+    else:
+        # Set up the prior.
+        priors_list = get_prior(
+            args, umap, combined, bo, kappas
+        )        
+        for i, p in enumerate(priors_list):
+            priors_list[i] = -1 / len(all_funs) * p
+            attach_prior_hessian(priors_list[i])
+        prior = SumFunction(*priors_list)
 
-        # Scale and attach Hessian to the prior
-        prior = -1 / len(all_funs) * prior
-        attach_prior_hessian(prior)
+        # Also scale and attach Hessian to individual priors for preconditioner
+
 
         for i, fun in enumerate(all_funs):
             all_funs[i] = SumFunction(fun, prior)
-    else:
-        prior = None
 
     update_interval = len(all_funs)
 
     # Set up preconditioners
-    precond = get_preconditioners(args, s_inv, all_funs, update_interval, prior, initial_estimates)
+    precond = get_preconditioners(args, s_inv, all_funs, update_interval, priors_list, initial_estimates)
 
     probs = get_probabilities(args, args.num_subsets, update_interval, bpos=2)
 

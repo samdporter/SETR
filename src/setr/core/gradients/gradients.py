@@ -94,23 +94,30 @@ class Jacobian:
         return _to_numpy(out) if self.numpy_out else out
 
     def sensitivity(self, images):
+        """
+        Returns per-parameter, per-stencil-channel scale factors S so that
+        diag(G^T G) ~ sum_k S[..., k]^2, matching the channels produced by .direct().
+        Works for both Gradient and DirectionalGradient backends.
+        """
+        # Pick a prototype gradient operator
         grads = self.grad if isinstance(self.grad, list) else [self.grad]
         proto = grads[0]
-        n_dirs = len(proto.directions)
 
-        # per-direction scale from physical step (already correct)
-        if self.normalize:
-            scale_per_dir = (1.0 / proto._step)
-        else:
-            scale_per_dir = torch.ones(n_dirs, device=device, dtype=torch.float32)
+        # Reach the underlying finite-difference engine
+        g = getattr(proto, "gradient", proto)  # DirectionalGradient -> inner Gradient
 
-        bank = getattr(proto, "_bank_scale", 1.0)  # fallback if not present
-        scale_per_dir = scale_per_dir / bank
+        # Per-channel physical scaling (already includes both_directions & stencil)
+        step = g._step                  # shape (d,)
+        bank = getattr(g, "_bank_scale", 1.0)
 
+        per = 1.0 / step if self.normalize else torch.ones_like(step)
+        per = per / bank                # make L ~ invariant across 6/18/26
+
+        # Broadcast to (..., n_params, d)
         X = _to_tensor(images, like_dtype=torch.float32, device=device)
-        leading = X.shape[:-1]
-        n_params = X.shape[-1]
-        S = scale_per_dir.view(*((1,) * len(leading)), 1, n_dirs).expand(*leading, n_params, n_dirs)
+        leading, n_params = X.shape[:-1], X.shape[-1]
+        S = per.view(*((1,) * len(leading)), 1, -1).expand(*leading, n_params, per.numel())
+
         return _to_numpy(S) if self.numpy_out else S
 
     def calculate_norm(self):

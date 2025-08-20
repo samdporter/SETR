@@ -171,8 +171,8 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
     def __init__(
         self,
         preconds,
-        p=1e-6,  # Lehmer order: p=0→harmonic, p=1→arithmetic, p>1→toward max
-        epsilon=1e-12,
+        p=1e-2,  # Lehmer order: p=0→harmonic, p=1→arithmetic, p>1→toward max
+        epsilon=1e-6,
         update_interval=np.inf,
         freeze_iter=np.inf,
     ):
@@ -185,24 +185,33 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         if out is None:
             out = algorithm.solution.copy()
 
-        # Compute all preconditioners
+        # Collect (and, if needed, clamp) inputs
         precond_values = [p.compute_preconditioner(algorithm) for p in self.preconds]
 
-        # Generalized Lehmer mean: (Σ xᵢᵖ) / (Σ xᵢᵖ⁻¹)
         p = self.p
+        need_clamp_for_den = p < 1
+        eps = self.epsilon
 
-        # Initialize numerator and denominator with first preconditioner
-        num = precond_values[0].power(p)
-        den = precond_values[0].power(p - 1)
+        # First term
+        x0 = precond_values[0]
+        base_num = x0
+        base_den = x0.maximum(eps) if need_clamp_for_den else x0
 
-        # Add contributions from remaining preconditioners
-        for precond in precond_values[1:]:
-            num += precond.power(p)
-            den += precond.power(p - 1)
+        num = base_num.power(p)          # Σ x^p
+        den = base_den.power(p - 1)      # Σ x^(p-1), safe if p<1
 
-        den = den.maximum(self.epsilon)  # avoid zero‐divide
+        # Accumulate remaining terms
+        for x in precond_values[1:]:
+            base_num = x
+            base_den = x.maximum(eps) if need_clamp_for_den else x
+            num += base_num.power(p)
+            den += base_den.power(p - 1)
+
+        # Final guard and division
+        den = den.maximum(eps)
         num.divide(den, out=out)
         return out
+
 
 
 class ArithmeticMeanPreconditioner(PreconditionerWithInterval):

@@ -11,7 +11,11 @@ from typing import Any, List
 
 import numpy as np
 from cil.optimisation.algorithms import ISTA
-from cil.optimisation.functions import KullbackLeibler, OperatorCompositionFunction
+from cil.optimisation.functions import (
+    KullbackLeibler, 
+    OperatorCompositionFunction,
+    SumFunction,
+)
 from cil.optimisation.operators import (
     BlockOperator,
     IdentityOperator,
@@ -25,6 +29,16 @@ from setr.cil_extensions.callbacks import (
     SaveImageCallback,
     SaveObjectiveCallback,
     SavePreconditionerCallback,
+)
+from setr.cil_extensions.preconditioners import (
+    BSREMPreconditioner,
+    ImageFunctionPreconditioner,
+    LehmerMeanPreconditioner,
+)
+from setr.priors import (
+    WeightedVectorialTotalVariation,
+    WeightedTotalVariation,
+    WeightedRDP,
 )
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.functions import BlockIndicatorBox
@@ -106,57 +120,39 @@ def get_preconditioners(
     s_inv: Any,
     all_funs: List[Any],
     update_interval: int,
-    priors_list: List[Any],
+    priors_list: Any,
     initial_estimates: EnhancedBlockDataContainer,
 ) -> Any:
-    """
-    Set up the preconditioners.
-
-    Args:
-        priors_list: List of individual prior functions (before combining with SumFunction)
-
-    Returns:
-        The combined preconditioner.
-    """
-
-    from setr.cil_extensions.preconditioners import (
-        BSREMPreconditioner,
-        ImageFunctionPreconditioner,
-        LehmerMeanPreconditioner,
-    )
-
+    """Set up preconditioners for 2bpos."""
     max_vals = [el.max() for el in initial_estimates.containers]
-    minmax_val = min(max_vals)
 
     bsrem_precond = BSREMPreconditioner(
         s_inv,
         1,
         np.inf,
-        epsilon=minmax_val / 1000,
+        epsilon=0,
         max_vals=max_vals,
         smooth=True,
     )
-
-    if not priors_list:
+    if priors_list is None:
         return bsrem_precond
 
-    # Create preconditioners for each individual prior's Hessian
-    precond_list = [bsrem_precond]
-
-    for prior in priors_list:
-        prior_precond = ImageFunctionPreconditioner(
-            prior.inv_hessian_diag,
+    prior_precond = [
+        ImageFunctionPreconditioner(
+            p.inv_hessian_diag,
             1.0,
-            update_interval=update_interval,
-            epsilon=0,
+            update_interval,
             freeze_iter=np.inf,
+            epsilon=0,
         )
-        precond_list.append(prior_precond)
+    for p in priors_list
+    ]
 
     return LehmerMeanPreconditioner(
-        precond_list,
+        [bsrem_precond, *prior_precond],
         update_interval=update_interval,
         freeze_iter=len(all_funs) * 10,
+        epsilon=0,
     )
 
 
@@ -363,3 +359,181 @@ def compute_inv_hessian_diagonals(bdc, obj_funs_list):
         outputs.append(hessian_diag)
 
     return EnhancedBlockDataContainer(*outputs)
+
+
+def gradient_energy_scale_sirf(x_pet, x_spect, kappa_pet=None, kappa_spect=None,
+                                        beta=1.0, mask=None, eps=1e-12):
+    """
+    Compute alpha* that balances κ-weighted gradient energies for TNV:
+        alpha* = < κ_pet ∇x_pet , beta κ_spect ∇x_spect > / || κ_pet ∇x_pet ||^2
+
+    Parameters
+    ----------
+    x_pet, x_spect : sirf.ImageData
+        Images in the SAME geometry (map SPECT→PET first if needed).
+    kappa_pet, kappa_spect : sirf.ImageData or None
+        Base per-voxel weights used by the TNV (before multiplying by alpha/beta).
+        If None, treated as all-ones.
+    beta : float
+        If you keep beta fixed ≠ 1, include it here.
+    mask : sirf.ImageData or None
+        Optional boolean/{0,1} mask to limit the fit.
+    eps : float
+        Numerical stabiliser.
+
+    Returns
+    -------
+    float
+        alpha* scale.
+    """
+    import numpy as np
+    xr = x_pet.as_array()
+    xs = x_spect.as_array()
+
+    vz, vy, vx = x_pet.voxel_sizes()  # (z,y,x) spacings in mm
+
+    # Physical gradients
+    gr_z, gr_y, gr_x = np.gradient(xr, vz, vy, vx, edge_order=1)
+    gs_z, gs_y, gs_x = np.gradient(xs, vz, vy, vx, edge_order=1)
+
+    # Stack as (3, Z, Y, X)
+    gr = np.stack([gr_z, gr_y, gr_x], axis=0)
+    gs = np.stack([gs_z, gs_y, gs_x], axis=0)
+
+    # Apply base κ weights (broadcast over gradient components)
+    if kappa_pet is not None:
+        kp = kappa_pet.as_array()
+        gr = gr * kp
+    if kappa_spect is not None:
+        ks = kappa_spect.as_array()
+        gs = gs * ks
+
+    # Optional mask
+    if mask is not None:
+        m = mask.as_array().astype(bool)
+        gr = gr[:, m]
+        gs = gs[:, m]
+    else:
+        gr = gr.reshape(3, -1)
+        gs = gs.reshape(3, -1)
+
+    # Compute alpha*
+    num = float(np.dot(gr.ravel(), (beta * gs).ravel()))
+    den = float(np.dot(gr.ravel(), gr.ravel())) + eps
+    return num / den
+
+
+def apply_gradient_energy_scaling(args, scale):
+    """Apply gradient energy scaling to all prior weightings consistently."""
+    
+    # Scale TNV weightings
+    args.alpha *= scale
+    logging.info(f"Adjusted alpha to {args.alpha:.6g} using gradient-energy scaling")
+    
+    # Scale modality-specific TV weightings if they exist
+    if hasattr(args, 'gamma_pet'):
+        args.gamma_pet *= scale
+        logging.info(f"Adjusted gamma_pet to {args.gamma_pet:.6g} using gradient-energy scaling")
+
+def get_prior(
+    args,
+    umap,
+    initial_estimates,
+    bo,
+    kappas=None,
+):
+    """
+    Set up the prior function for image reconstruction.
+
+    Supports three types of priors that can be used independently or combined:
+    - PET TV prior (weighted by gamma_pet)
+    - SPECT TV prior (weighted by gamma_spect)  
+    - TNV vectorial prior (weighted by gamma_tnv, uses alpha/beta for kappa weighting)
+
+    Each prior can have independent directional settings.
+
+    Returns:
+        prior: The constructed prior function (SumFunction if multiple priors).
+        priors: List of individual prior functions for preconditioner setup.
+    """
+
+    if kappas is None:
+        kappas = initial_estimates.get_uniform_copy(1)
+
+    priors = []
+
+    # TNV (vectorial) prior - uses alpha/beta weighting
+    if getattr(args, "use_tnv_prior", True) and getattr(args, "gamma_tnv", 1.0) > 0:
+        # Create kappa weights for TNV with alpha/beta scaling
+        tnv_kappas = EnhancedBlockDataContainer(
+            initial_estimates[0].get_uniform_copy(args.alpha*args.gamma_tnv),
+            initial_estimates[1].get_uniform_copy(args.beta*args.gamma_tnv),
+        )
+
+        # Apply base kappa weights
+        for i, el in enumerate(tnv_kappas.containers):
+            el.fill(kappas.containers[i] * el)
+
+        vtv = WeightedVectorialTotalVariation(
+            initial_estimates,
+            tnv_kappas,
+            args.delta,
+            anatomical=umap if args.directional_tnv else None,
+            stable=getattr(args, "stable", True),
+            tail_singular_values=getattr(args, "tail_singular_values", None),
+            both_directions=getattr(args, "tnv_both_directions", False),
+            stencil=getattr(args, "tnv_stencil", '6'),
+        )
+        tnv_prior = OperatorCompositionFunction(vtv, bo)
+
+        # Apply TNV weighting
+    
+
+        priors.append(tnv_prior)
+
+    # Modality-specific TV priors
+    if getattr(args, "use_modality_specific_priors", False):
+        # Get gamma weights (these should already be scaled by gradient energy scaling in main())
+        gamma_pet = getattr(args, "gamma_pet", 0.0)
+        gamma_spect = getattr(args, "gamma_spect", 0.0)
+
+        if gamma_pet > 0 or gamma_spect > 0:
+            # Create separate kappa weights for modality-specific priors using gamma weights
+            tv_kappas = EnhancedBlockDataContainer(
+                initial_estimates[0].get_uniform_copy(gamma_pet),
+                initial_estimates[1].get_uniform_copy(gamma_spect),
+            )
+
+            # Apply base kappa weights
+            for i, el in enumerate(tv_kappas.containers):
+                el.fill(kappas.containers[i] * el)
+
+            if getattr(args, "prior", "tv") == "rdp":
+                combined_tv = WeightedRDP(
+                    initial_estimates,
+                    tv_kappas,
+                    epsilon=getattr(args, "delta_tv"),
+                    anatomical=umap if args.directional_tv else None,
+                    stencil=getattr(args, "tv_stencil", '6'),
+                    both_directions=getattr(args, "tv_both_directions", False),
+                )
+            else:
+                combined_tv = WeightedTotalVariation(
+                    initial_estimates,
+                    tv_kappas,
+                    delta=getattr(args, "delta_tv"),
+                    anatomical=umap if args.directional_tv else None,
+                    stencil=getattr(args, "tv_stencil", '6'),
+                    both_directions=getattr(args, "tv_both_directions", False),
+                )
+
+            combined_tv_prior = OperatorCompositionFunction(combined_tv, bo)
+            priors.append(combined_tv_prior)
+
+    # Combine priors
+    if not priors:
+        raise ValueError(
+            "No priors enabled. Set use_tnv_prior=True or enable TV priors with gamma > 0"
+        )
+    else:
+        return priors

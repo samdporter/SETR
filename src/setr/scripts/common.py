@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+from types import MethodType
 
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.operators import (
@@ -77,18 +78,33 @@ def get_resampling_operators(pet_data: dict, spect_data: dict):
     )
 
 
-def attach_prior_hessian(prior):
-    """Attach Hessian diagonal method to prior if it doesn't exist."""
-    if not hasattr(prior, "inv_hessian_diag"):
-        logging.warning("Prior doesn't have inv_hessian_diag method - using identity")
+def attach_prior_hessian(prior, epsilon=0) -> None:
+    """Attach an inv_hessian_diag method to the prior function."""
 
-        def identity_hessian_diag(x, out=None):
-            if out is None:
-                return x.get_uniform_copy(1.0)
-            out.fill(1.0)
-            return out
+    def inv_hessian_diag(self, x, out=None, epsilon=epsilon):
+        ret = self.function.operator.adjoint(
+            self.function.function.inv_hessian_diag(
+                self.function.operator.direct(x),
+            )
+        )
+        ret = ret.abs()
+        if out is not None:
+            out.fill(ret)
+        return ret
 
-        prior.inv_hessian_diag = identity_hessian_diag
+    def hessian_diag(self, x, out=None, epsilon=epsilon):
+        ret = self.function.operator.adjoint(
+            self.function.function.hessian_diag(
+                self.function.operator.direct(x),
+            )
+        )
+        ret = ret.abs()
+        if out is not None:
+            out.fill(ret)
+        return ret
+
+    prior.inv_hessian_diag = MethodType(inv_hessian_diag, prior)
+    prior.hessian_diag = MethodType(hessian_diag, prior)
 
 
 def get_shift_operators(pet_data):

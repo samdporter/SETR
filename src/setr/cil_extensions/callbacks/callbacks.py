@@ -143,6 +143,6 @@ class SubsetValueCallback(Callback):
             self.subset_values.at[algo.iteration, f"Subset {i}"] = function(algo.solution)
         # add a sum at first column
         self.subset_values.at[algo.iteration, "Sum"] = sum(
-            [function(algo.solution) for function in func_list]
+            function(algo.solution) for function in func_list
         )
         self.subset_values.to_csv(f"{self.filename}.csv")

@@ -42,6 +42,9 @@ from setr.scripts.dtnv_common import (
     get_probabilities,
     get_s_inv_from_objs,
     normalise_kappa_squares,
+    gradient_energy_scale_sirf,
+    get_prior,
+    apply_gradient_energy_scaling,
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
@@ -98,113 +101,6 @@ def prepare_data(args):
             break
 
     return ct, pet_data, spect_data
-
-
-def get_prior(
-    args,
-    ct,
-    pet_data,
-    spect_data,
-    initial_estimates,
-    spect2pet,
-    kappas=None,
-):
-    """
-    Set up the prior function for image reconstruction.
-
-    Supports three types of priors that can be used independently or combined:
-    - PET TV prior (weighted by gamma_pet)
-    - SPECT TV prior (weighted by gamma_spect)
-    - TNV vectorial prior (weighted by gamma_tnv, uses alpha/beta for kappa weighting)
-
-    Each prior can have independent directional settings.
-
-    Returns:
-        prior: The constructed prior function (SumFunction if multiple priors).
-        bo: The main block operator used for TNV prior.
-    """
-    bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),  # pet2pet
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),  # zero_spect2pet
-        ZeroOperator(pet_data["initial_image"]),  # zero_pet2pet
-        spect2pet,  # spect2pet
-        shape=(2, 2),
-    )
-
-    if kappas is None:
-        kappas = EnhancedBlockDataContainer(
-            pet_data["initial_image"].get_uniform_copy(1),
-            spect_data["initial_image"].get_uniform_copy(1),
-        )
-    else:
-        kappas = bo.direct(kappas)
-
-    # multiply first kappa by alpha/beta for TNV prior
-    for i, (ab, el) in enumerate(zip([args.alpha, args.beta], kappas.containers)):
-        kappas.containers[i].fill(float(ab) * el)
-
-    priors = []
-
-    # TNV (vectorial) prior
-    if getattr(args, "use_tnv_prior", True) and getattr(args, "gamma_tnv", 1.0) > 0:
-        vtv = WeightedVectorialTotalVariation(
-            bo.direct(initial_estimates),
-            kappas,
-            args.delta,
-            anatomical=ct,
-            stable=True,
-            tail_singular_values=args.tail_singular_values,
-            both_directions=getattr(args, "tnv_both_directions", args.both_directions),
-            stencil=getattr(args, "tnv_stencil", args.stencil),
-        )
-        tnv_prior = OperatorCompositionFunction(vtv, bo)
-
-        # Apply TNV weighting
-        gamma_tnv = getattr(args, "gamma_tnv", 1.0)
-        if gamma_tnv != 1.0:
-            tnv_prior = ScaledFunction(tnv_prior, gamma_tnv)
-
-        priors.append(tnv_prior)
-
-    # Modality-specific TV priors (operates on both modalities with separate weights)
-    if getattr(args, "use_modality_specific_priors", False):
-        # Create combined weights for both modalities
-        pet_weight_value = getattr(args, "gamma_pet", 0.0)
-        spect_weight_value = getattr(args, "gamma_spect", 0.0)
-
-        combined_weights = bo.direct(initial_estimates).get_uniform_copy(0.0)
-        combined_weights.containers[0].fill(pet_weight_value)  # PET component
-        combined_weights.containers[1].fill(spect_weight_value)  # SPECT component
-
-        if getattr(args, "prior", "tv") == "rdp":
-            combined_tv = WeightedRDP(
-                bo.direct(initial_estimates),
-                combined_weights,
-                getattr(args, "delta_tv", args.delta),
-                anatomical=ct,
-            )
-        else:
-            combined_tv = WeightedTotalVariation(
-                bo.direct(initial_estimates),
-                combined_weights,
-                getattr(args, "delta_tv", args.delta),
-                anatomical=ct,
-            stencil=getattr(args, "tv_stencil", args.stencil),
-            both_directions=getattr(args, "tv_both_directions", args.both_directions),
-        )
-
-        combined_tv_prior = OperatorCompositionFunction(combined_tv, bo)
-        priors.append(combined_tv_prior)
-
-    # Combine priors
-    if not priors:
-        raise ValueError(
-            "No priors enabled. Set use_tnv_prior=True or enable TV priors with gamma > 0"
-        )
-    elif len(priors) == 1:
-        return priors[0], priors
-    else:
-        return SumFunction(*priors), priors
 
 
 def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets):
@@ -270,6 +166,7 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     ]
 
     _, gauss = get_filters()
+    
     if args.use_kappa:
         kappa = get_kappa_squareds(
             [pet_obj_funs, spect_obj_funs],
@@ -286,47 +183,24 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     return all_funs, s_inv, kappa
 
 
-def main() -> None:
+def main(args) -> None:
     """Main function to execute the image reconstruction algorithm."""
     configure_logging()
 
-    # Redirect messages if needed.
-    MessageRedirector()
-
     # Data preparation.
-    ct, pet_data, spect_data = prepare_data(args)
-
-    # find alpha weighting using dynamic range of the initial images (95th percentile)
-    pet_max = np.percentile(pet_data["initial_image"].as_array(), 95)
-    spect_max = np.percentile(spect_data["initial_image"].as_array(), 95)
-    args.alpha = args.alpha * spect_max / pet_max
-    logging.info(f"Setting alpha to {args.alpha} based on initial images")
+    umap, pet_data, spect_data = prepare_data(args)
+    
+    # Set up resampling operators.
+    spect2pet = get_resampling_operators(pet_data, spect_data)
 
     initial_estimates = EnhancedBlockDataContainer(
         pet_data["initial_image"], spect_data["initial_image"]
     )
-
+    
+    
     for i, image in enumerate(initial_estimates.containers):
         image.write(os.path.join(args.output_path, f"initial_image_{i}.hv"))
-
-        # Set delta (smoothing parameter) if not provided
-    if args.delta is None:
-        # set delta as 1000 times smaller than maximum of the minimum dynamic
-        # range of initial images
-        # multiplied by the weighted alpha/beta
-        args.delta = (
-            min(
-                args.alpha * initial_estimates.containers[0].max(),
-                args.beta * initial_estimates.containers[1].max(),
-            )
-            / 1e3
-        )
-
-    save_args(args, "args.csv")
-
-    # Set up resampling operators.
-    spect2pet = get_resampling_operators(pet_data, spect_data)
-
+        
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
@@ -352,8 +226,40 @@ def main() -> None:
         get_spect_am_with_res,
         num_subsets,
     )
+    
+    bo = BlockOperator(
+        IdentityOperator(pet_data["initial_image"]),  # pet2pet
+        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),  # zero_spect2pet
+        ZeroOperator(pet_data["initial_image"]),  # zero_pet2pet
+        spect2pet,  # spect2pet
+        shape=(2, 2),
+    )
+    
+    kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
+    combined = bo.direct(initial_estimates)
+    scale = gradient_energy_scale_sirf(
+        combined[0], combined[1], 
+        mask=None,
+        kappa_pet=kappas.containers[0] if kappas else None,
+        kappa_spect=kappas.containers[1] if kappas else None,
+    )
+    # Apply consistent scaling to all prior weights
+    apply_gradient_energy_scaling(args, scale)
 
-    kappas = normalise_kappa_squares(kappas)
+    # Set delta (smoothing parameter) if not provided
+    if args.delta is None:
+        # set delta as 1000 times smaller than maximum of the minimum dynamic
+        # range of initial images
+        # multiplied by the weighted alpha/beta
+        args.delta = (
+            min(
+                args.alpha * initial_estimates.containers[0].max(),
+                args.beta * initial_estimates.containers[1].max(),
+            )
+            / 1e3
+        )
+
+    save_args(args, "args.csv")
 
     for i, kappa in enumerate(kappas.containers):
         logging.info(f"Writing kappa {i} with max {kappa.max()}")
@@ -364,18 +270,13 @@ def main() -> None:
         priors_list = []
     else:
         # Set up the prior.
-        prior, priors_list = get_prior(
-            args, ct, pet_data, spect_data, initial_estimates, spect2pet, kappas
-        )
-        # Scale and attach Hessian to the prior if needed.
-        prior = -1 / len(all_funs) * prior
-        attach_prior_hessian(prior)
-
-        # Also scale and attach Hessian to individual priors for preconditioner
+        priors_list = get_prior(
+            args, umap, combined, bo, kappas
+        )        
         for i, p in enumerate(priors_list):
-            priors_list[i] = -1 / len(all_funs) * p
+            priors_list[i] = 1 / len(all_funs) * p
             attach_prior_hessian(priors_list[i])
-
+        prior = -SumFunction(*priors_list)
         for i, fun in enumerate(all_funs):
             all_funs[i] = SumFunction(fun, prior)
 
@@ -383,7 +284,9 @@ def main() -> None:
 
     # Set up preconditioners.
     precond = get_preconditioners(
-        args, s_inv, all_funs, update_interval, priors_list, initial_estimates
+        args, s_inv, all_funs, 
+        update_interval, priors_list, 
+        initial_estimates
     )
 
     probs = get_probabilities(args, num_subsets, update_interval)
@@ -437,7 +340,7 @@ if __name__ == "__main__":
         logging.info("Profiling is enabled. This may slow down the execution.")
         profiler = cProfile.Profile()
         profiler.enable()
-        main()
+        main(args)
         profiler.disable()
         profiler.dump_stats(f"{args.output_path}/profile_data.prof")
 
@@ -449,5 +352,5 @@ if __name__ == "__main__":
             ps.print_stats(None)  # print *every* function
     else:
         logging.info("Profiling disabled.")
-        main()
+        main(args)
     logging.info("Execution completed.")
