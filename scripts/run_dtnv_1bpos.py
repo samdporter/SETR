@@ -125,7 +125,7 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     )
     _, _, spect_obj_funs = partitioner.data_partition(
         spect_data["acquisition_data"],
-        spect_data["additive"],
+        spect_data["additive"] if args.use_scatter else spect_data["additive"].get_uniform_copy(0),
         spect_data["acquisition_data"].get_uniform_copy(1),
         num_batches=num_subsets[1],
         mode="staggered",

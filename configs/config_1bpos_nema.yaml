@@ -8,6 +8,7 @@ use_kappa: true
 initial_step_size: 0.1
 relaxation_eta: 0.02
 both_directions: false
+use_scatter: true
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true

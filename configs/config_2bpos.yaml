@@ -4,6 +4,7 @@ num_epochs: 50
 initial_step_size: 0.1
 update_interval: null
 relaxation_eta: 0.02
+use_scatter: true
 
 #== Regularisation
 no_prior: false
