@@ -31,7 +31,7 @@ from .small_eig import (
     eigenvalsh_2x2,
     eigenvecsh_2x2,
     eigenvalsh_3x3_cardano,
-    eigenvecsh_3x3_cardano
+    eigenvecsh_3x3_cardano,
 )
 
 from .svd_free_hessian import (

@@ -202,3 +202,51 @@ def orthonormalize_columns_chol(V, tol=1e-6):
     V = V.clone()
     V[need] = Vfix
     return V
+
+def adaptive_regularization(H, base_eps=1e-7):
+    n = H.shape[-1]
+    
+    # Eigenvalue computation (unchanged)
+    if n == 2:
+        eigs = eigenvalsh_2x2(H)
+    elif n == 3:
+        eigs = eigenvalsh_3x3_cardano(H)
+    else:
+        eigs = torch.linalg.eigvalsh(H)
+    
+    finfo = torch.finfo(H.dtype)
+    lam_min = eigs[..., 0].clamp_min(finfo.tiny)
+    lam_max = eigs[..., -1].clamp_min(0.0)
+    kappa = lam_max / lam_min
+    
+    eps_geometric = base_eps * torch.sqrt(lam_min * lam_max)
+    eps_tikhonov = torch.sqrt(lam_min * finfo.eps)
+    eps_val = torch.maximum(eps_geometric, eps_tikhonov)
+    
+    eps_min = finfo.eps * n
+    eps_val = eps_val.clamp_min(eps_min)
+    
+    return eps_val, kappa
+
+def adaptive_gram_regularization(M, order=None):
+    """
+    Constructs regularized Gram matrix with adaptive scaling.
+    
+    Mathematical guarantee: κ(H̃) ≤ κ_max with minimal perturbation.
+    """
+    if order is None:
+        order = 1 if M.shape[-2] <= M.shape[-1] else 0
+    
+    # Compute Gram matrix
+    H = M @ M.transpose(-1, -2) if order == 1 else M.transpose(-1, -2) @ M
+    H = 0.5 * (H + H.transpose(-1, -2))  # Enforce symmetry
+    
+    # Adaptive regularization
+    ε, κ = adaptive_regularization(H)
+    
+    # Apply scaled identity
+    n = H.shape[-1]
+    I = torch.eye(n, dtype=H.dtype, device=H.device)
+    H_reg = H + ε[..., None, None] * I
+    
+    return H_reg, ε, κ

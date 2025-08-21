@@ -31,7 +31,8 @@ from .small_eig import (
     eigenvalsh_2x2,
     eigenvecsh_2x2,
     eigenvalsh_3x3_cardano,
-    eigenvecsh_3x3_cardano
+    eigenvecsh_3x3_cardano,
+    adaptive_gram_regularization,
 )
 
 from .svd_free_hessian import hessian_components_svd_free_small
@@ -54,93 +55,97 @@ def choose_order(M):
 
 def norm(M, func, smoothing_func, order, eps, tail=None):
     """
-    Compute sum_k func( smoothing_func(σ_k) ) per block, in batch.
-    σ are extracted via eig of the appropriate Gram matrix.
-    Returns tensor of shape (...,) (one value per block).
+    Enhanced norm computation with adaptive regularization.
     """
-    Hsym = M.transpose(-1, -2) @ M if order == 0 else M @ M.transpose(-1, -2)
-    Hsym = Hsym.contiguous()
-    Hsym = add_identity(Hsym)
-
-    last = Hsym.shape[-1]
-    if last == 2:
-        eig = eigenvalsh_2x2(Hsym)
-    elif last == 3:
-        eig = eigenvalsh_3x3_cardano(Hsym)
+    # Get adaptively regularized Gram matrix
+    H_reg, reg_scale, kappa = adaptive_gram_regularization(M, order)
+    
+    # Extract eigenvalues
+    n = H_reg.shape[-1]
+    if n == 2:
+        eig = eigenvalsh_2x2(H_reg)
+    elif n == 3:
+        eig = eigenvalsh_3x3_cardano(H_reg)
     else:
-        raise ValueError("Only 2×2 or 3×3 blocks supported")
-
-    sigma = torch.sqrt(eig)  # (..., r)
-
+        eig = torch.linalg.eigvalsh(H_reg)
+    
+    # Compensate for regularization in singular values
+    # Mathematical justification: σ²(A) + ε = λ(H̃)
+    # Therefore: σ(A) = √(max(λ(H̃) - ε, 0))
+    sigma_squared = torch.clamp(eig - reg_scale[..., None], min=0)
+    sigma = torch.sqrt(sigma_squared)
+    
+    # Apply smoothing and norm
     mask = get_mask(sigma, tail) if tail is not None else torch.ones_like(sigma)
     s_smoothed = smoothing_func(sigma * mask, eps)
-    s_to_norm = s_smoothed + sigma * (1 - mask)  # blend head through
-    return func(s_to_norm)  # sum along σ dim inside func
+    s_to_norm = s_smoothed + sigma * (1 - mask)
+    
+    return func(s_to_norm)
 
 
 def norm_func(M, func, tau, order=0, tail=None, blend_head: bool = True):
     """
-    Apply elementwise map φ on σ via eig of Gram matrix, then reconstruct:
-      order=1:  U diag(φ(σ)/σ) U^T M   with H = M M^T
-      order=0:  M V diag(φ(σ)/σ) V^T   with H = M^T M
-    Tail semantics:
-      - blend_head=True  : S_final = σ*(1-mask) + φ(σ)*mask
-      - blend_head=False : S_final =           φ(σ)*mask
-    Works batched on inputs (..., M, d).
+    Apply elementwise map φ on σ via eig of Gram matrix.
+    Mathematical correction: Account for regularization in singular value extraction.
     """
-    H = M @ M.transpose(-1, -2) if order == 1 else M.transpose(-1, -2) @ M
-    H = add_identity(H)
-
+    # Use adaptive regularization function from earlier
+    H, epsilon_used, kappa = adaptive_gram_regularization(M, order)
+    
     n = H.shape[-1]
     if n == 2:
-        S2 = eigenvalsh_2x2(H)
-        B  = eigenvecsh_2x2(H, S2)   # U if order=1, V if order=0
+        S2_reg = eigenvalsh_2x2(H)
+        B = eigenvecsh_2x2(H, S2_reg)
     elif n == 3:
-        S2 = eigenvalsh_3x3_cardano(H)
-        B  = eigenvecsh_3x3_cardano(H, S2)
+        S2_reg = eigenvalsh_3x3_cardano(H)
+        B = eigenvecsh_3x3_cardano(H, S2_reg)
     else:
         raise ValueError(f"Only 2×2 or 3×3 blocks supported, got {n}.")
-
-    S = torch.sqrt(S2)               # (..., r)
-    S_map = func(S, tau)             # φ(σ)
-
+    
+    # Mathematical correction: λ(H̃) = σ²(M) + ε
+    S2_true = torch.clamp(S2_reg - epsilon_used[..., None], min=0)
+    S = torch.sqrt(S2_true)
+    
+    S_map = func(S, tau)
+    
     if tail is not None:
-        mask = get_mask(S, tail)     # 1 on smallest tail
+        mask = get_mask(S, tail)
         S_final = S*(1 - mask) + S_map*mask if blend_head else S_map*mask
     else:
         S_final = S_map
-
+    
     tiny = torch.finfo(S.dtype).eps
-    scale = torch.where(S > 0, S_final / torch.clamp(S, min=tiny), torch.zeros_like(S))  # (..., r)
-
-    D = (B * scale[..., None, :]) @ B.transpose(-1, -2)  # (..., n, n)
+    scale = torch.where(S > 0, S_final / torch.clamp(S, min=tiny), torch.zeros_like(S))
+    
+    D = (B * scale[..., None, :]) @ B.transpose(-1, -2)
     return D @ M if order == 1 else M @ D
 
 
 def sigma_map(M, elem_func, tau, order=0, tail=None, masked_only=True):
     """
-    Return elementwise mapping of singular values σ of M without SVD:
-      σ = sqrt(eig(Hsym)), Hsym = M M^T (order=1) or M^T M (order=0).
-    Returns (..., r). If tail is set:
-      - masked_only=True  : keep ONLY smallest `tail` σ (others → 0)
-      - masked_only=False : blend head through (σ on head, elem on tail)
+    Return elementwise mapping of singular values σ of M.
+    Mathematical correction: Account for Gram matrix regularization.
+    
+    Definition: σᵢ(M) = √(λᵢ(H̃) - ε) where H̃ = Gram(M) + εI
     """
-    H = M @ M.transpose(-1, -2) if order == 1 else M.transpose(-1, -2) @ M
-    H = add_identity(H)
-
-    last = H.shape[-1]
+    # Apply adaptive regularization using previously defined function
+    H_reg, epsilon_used, kappa = adaptive_gram_regularization(M, order)
+    
+    last = H_reg.shape[-1]
     if last == 2:
-        S2 = eigenvalsh_2x2(H)
+        S2_reg = eigenvalsh_2x2(H_reg)
     elif last == 3:
-        S2 = eigenvalsh_3x3_cardano(H)
+        S2_reg = eigenvalsh_3x3_cardano(H_reg)
     else:
         raise ValueError(f"Only 2×2 or 3×3 supported, got {last}×{last}.")
-
-    S = torch.sqrt(S2)  # (..., r)
-
+    
+    # Mathematical correction: λ(H̃) = σ²(M) + ε
+    # Therefore: σ²(M) = λ(H̃) - ε
+    S2_true = torch.clamp(S2_reg - epsilon_used[..., None], min=0)
+    S = torch.sqrt(S2_true)
+    
     mask = get_mask(S, tail) if tail is not None else torch.ones_like(S)
-    mapped = elem_func(S, tau)  # elementwise on σ
-
+    mapped = elem_func(S, tau)
+    
     if tail is not None and masked_only:
         return mapped * mask
     elif tail is not None:
