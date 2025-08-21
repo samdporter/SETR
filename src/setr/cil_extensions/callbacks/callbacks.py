@@ -1,3 +1,4 @@
+import logging
 import pandas as pd
 from cil.framework import BlockDataContainer
 from cil.optimisation.utilities import callbacks
@@ -54,7 +55,6 @@ class SaveKernelisedImageCallback(Callback):
     def __call__(self, algo):
         if algo.iteration % self.interval != 0:
             return
-        # Save the alpha image
         image = self.kernel_op.recon.compute_kernelised_image(algo.solution, algo.solution)
         image.write(f"{self.filename}_{algo.iteration}.hv")
 
@@ -63,7 +63,6 @@ class SaveGradientUpdateCallback(Callback):
     """
     CIL Callback that saves the gradient update to disk.
     """
-
     def __init__(self, filename, interval, **kwargs):
         super().__init__(interval, **kwargs)
         self.filename = filename
@@ -79,9 +78,12 @@ class SaveGradientUpdateCallback(Callback):
 
 
 class PrintObjectiveCallback(Callback):
+    """
+    CIL Callback that prints the objective function value to the console.
+    """
     def __call__(self, algo):
         if algo.iteration % algo.update_objective_interval == 0:
-            print(f"iter: {algo.iteration} objective: {algo.objective[-1]}")
+            logging.info(f"iter: {algo.iteration} objective: {algo.objective[-1]}")
 
 
 class SaveObjectiveCallback(Callback):

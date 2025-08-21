@@ -71,7 +71,7 @@ class BSREMPreconditioner(PreconditionerWithInterval):
         freeze_iter=np.inf,
         epsilon=None,
         max_vals=None,
-        smooth=True,
+        smooth=False,
     ):
         super().__init__(update_interval, freeze_iter)
         self.s_inv = s_inv
@@ -171,8 +171,8 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
     def __init__(
         self,
         preconds,
-        p=1e-2,  # Lehmer order: p=0→harmonic, p=1→arithmetic, p>1→toward max
-        epsilon=1e-6,
+        p=1e-1,  # Lehmer order: p=0→harmonic, p=1→arithmetic, p>1→toward max
+        epsilon=0,
         update_interval=np.inf,
         freeze_iter=np.inf,
     ):

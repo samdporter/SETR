@@ -6,7 +6,6 @@ def ista_update_step(self) -> None:
 
     .. math:: x_{k+1} = \mathrm{prox}_{\alpha g}(x_{k} - \alpha\nabla f(x_{k}))
     """
-    logging.info("Performing ISTA update step")
     self.f.gradient(self.x_old, out=self.gradient_update)
     try:
         step_size = self.step_size_rule.get_step_size(self)
