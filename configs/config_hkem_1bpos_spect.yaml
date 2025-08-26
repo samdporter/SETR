@@ -5,17 +5,17 @@
 modality: "SPECT"  # Options: "PET", "SPECT"
 method: "ista"   # Options: "kosmaposl", "ista"
 guidance: "attenuation"  # Options: "attenuation", "emission"
+use_scatter: true
 
 # Data paths
-data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
-spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
-output_path: "/home/sam/working/synergistic_recon/results/hkem_spect_1bpos"
+data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/SPECT"
+output_path: "/home/sam/working/synergistic_recon/results/hkem_spect_1bpos_patient_scat"
 working_path: "/home/sam/working/synergistic_recon/tmp"
 
 # Algorithm parameters
 num_subsets: 9
 num_epochs: 30
-step_size: 0.1
+step_size: 1
 sampling: "sequential"  # Options: "sequential", "staggered"
 
 # Kernel operator parameters

@@ -49,9 +49,7 @@ def prepare_data(args):
 
         # Get guidance image
         if args.guidance == "emission":
-            # Load SPECT data for emission guidance
-            spect_data = get_spect_data(args.spect_data_path)
-            guidance = spect_data["initial_image"]
+            guidance = data["spect"]
         else:
             guidance = get_attn_and_normalise(args)
     else:  # SPECT
@@ -94,7 +92,7 @@ def run_ista(args, data, guidance, hyperparams):
     # Partition data
     _, _, objs = partitioner.data_partition(
         data["acquisition_data"],
-        data["additive"],
+        data["additive"] if args.use_scatter else data["additive"].get_uniform_copy(0),
         data["normalisation"],
         args.num_subsets,
         mode=args.sampling,
@@ -121,7 +119,7 @@ def run_ista(args, data, guidance, hyperparams):
     for obj in objs:
         sens = obj.get_subset_sensitivity(0)
         sens = sens.maximum(0)
-        sensitivities.append(sens)
+        sensitivities.append(sens*args.num_subsets)  # Scale by number of subsets
 
     # Create preconditioner
     precond = SubsetKernelisedEMPreconditioner(
@@ -199,9 +197,6 @@ def run_ista(args, data, guidance, hyperparams):
 def main(args):
     """Main function to run HKEM reconstruction."""
     configure_logging()
-
-    # Redirect messages
-    MessageRedirector()
 
     # Save arguments
     save_args(args, "hkem_args.csv")

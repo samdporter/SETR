@@ -268,9 +268,6 @@ class WeightedVectorialTotalVariation(Function):
         x_arr = self.bdc2a.direct(x)
         diag_arr = self._preconditioner_weights_core_slow(x_arr)
 
-        # According to the derivation, no extra weighting is needed here.
-        # The weights `w` were correctly applied to the input of the SVD.
-
         result = self.bdc2a.adjoint(diag_arr)
         if out is not None:
             out.fill(result)
@@ -292,11 +289,6 @@ class WeightedVectorialTotalVariation(Function):
         # 3. Convert back to BlockDataContainer
         result = self.bdc2a.adjoint(inv_arr)
         if out is not None:
-            # Note: This operation does not apply to the input 'x', but returns a scaling array.
-            # The typical use is P^-1 * g. So here we return the scaling array.
-            # The calling function should multiply this by the gradient.
-            # To match the expected 'Function' API, perhaps it should act on x?
-            # Assuming the goal is to return the inverted diagonal P^-1 itself.
             out.fill(result)
             return out
         return result

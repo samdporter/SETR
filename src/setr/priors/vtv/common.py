@@ -127,6 +127,3 @@ def add_identity(H, rel=1e-7):
     jitter = rel * (tr / n)                        # scale with matrix size
     I = torch.eye(n, dtype=H.dtype, device=H.device).expand_as(H)
     return (H + jitter[..., None, None] * I).contiguous()
-
-
-

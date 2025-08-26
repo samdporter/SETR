@@ -4,32 +4,31 @@ num_epochs: 50
 initial_step_size: 0.1
 update_interval: null
 relaxation_eta: 0.02
-use_scatter: true
+use_scatter: false
 
 #== Regularisation
 no_prior: false
 use_kappa: true
+delta: null # smoothing parameter for TNV / TV
 
 # Modality-specific TV prior settings
-use_modality_specific_priors: true
+use_modality_specific_priors: false
 prior: "tv" # can be tv or rdp
-gamma_pet: 10.0
+gamma_pet: 100.0
 gamma_spect: 10.0
 tv_stencil: "6" # can be 6, 18, or 26
-delta_tv: null  # defaults to delta if not set
 directional_tv: true
 tv_both_directions: false
 
 # TNV (vectorial) prior settings
-use_tnv_prior: false
-gamma_tnv: 10.0
-alpha: 1
-beta: 1
-delta: null
+use_tnv_prior: true
+gamma_tnv: 1.0
+alpha: 100.0
+beta: 10.0
 tnv_stencil: "6"
+directional_tnv: true
 tnv_both_directions: false
 tail_singular_values: null
-directional_tnv: true
 stable: true
 
 #== Image processing

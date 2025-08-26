@@ -132,7 +132,7 @@ def get_preconditioners(
         np.inf,
         epsilon=0,
         max_vals=max_vals,
-        smooth=False,
+        smooth=True,
     )
     if priors_list is None:
         return bsrem_precond
@@ -150,7 +150,7 @@ def get_preconditioners(
 
     return LehmerMeanPreconditioner(
         [bsrem_precond, *prior_precond],
-        update_interval=update_interval,
+        update_interval=1,
         freeze_iter=len(all_funs) * 10,
         epsilon=0,
     )
