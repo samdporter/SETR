@@ -82,26 +82,20 @@ def attach_prior_hessian(prior, epsilon=0) -> None:
     """Attach an inv_hessian_diag method to the prior function."""
 
     def inv_hessian_diag(self, x, out=None, epsilon=epsilon):
-        ret = self.function.operator.adjoint(
-            self.function.function.inv_hessian_diag(
-                self.function.operator.direct(x),
+        ret = self.operator.adjoint(
+            self.function.inv_hessian_diag(
+                self.operator.direct(x),
             )
         )
-        ret = ret.abs()
-        if out is not None:
-            out.fill(ret)
-        return ret
+        return ret.abs(out=out)
 
     def hessian_diag(self, x, out=None, epsilon=epsilon):
-        ret = self.function.operator.adjoint(
-            self.function.function.hessian_diag(
-                self.function.operator.direct(x),
+        ret = self.operator.adjoint(
+            self.function.hessian_diag(
+                self.operator.direct(x),
             )
         )
-        ret = ret.abs()
-        if out is not None:
-            out.fill(ret)
-        return ret
+        return ret.abs(out=out)
 
     prior.inv_hessian_diag = MethodType(inv_hessian_diag, prior)
     prior.hessian_diag = MethodType(hessian_diag, prior)

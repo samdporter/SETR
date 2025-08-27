@@ -39,7 +39,7 @@ class ScalingOperator(LinearOperator):
         if out is None:
             return x * self.scale
         else:
-            out.fill(x * self.scale)
+            x.multiply(self.scale, out=out)
         return out
 
     def adjoint(self, x, out=None):

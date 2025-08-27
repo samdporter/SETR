@@ -16,6 +16,6 @@ class BlockIndicatorBox(Function):
     def proximal(self, x, tau, out=None):
         if out is None:
             out = x.copy()
-        out.fill(x.maximum(self.lower))
-        out.fill(out.minimum(self.upper))
+        x.maximum(self.lower, out=out)
+        out.minimum(self.upper, out=out)
         return out

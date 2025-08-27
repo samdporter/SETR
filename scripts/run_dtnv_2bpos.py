@@ -343,15 +343,8 @@ def main(args) -> None:
             args, umap, combined, bo, kappas
         )        
         for i, p in enumerate(priors_list):
-            priors_list[i] = -1 / len(all_funs) * p
             attach_prior_hessian(priors_list[i])
-        prior = SumFunction(*priors_list)
-
-        # Also scale and attach Hessian to individual priors for preconditioner
-
-
-        for i, fun in enumerate(all_funs):
-            all_funs[i] = SumFunction(fun, prior)
+        prior = -SumFunction(*priors_list)
 
     update_interval = len(all_funs)
 
@@ -360,12 +353,14 @@ def main(args) -> None:
 
     probs = get_probabilities(args, args.num_subsets, update_interval, bpos=2)
 
-    f_obj = -SVRGFunction(
+    f_obj = SVRGFunction(
         all_funs,
         sampler=Sampler.random_with_replacement(
             len(all_funs),
             prob=probs,
         ),
+        snapshot_update_interval=update_interval * 2,
+        store_gradients=True
     )
 
     # Set up step size
@@ -379,12 +374,15 @@ def main(args) -> None:
 
     # Run algorithm using shared function
     subiterations = args.num_epochs * len(all_funs)
-    bsrem = get_algorithm(
-        initial_estimates, f_obj, precond, step_size, update_interval, subiterations, callbacks
+    algo = get_algorithm(
+        initial_estimates, 
+        -SumFunction(f_obj, prior) if prior else -f_obj,
+        precond, step_size, 
+        update_interval, subiterations, callbacks
     )
 
     # Save results using shared function
-    save_results(bsrem, args)
+    save_results(algo, args)
 
     logging.info("Reconstruction complete")
 

@@ -123,15 +123,12 @@ def get_preconditioners(
     priors_list: Any,
     initial_estimates: EnhancedBlockDataContainer,
 ) -> Any:
-    """Set up preconditioners for 2bpos."""
-    max_vals = [el.max() for el in initial_estimates.containers]
 
     bsrem_precond = BSREMPreconditioner(
         s_inv,
         1,
         np.inf,
         epsilon=0,
-        max_vals=max_vals,
         smooth=True,
     )
     if priors_list is None:
@@ -141,7 +138,6 @@ def get_preconditioners(
         ImageFunctionPreconditioner(
             p.inv_hessian_diag,
             1.0,
-            1,
             freeze_iter=np.inf,
             epsilon=0,
         )
@@ -157,9 +153,11 @@ def get_preconditioners(
 
 
 def get_probabilities(args, num_subsets, update_interval, bpos=1):
-    """Get sampling probabilities - 1bpos version."""
-    pet_probs = [1 / update_interval] * num_subsets[0] * bpos
-    spect_probs = [1 / update_interval] * num_subsets[1]
+    
+    assert update_interval == num_subsets[0]*bpos + num_subsets[1]
+    pet_probs   = [1/update_interval] * (num_subsets[0]*bpos)
+    spect_probs = [1/update_interval] * num_subsets[1]
+
     probs = pet_probs + spect_probs
     assert abs(sum(probs) - 1) < 1e-10, (
         f"Probabilities do not sum to 1: {sum(probs)}. "
@@ -212,33 +210,6 @@ def normalise_kappa_squares(kappa_block, pct=95):
     return kappa_block
 
 
-def attach_prior_hessian(prior, epsilon=0) -> None:
-    """Attach an inv_hessian_diag method to the prior function."""
-
-    def inv_hessian_diag(self, x, out=None, epsilon=epsilon):
-        ret = self.function.operator.adjoint(
-            self.function.function.inv_hessian_diag(
-                self.function.operator.direct(x),
-            )
-        )
-        ret = ret.abs()
-        if out is not None:
-            out.fill(ret)
-        return ret
-
-    def hessian_diag(self, x, out=None, epsilon=epsilon):
-        ret = self.function.operator.adjoint(
-            self.function.function.hessian_diag(
-                self.function.operator.direct(x),
-            )
-        )
-        ret = ret.abs()
-        if out is not None:
-            out.fill(ret)
-        return ret
-
-    prior.inv_hessian_diag = MethodType(inv_hessian_diag, prior)
-    prior.hessian_diag = MethodType(hessian_diag, prior)
 
 
 def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_funs):
@@ -472,7 +443,7 @@ def get_prior(
 
         # Apply base kappa weights
         for i, el in enumerate(tnv_kappas.containers):
-            el.fill(kappas.containers[i] * el)
+            el.multiply(kappas.containers[i], out=el)
 
         vtv = WeightedVectorialTotalVariation(
             initial_estimates,
@@ -506,13 +477,13 @@ def get_prior(
 
             # Apply base kappa weights
             for i, el in enumerate(tv_kappas.containers):
-                el.fill(kappas.containers[i] * el)
+                el.multiply(kappas.containers[i], out=el)
 
             if getattr(args, "prior", "tv") == "rdp":
                 combined_tv = WeightedRDP(
                     initial_estimates,
                     tv_kappas,
-                    epsilon=getattr(args, "delta_tv"),
+                    epsilon=getattr(args, "delta"),
                     anatomical=umap if args.directional_tv else None,
                     stencil=getattr(args, "tv_stencil", '6'),
                     both_directions=getattr(args, "tv_both_directions", False),
@@ -521,7 +492,7 @@ def get_prior(
                 combined_tv = WeightedTotalVariation(
                     initial_estimates,
                     tv_kappas,
-                    delta=getattr(args, "delta_tv"),
+                    delta=getattr(args, "delta"),
                     anatomical=umap if args.directional_tv else None,
                     stencil=getattr(args, "tv_stencil", '6'),
                     both_directions=getattr(args, "tv_both_directions", False),

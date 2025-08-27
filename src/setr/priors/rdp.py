@@ -444,11 +444,7 @@ class WeightedRDP(Function):
 
     def get_arr_and_fill(self, arg0, out):
         g_arr = arg0.detach().to("cpu").numpy()
-        result = self.bdc2a.adjoint(g_arr)
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
+        return self.bdc2a.adjoint(g_arr, out=out)
 
     def hessian_diag(self, x):
         X_arr = self.bdc2a.direct(x)

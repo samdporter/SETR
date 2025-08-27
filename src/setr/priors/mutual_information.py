@@ -118,11 +118,7 @@ class MutualInformationGradientPrior(Function):
         grad_full = torch.zeros((full_shape[0], 6), device=grad_flat.device, dtype=grad_flat.dtype)
         grad_full[idx] = grad_flat
         grad = grad_full.view(*self.jacobian.direct(self.bdc2a.direct(x)).shape)
-        result = self.bdc2a.adjoint(self.jacobian.adjoint(grad))
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
+        return self.bdc2a.adjoint(self.jacobian.adjoint(grad), out=out)
 
     # Manual gradient remains unchanged except uses whitened J internally:
     def _manual_gradient(self, J):
@@ -164,20 +160,12 @@ class MutualInformationGradientPrior(Function):
 
     def hessian_diag(self, x, out=None):
         arr = self.hessian_diag_arr(x)
-        res = self.bdc2a.adjoint(arr)
-        if out is not None:
-            out.fill(res)
-            return out
-        return res
+        return self.bdc2a.adjoint(arr, out=out)
 
     def inv_hessian_diag(self, x, out=None, epsilon=0.0):
         arr = self.hessian_diag_arr(x) + epsilon
         inv = torch.reciprocal(arr)
-        res = self.bdc2a.adjoint(inv)
-        if out is not None:
-            out.fill(res)
-            return out
-        return res
+        return self.bdc2a.adjoint(inv, out=out)
 
 
 class MutualInformationImagePrior(Function):
@@ -259,11 +247,7 @@ class MutualInformationImagePrior(Function):
         back = torch.zeros_like(V)
         back[idx] = grad_flat
         grad_full = back.view_as(self.bdc2a.direct(x))
-        result = self.bdc2a.adjoint(grad_full)
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
+        return self.bdc2a.adjoint(grad_full, out=out)
 
     def hessian_diag_arr(self, x):
         g = self.gradient(x)
@@ -273,24 +257,16 @@ class MutualInformationImagePrior(Function):
     def hessian_diag(self, x, out=None):
         arr = self.hessian_diag_arr(x)
         if arr.ndim == 3:
-            res = self.bdc2a.adjoint(arr)
+            return self.bdc2a.adjoint(arr, out=out)
         else:
             splits = torch.unbind(arr, dim=-1)
-            res = self.bdc2a.adjoint(torch.stack(splits, dim=-1))
-        if out is not None:
-            out.fill(res)
-            return out
-        return res
+            return self.bdc2a.adjoint(torch.stack(splits, dim=-1), out=out)
 
     def inv_hessian_diag(self, x, out=None, epsilon=0.0):
         arr = self.hessian_diag_arr(x) + epsilon
         inv = torch.reciprocal(arr)
         if arr.ndim == 3:
-            res = self.bdc2a.adjoint(inv)
+            return self.bdc2a.adjoint(inv, out=out)
         else:
             splits = torch.unbind(inv, dim=-1)
-            res = self.bdc2a.adjoint(torch.stack(splits, dim=-1))
-        if out is not None:
-            out.fill(res)
-            return out
-        return res
+            return self.bdc2a.adjoint(torch.stack(splits, dim=-1), out=out)

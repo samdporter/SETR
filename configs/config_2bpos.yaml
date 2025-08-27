@@ -1,10 +1,10 @@
 #== Reconstruction settings
 num_subsets: [9, 12]
-num_epochs: 50
+num_epochs: 10
 initial_step_size: 0.1
 update_interval: null
 relaxation_eta: 0.02
-use_scatter: false
+use_scatter: true
 
 #== Regularisation
 no_prior: false
@@ -22,14 +22,14 @@ tv_both_directions: false
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true
-gamma_tnv: 1.0
-alpha: 100.0
-beta: 10.0
-tnv_stencil: "6"
+gamma_tnv: 100.0
+alpha: 1.0
+beta: 1.0
+tnv_stencil: "26"
 directional_tnv: true
 tnv_both_directions: false
 tail_singular_values: null
-stable: true
+stable: false
 
 #== Image processing
 pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
@@ -50,4 +50,4 @@ working_path: "/home/sam/working/synergistic_recon/tmp"
 #== Miscellaneous
 save_images: true
 seed: null
-profile: false
+profile: true

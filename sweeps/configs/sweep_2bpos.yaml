@@ -5,10 +5,11 @@ script: "run_dtnv_2bpos.py"
 
 # SGE resource requirements
 sge:
-  runtime: "72:00:00"
-  memory: "95G"
-  cores: 4
+  runtime: "112:00:00"
+  memory: "60G"
+  cores: 1
   queue: null  # Use default queue
+  gpu: true
 
 # Parameter sweep settings
 parameters:
@@ -17,6 +18,6 @@ parameters:
 
 # Optional overrides for base config
 config_overrides:
-  num_epochs: 50
-  use_tof: true
+  num_epochs: 100
+  use_tof: false
   # Add other parameters you want to override

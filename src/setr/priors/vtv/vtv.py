@@ -90,12 +90,9 @@ class WeightedVectorialTotalVariation(Function):
         inner = w * self.vtv.gradient(U)  # the vtv.gradient already accounts for smoothing etc.
 
         ret = self.jacobian.adjoint(inner)  # shape (nx,ny,nz,M)
-        ret = self.bdc2a.adjoint(ret)
-        if out is not None:
-            out.fill(ret)
-            return out
-        return ret
-
+        
+        return self.bdc2a.adjoint(ret, out=out)
+    
     def _preconditioner_weights_core_fast(self, x_arr, eta: float = 0.7, epsilon: float = 1e-8):
         """
         Diagonal MM/IRLS preconditioner for (directional) TNV with a directional Jacobian:
@@ -182,11 +179,7 @@ class WeightedVectorialTotalVariation(Function):
         """
         x_arr = self.bdc2a.direct(x)                               # (nx,ny,nz,M)
         H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)   # torch tensor (...,M)
-        H_bdc = self.bdc2a.adjoint(H)                              # back to container type
-        if out is not None:
-            out.fill(H_bdc)
-            return out
-        return H_bdc
+        return self.bdc2a.adjoint(H, out=out)
 
     def _inv_hessian_diag_fast(self, x, eta: float = 0.7, epsilon: float = 1e-8, out=None):
         """
@@ -197,11 +190,7 @@ class WeightedVectorialTotalVariation(Function):
         H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)
         Hinv = torch.reciprocal(H)
         Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=1.0/epsilon, neginf=0.0)
-        Hinv_bdc = self.bdc2a.adjoint(Hinv)
-        if out is not None:
-            out.fill(Hinv_bdc)
-            return out
-        return Hinv_bdc
+        return self.bdc2a.adjoint(Hinv, out=out)
 
     def _preconditioner_weights_core_slow(self, x_arr):
         """
@@ -209,49 +198,33 @@ class WeightedVectorialTotalVariation(Function):
         based on the corrected Hessian derivation.
         """
         # 1. Compute the Jacobian field, Jx.
-        #    We do not apply normalization here as the Hessian is for the unnormalized functional.
         J = self.jacobian.direct(x_arr)
 
         # 2. Apply the data-fidelity weights. This becomes the input 'A' for the VTV function.
-        #    A = w * Jx
         w = self.weights.unsqueeze(-1)
         A_field = w * J
 
         # 3. Call the backend to get the Hessian components from the SVD of A_field.
-        #    - hess_coeffs is h''(s_k)
-        #    - rank_one_fields is the collection of u_k v_k^T matrices for each k
         hess_coeffs, rank_one_fields = self.vtv.hessian_components(A_field)
-        # hess_coeffs shape: (nx, ny, nz, r)
-        # rank_one_fields shape: (nx, ny, nz, r, M, d)
-
-        num_singular_values = rank_one_fields.shape[-3]
 
         # 4. Initialize the final diagonal preconditioner tensor P.
-        #    The result should have the same shape as the input image array.
         P_diag = torch.zeros_like(x_arr)
 
         # 5. Loop over each singular mode k, calculate its contribution, and accumulate.
+        num_singular_values = rank_one_fields.shape[-3]
         for k in range(num_singular_values):
             # a) Get the field of rank-1 matrices for this mode
             C_k_field = rank_one_fields[..., k, :, :]  # Shape: (nx, ny, nz, M, d)
 
             # b) The formula is p_i = sum_k h''(s_k) * ( (J^T u_k v_k^T)_i )^2
-            #    The weights `w` are already baked into the SVD components (u_k, v_k, s_k).
-            #    The operator is effectively `wJ`. The adjoint is `(wJ)^T = J^T w`.
-            #    So we need to compute J^T (w * C_k).
-
             # The rank-one fields are u_k v_k^T from A=wJx. We need to compute J^T(w * u_k v_k^T).
-            # Since J is the gradient operator and w is a per-modality weight, J^T(w*...) is correct.
             influence_image = self.jacobian.adjoint(
                 w * C_k_field
-            )  # Shape: (nx, ny, nz, M)
-
+            ) 
             # c) Get the corresponding h''(s_k) coefficients for this mode.
-            #    Shape: (nx, ny, nz)
             h_double_prime_k = hess_coeffs[..., k]
 
             # d) Unsqueeze the coefficient to broadcast over the M modalities.
-            #    Shape becomes (nx, ny, nz, 1)
             h_double_prime_k = h_double_prime_k.unsqueeze(-1)
             
             # e) Accumulate the contribution for this mode: h''(s_k) * (J^T u_k v_k^T)^2
@@ -268,11 +241,7 @@ class WeightedVectorialTotalVariation(Function):
         x_arr = self.bdc2a.direct(x)
         diag_arr = self._preconditioner_weights_core_slow(x_arr)
 
-        result = self.bdc2a.adjoint(diag_arr)
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
+        return self.bdc2a.adjoint(diag_arr, out=out)
 
     def _inv_hessian_diag_slow(self, x, out=None, epsilon=1e-9):
         """
@@ -287,11 +256,7 @@ class WeightedVectorialTotalVariation(Function):
         torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0, out=inv_arr)
 
         # 3. Convert back to BlockDataContainer
-        result = self.bdc2a.adjoint(inv_arr)
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
+        return self.bdc2a.adjoint(inv_arr, out=out)
 
     def hessian_diag(self, x, out=None):
         if self.hessian == "slow":
@@ -378,11 +343,8 @@ class WeightedTotalVariation(Function):
         inner = w * self.tv.gradient(U)  # the tv.gradient already accounts for smoothing etc.
 
         ret = self.jacobian.adjoint(inner)  # shape (nx,ny,nz,M)
-        ret = self.bdc2a.adjoint(ret)
-        if out is not None:
-            out.fill(ret)
-            return out
-        return ret
+        
+        return self.bdc2a.adjoint(ret, out=out)
 
     def proximal(self, x, tau, out=None):
         """
@@ -398,11 +360,7 @@ class WeightedTotalVariation(Function):
 
         # Push back to image space:
         ret = self.jacobian.adjoint(proxU * w)  # (nx,ny,nz,M)
-        ret = self.bdc2a.adjoint(ret)
-        if out is not None:
-            out.fill(ret)
-            return out
-        return ret
+        return self.bdc2a.adjoint(ret, out=out)
 
     def hessian_diag(self, x, out=None, stabiliser: float = 1e-9, positive: bool = True):
         """
@@ -424,11 +382,9 @@ class WeightedTotalVariation(Function):
         w2 = (self.weights ** 2).unsqueeze(-1)   # (..., M, 1)
 
         h_img = torch.sum(w2 * S2 * h_dir, dim=-1)  # (..., M)
-        result = self.bdc2a.adjoint(h_img)
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
+
+        return self.bdc2a.adjoint(h_img, out=out)
+
 
     def inv_hessian_diag(self, x, out=None, epsilon=1e-9):
         # reuse hessian_diag code
@@ -439,9 +395,5 @@ class WeightedTotalVariation(Function):
             device=device,
         )
         inv_arr = torch.reciprocal(H + epsilon)
-        result = self.bdc2a.adjoint(inv_arr)
-        if out is not None:
-            out.fill(result)
-            return out
-        return result
+        return self.bdc2a.adjoint(inv_arr, out=out)
 

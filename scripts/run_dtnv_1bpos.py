@@ -274,11 +274,8 @@ def main(args) -> None:
             args, umap, combined, bo, kappas
         )        
         for i, p in enumerate(priors_list):
-            priors_list[i] = 1 / len(all_funs) * p
             attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
-        for i, fun in enumerate(all_funs):
-            all_funs[i] = SumFunction(fun, prior)
 
     update_interval = len(all_funs)
 
@@ -291,36 +288,32 @@ def main(args) -> None:
 
     probs = get_probabilities(args, num_subsets, update_interval)
 
-    f_obj = -SVRGFunction(
+    f_obj = SVRGFunction(
         all_funs,
         sampler=Sampler.random_with_replacement(
             len(all_funs),
             prob=probs,
         ),
         snapshot_update_interval=update_interval * 2,
-        store_gradients=True,
+        store_gradients=True
     )
-    # f_obj = -SAGAFunction(
-    #        all_funs, sampler=Sampler.random_with_replacement(len(all_funs), prob=probs,),
-    #    )
-    # f_obj.function.warm_start_approximate_gradients(initial_estimates)
-    # f_obj = -SGFunction(
-    #        all_funs, sampler=Sampler.random_with_replacement(len(all_funs), prob=probs,),
-    #    )
 
+    # Set up step size
+    step_size = LinearDecayStepSizeRule(
+        initial_step_size=args.initial_step_size,
+        decay=args.relaxation_eta,
+    )
+
+    # Set up callbacks using shared function
     callbacks = get_callbacks(args, update_interval)
 
+    # Run algorithm using shared function
+    subiterations = args.num_epochs * len(all_funs)
     algo = get_algorithm(
-        initial_estimates,
-        f_obj,
-        precond,
-        LinearDecayStepSizeRule(
-            args.initial_step_size,
-            args.relaxation_eta,
-        ),
-        update_interval,
-        args.num_epochs * update_interval,
-        callbacks,
+        initial_estimates, 
+        -SumFunction(f_obj, prior) if prior else -f_obj,
+        precond, step_size, 
+        update_interval, subiterations, callbacks
     )
 
     save_results(algo, args)

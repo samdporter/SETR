@@ -13,8 +13,8 @@ class ConstantPreconditioner(Preconditioner):
 
     def apply(self, algorithm, gradient, out=None):
         if out is None:
-            out = algorithm.solution.copy()
-        out.fill(gradient * self.value)
+            return gradient * self.value
+        gradient.multiply(self.value, out=out)
         return out
 
 
@@ -42,22 +42,23 @@ class PreconditionerWithInterval(Preconditioner):
         """
         Apply the preconditioner, managing freezing and update intervals.
         """
-        if out is None:
-            out = algorithm.solution.copy()
         if algorithm.iteration < self.freeze_iter:
             if algorithm.iteration % self.update_interval == 0 or self.precond is None:
                 self.precond = self.compute_preconditioner(algorithm)
-            out.fill(gradient * self.precond)
+            if out is not None:
+                gradient.multiply(self.precond, out=out)
+                return out
+            return gradient * self.precond
         else:
             if self.freeze is None:
                 self.freeze = self.compute_preconditioner(algorithm)
-            out.fill(gradient * self.freeze)
-        return out
+            if out is not None:
+                gradient.multiply(self.freeze, out=out)
+                return out
+        return gradient * self.freeze
 
     def compute_preconditioner(self, algorithm, out=None):
         """Compute the preconditioner."""
-        if out is None:
-            out = algorithm.solution.copy()
         raise NotImplementedError
 
 
@@ -70,7 +71,6 @@ class BSREMPreconditioner(PreconditionerWithInterval):
         update_interval=1,
         freeze_iter=np.inf,
         epsilon=None,
-        max_vals=None,
         smooth=False,
     ):
         super().__init__(update_interval, freeze_iter)
@@ -83,27 +83,22 @@ class BSREMPreconditioner(PreconditionerWithInterval):
         if epsilon is None:
             epsilon = s_inv.max() * 1e-10
         self.epsilon = epsilon
-        self.max_vals = max_vals
 
     def compute_preconditioner(self, algorithm, out=None):
-        if out is None:
-            out = algorithm.solution.copy()
         x = algorithm.solution.copy()
-        if self.max_vals is not None:
-            if isinstance(x, BlockDataContainer):
-                for i, el in enumerate(out.containers):
-                    el = el.minimum(self.max_vals[i])
-                    if self.gaussian is not None:
-                        self.gaussian.apply(el)
-                    x.containers[i].fill(el)
-            else:
-                x = x.minimum(self.max_vals)
+
+        if isinstance(x, BlockDataContainer):
+            for i, xi in enumerate(x.containers):
                 if self.gaussian is not None:
-                    self.gaussian.apply(x)
+                    self.gaussian.apply(xi)
+                x.containers[i].fill(xi)
+        elif self.gaussian is not None:
+            self.gaussian.apply(x)
 
         if out is None:
             return (x + self.epsilon) * self.s_inv
-        out.fill((x + self.epsilon) * self.s_inv)
+        x.add(self.epsilon, out=out)
+        self.s_inv.multiply(out, out=out)
         return out
 
 
@@ -115,7 +110,6 @@ class ImageFunctionPreconditioner(PreconditionerWithInterval):
     def __init__(
         self,
         function,
-        scale=1.,
         update_interval=1,
         freeze_iter=np.inf,
         epsilon=0,
@@ -123,14 +117,15 @@ class ImageFunctionPreconditioner(PreconditionerWithInterval):
     ):
         super().__init__(update_interval, freeze_iter)
         self.function = function
-        self.scale = scale
         self.epsilon = epsilon
         self.max_value = max_value
 
     def compute_preconditioner(self, algorithm, out=None):
-        precond = self.scale * self.function(algorithm.solution)
+        
+        precond = self.function(algorithm.solution)
         precond = precond.maximum(self.epsilon)
         precond = precond.minimum(self.max_value)
+
         if out is None:
             return precond
         out.fill(precond)
@@ -154,13 +149,13 @@ class HarmonicMeanPreconditioner(PreconditionerWithInterval):
         self.scales = scales
 
     def compute_preconditioner(self, algorithm, out=None):
-        if out is None:
-            out = algorithm.solution.copy()
         a = self.preconds[0].compute_preconditioner(algorithm)
         b = self.preconds[1].compute_preconditioner(algorithm)
         if self.scales is not None:
             a.sapyb(self.scales[0], a, 0, out=a)
             b.sapyb(self.scales[1], b, 0, out=b)
+        if out is None:
+            return 2 * a * b / (a + b + self.epsilon)
         out.fill(2 * a * b / (a + b + self.epsilon))
         return out
 
@@ -182,8 +177,6 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         self.epsilon = epsilon
 
     def compute_preconditioner(self, algorithm, out=None):
-        if out is None:
-            out = algorithm.solution.copy()
 
         # Collect (and, if needed, clamp) inputs
         precond_values = [p.compute_preconditioner(algorithm) for p in self.preconds]
@@ -209,6 +202,8 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
 
         # Final guard and division
         den = den.maximum(eps)
+        if out is None:
+            return num / den
         num.divide(den, out=out)
         return out
 
@@ -222,19 +217,17 @@ class ArithmeticMeanPreconditioner(PreconditionerWithInterval):
         self.preconds = preconds
 
     def compute_preconditioner(self, algorithm, out=None):
+        
         # prepare output buffer
+        acc = self.preconds[0].compute_preconditioner(algorithm)
+
+        for p in self.preconds[1:]:
+            acc += p.compute_preconditioner(algorithm)
+            
         if out is None:
-            out = algorithm.solution.copy()
+            return acc / len(self.preconds)
 
-        # gather all preconditioner arrays
-        mats = [p.compute_preconditioner(algorithm) for p in self.preconds]
-
-        # compute mean in-place in out
-        out.fill(0)
-        for m in mats:
-            out += m
-        out /= len(mats)
-
+        acc.divide(len(self.preconds), out=out)
         return out
 
 
@@ -246,8 +239,8 @@ class IdentityPreconditioner(PreconditionerWithInterval):
 
     def compute_preconditioner(self, algorithm, out=None):
         if out is None:
-            out = algorithm.solution.copy()
-        out.fill(1)
+            return algorithm.solution.copy()
+        out.fill(algorithm.solution)
         return out
 
 

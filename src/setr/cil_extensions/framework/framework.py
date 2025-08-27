@@ -10,4 +10,4 @@ class EnhancedBlockDataContainer(BlockDataContainer):
 
     def get_uniform_copy(self, n) -> "EnhancedBlockDataContainer":
         """Return a copy with each container filled with n."""
-        return EnhancedBlockDataContainer(*[x.clone().fill(n) for x in self.containers])
+        return EnhancedBlockDataContainer(*[x.get_uniform_copy(n) for x in self.containers])

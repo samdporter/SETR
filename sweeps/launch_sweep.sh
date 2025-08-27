@@ -54,6 +54,7 @@ print('SGE_RUNTIME=' + config['sge']['runtime'])
 print('SGE_MEMORY=' + config['sge']['memory'])
 print('SGE_CORES=' + str(config['sge']['cores']))
 print('SGE_QUEUE=' + (config['sge']['queue'] or 'default'))
+print('SGE_GPU=' + str(config['sge'].get('gpu', False)).lower())
 ")
 
 # Source the config values
@@ -87,9 +88,10 @@ if [ "$TOTAL_JOBS" -eq 0 ]; then
     exit 1
 fi
 
-# Prepare output directory
-OUTPUT_DIR="$SWEEPS_DIR/output/$SWEEP_NAME"
-mkdir -p "$OUTPUT_DIR"
+# Prepare sweep output + logs
+SWEEP_OUT_DIR="$SWEEPS_DIR/output/$SWEEP_NAME"
+LOG_DIR="$SWEEP_OUT_DIR/_logs"
+mkdir -p "$LOG_DIR"
 
 # Set job array range
 if [ "$TEST_MODE" = "test" ]; then
@@ -119,24 +121,40 @@ if [ "$SGE_CORES" -gt 1 ]; then
     PE_OPTION="-pe smp $SGE_CORES"
 fi
 
+# Set GPU option
+GPU_OPTION=""
+if [ "$SGE_GPU" = "true" ]; then
+    # GPU job → use tmem
+    GPU_OPTION="-l gpu=true"
+    MEM_OPTION="-l tmem=${SGE_MEMORY}"
+else
+    # CPU job → use h_vmem
+    MEM_OPTION="-l h_vmem=${SGE_MEMORY}"
+fi
+
 # Submit to SGE
+CMD="qsub \
+  -t \"$JOB_RANGE\" \
+  -l h_rt=\"$SGE_RUNTIME\" \
+  $MEM_OPTION \
+  $GPU_OPTION \
+  $PE_OPTION \
+  $QUEUE_OPTION \
+  -N \"setr_$SWEEP_NAME\" \
+  -o \"$LOG_DIR\" \
+  -e \"$LOG_DIR\" \
+  -v \"SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=$SWEEP_NAME,BASE_CONFIG_FILE=$BASE_CONFIG,RECON_SCRIPT=$RECON_SCRIPT,ALPHA_FILE=$ALPHA_FILE,BETA_FILE=$BETA_FILE\" \
+  \"$QSUB_SCRIPT\""
+
 echo ""
 echo "Submitting jobs to SGE..."
-echo "Command: qsub -t $JOB_RANGE -l h_rt=$SGE_RUNTIME -l h_vmem=$SGE_MEMORY $PE_OPTION $QUEUE_OPTION ..."
 
-qsub \
-    -t "$JOB_RANGE" \
-    -l h_rt="$SGE_RUNTIME" \
-    -l h_vmem="$SGE_MEMORY" \
-    $PE_OPTION \
-    $QUEUE_OPTION \
-    -N "setr_$SWEEP_NAME" \
-    -o "$OUTPUT_DIR/logs" \
-    -e "$OUTPUT_DIR/logs" \
-    -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=$SWEEP_NAME,BASE_CONFIG_FILE=$BASE_CONFIG,RECON_SCRIPT=$RECON_SCRIPT,ALPHA_FILE=$ALPHA_FILE,BETA_FILE=$BETA_FILE" \
-    "$QSUB_SCRIPT"
+echo "$CMD"
+eval "$CMD"
+
 
 echo ""
 echo "Jobs submitted successfully!"
 echo "Monitor with: ./monitor_sweep.sh $SWEEP_NAME"
-echo "Output directory: $OUTPUT_DIR"
+echo "Output root: $SWEEP_OUT_DIR"
+echo "Logs: $LOG_DIR"
