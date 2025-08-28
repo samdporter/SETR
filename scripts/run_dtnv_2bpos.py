@@ -346,12 +346,13 @@ def main(args) -> None:
             attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
 
-    update_interval = len(all_funs)
+    ui = getattr(args, "update_interval", None)
+    update_interval = len(all_funs) if ui is None else ui
 
     # Set up preconditioners
     precond = get_preconditioners(args, s_inv, all_funs, update_interval, priors_list, initial_estimates)
 
-    probs = get_probabilities(args, args.num_subsets, update_interval, bpos=2)
+    probs = get_probabilities(args, args.num_subsets, len(all_funs), bpos=2)
 
     f_obj = SVRGFunction(
         all_funs,

@@ -154,7 +154,6 @@ def get_preconditioners(
 
 def get_probabilities(args, num_subsets, update_interval, bpos=1):
     
-    assert update_interval == num_subsets[0]*bpos + num_subsets[1]
     pet_probs   = [1/update_interval] * (num_subsets[0]*bpos)
     spect_probs = [1/update_interval] * num_subsets[1]
 
