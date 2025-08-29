@@ -330,7 +330,14 @@ class WeightedTotalVariation(Function):
         w = self.weights.unsqueeze(-1)
         U = w * J  # (..., M, d)
 
-        return self.tv(U)
+        # Apply GPUVectorNorm to each modality separately
+        total_tv = 0.0
+        for m in range(U.shape[-2]):  # Loop over M modalities
+            # Extract gradients for modality m: shape (..., d)
+            modality_gradients = U[..., m, :]
+            total_tv += self.tv(modality_gradients)
+        
+        return total_tv
 
     def gradient(self, x, out=None):
 
@@ -340,7 +347,12 @@ class WeightedTotalVariation(Function):
         w = self.weights.unsqueeze(-1)
         U = w * J  # (..., M, d)
 
-        inner = w * self.tv.gradient(U)  # the tv.gradient already accounts for smoothing etc.
+        # Apply GPUVectorNorm gradient to each modality separately
+        inner = torch.zeros_like(U)
+        for m in range(U.shape[-2]):  # Loop over M modalities
+            # Extract gradients for modality m: shape (..., d)
+            modality_gradients = U[..., m, :]
+            inner[..., m, :] = w[..., m, :] * self.tv.gradient(modality_gradients)
 
         ret = self.jacobian.adjoint(inner)  # shape (nx,ny,nz,M)
         
@@ -356,7 +368,12 @@ class WeightedTotalVariation(Function):
         w = self.weights.unsqueeze(-1)
         U = w * J  # (...,M,d)
 
-        proxU = self.tv.proximal(U, tau)  # (...,M,d)
+        # Apply GPUVectorNorm proximal to each modality separately
+        proxU = torch.zeros_like(U)
+        for m in range(U.shape[-2]):  # Loop over M modalities
+            # Extract gradients for modality m: shape (..., d)
+            modality_gradients = U[..., m, :]
+            proxU[..., m, :] = self.tv.proximal(modality_gradients, tau)
 
         # Push back to image space:
         ret = self.jacobian.adjoint(proxU * w)  # (nx,ny,nz,M)
@@ -373,8 +390,12 @@ class WeightedTotalVariation(Function):
         w     = self.weights.unsqueeze(-1)       # (..., M, 1)
         U     = w * J                            # (..., M, d)
 
-        # Per-direction U-space diagonal h_j
-        h_dir = self.tv.hessian_dir_diag(U, stabiliser=stabiliser, positive=positive)  # (..., M, d)
+        # Apply GPUVectorNorm hessian_dir_diag to each modality separately
+        h_dir = torch.zeros_like(U)
+        for m in range(U.shape[-2]):  # Loop over M modalities
+            # Extract gradients for modality m: shape (..., d)
+            modality_gradients = U[..., m, :]
+            h_dir[..., m, :] = self.tv.hessian_dir_diag(modality_gradients, stabiliser=stabiliser, positive=positive)
 
         # Finite-difference sensitivities per direction
         S = torch.as_tensor(self.jacobian.sensitivity(x_arr), device=U.device, dtype=U.dtype)  # (..., M, d)
@@ -396,4 +417,191 @@ class WeightedTotalVariation(Function):
         )
         inv_arr = torch.reciprocal(H + epsilon)
         return self.bdc2a.adjoint(inv_arr, out=out)
+
+
+class TotalVariation(Function):
+    """
+    GPU total variation for single ImageData objects with optional anatomical guidance.
+    Supports directional TV through anatomical image guidance.
+    """
+
+    def __init__(
+        self,
+        geometry,
+        weight=1.0,
+        delta=1e-6,
+        smoothing="fair",
+        norm="l2",
+        anatomical=None,
+        both_directions=False,
+        stencil='6',
+        hessian="slow"
+    ):
+        """
+        Initialize single-modality Total Variation prior.
+        
+        Args:
+            geometry: ImageData template defining the image space
+            weight: Scalar weighting factor for the TV prior
+            delta: Smoothing parameter for the TV function
+            smoothing: Smoothing function type ('fair', 'huber', etc.)
+            norm: Vector norm type ('l2', 'l1', etc.) 
+            anatomical: Optional anatomical image for directional guidance
+            both_directions: Use bidirectional gradients
+            stencil: Stencil connectivity ('6', '18', '26')
+            hessian: Hessian approximation method
+        """
+        from setr.core.gradients import Gradient, DirectionalGradient
+        
+        self.geometry = geometry
+        self.weight = float(weight)
+        self.delta = float(delta)
+        self.smoothing = smoothing
+        self.hessian = hessian
+        
+        voxel_sizes = geometry.voxel_sizes()
+        
+        # Choose gradient operator based on anatomical guidance
+        if anatomical is not None:
+            if hasattr(anatomical, "as_array"):  # ImageData
+                anatomical_arr = anatomical.as_array()
+            else:
+                anatomical_arr = anatomical
+            
+            self.gradient_op = DirectionalGradient(
+                anatomical=anatomical_arr,
+                voxel_sizes=voxel_sizes,
+                both_directions=both_directions,
+                stencil=stencil,
+                normalize=True,
+            )
+            self.directional = True
+        else:
+            self.gradient_op = Gradient(
+                voxel_sizes=voxel_sizes,
+                both_directions=both_directions,
+                stencil=stencil,
+                normalize=True,
+            )
+            self.directional = False
+
+        # Create the GPU total variation backend
+        from .vector_norm import GPUVectorNorm
+        self.tv = GPUVectorNorm(eps=delta, norm=norm, smoothing_function=smoothing)
+
+    def __call__(self, x):
+        """Evaluate the TV functional on ImageData x."""
+        if not isinstance(x, ImageData):
+            raise TypeError("TotalVariation expects ImageData input")
+        
+        x_arr = x.as_array()
+        grad = self.gradient_op.direct(x_arr)  # Shape: (nz, ny, nx, d)
+        
+        # Apply weight and compute TV
+        weighted_grad = self.weight * grad
+        return self.tv(weighted_grad)
+
+    def gradient(self, x, out=None):
+        """Compute gradient of TV functional."""
+        if not isinstance(x, ImageData):
+            raise TypeError("TotalVariation expects ImageData input")
+        
+        x_arr = x.as_array()
+        grad = self.gradient_op.direct(x_arr)  # (nz, ny, nx, d)
+        
+        # Apply weight
+        weighted_grad = self.weight * grad
+        
+        # Get TV gradient
+        tv_grad = self.tv.gradient(weighted_grad)  # (nz, ny, nx, d)
+        
+        # Apply weight again and compute adjoint
+        weighted_tv_grad = self.weight * tv_grad
+        result_arr = self.gradient_op.adjoint(weighted_tv_grad)
+        
+        # Convert back to ImageData
+        if out is None:
+            out = x.clone()
+        
+        if hasattr(result_arr, 'detach'):  # torch tensor
+            result_arr = result_arr.detach().cpu().numpy()
+        
+        out.fill(result_arr)
+        return out
+
+    def proximal(self, x, tau, out=None):
+        """Proximal operator for TV."""
+        if not isinstance(x, ImageData):
+            raise TypeError("TotalVariation expects ImageData input")
+        
+        x_arr = x.as_array()
+        grad = self.gradient_op.direct(x_arr)  # (nz, ny, nx, d)
+        
+        # Apply weight
+        weighted_grad = self.weight * grad
+        
+        # Apply TV proximal operator
+        prox_grad = self.tv.proximal(weighted_grad, tau)
+        
+        # Apply weight and compute adjoint
+        weighted_prox = self.weight * prox_grad
+        result_arr = self.gradient_op.adjoint(weighted_prox)
+        
+        # Convert back to ImageData
+        if out is None:
+            out = x.clone()
+        
+        if hasattr(result_arr, 'detach'):  # torch tensor
+            result_arr = result_arr.detach().cpu().numpy()
+        
+        out.fill(result_arr)
+        return out
+
+    def hessian_diag(self, x, out=None, stabiliser=1e-9, positive=True):
+        """Diagonal Hessian approximation."""
+        if not isinstance(x, ImageData):
+            raise TypeError("TotalVariation expects ImageData input")
+        
+        x_arr = x.as_array()
+        grad = self.gradient_op.direct(x_arr)  # (nz, ny, nx, d)
+        
+        # Apply weight
+        weighted_grad = self.weight * grad
+        
+        # Get TV Hessian diagonal
+        h_dir = self.tv.hessian_dir_diag(weighted_grad, stabiliser=stabiliser, positive=positive)
+        
+        # For single modality, sum over gradient directions with weight^2
+        h_img = self.weight**2 * torch.sum(h_dir, dim=-1)
+        
+        # Convert back to ImageData
+        if out is None:
+            out = x.clone()
+        
+        if hasattr(h_img, 'detach'):  # torch tensor
+            h_img = h_img.detach().cpu().numpy()
+        
+        out.fill(h_img)
+        return out
+
+    def inv_hessian_diag(self, x, out=None, epsilon=1e-9):
+        """Inverse diagonal Hessian approximation."""
+        h = self.hessian_diag(x, out=None)
+        h_arr = h.as_array()
+        
+        # Convert to torch if needed
+        if not isinstance(h_arr, torch.Tensor):
+            h_arr = torch.as_tensor(h_arr, device=device)
+        
+        inv_arr = torch.reciprocal(h_arr + epsilon)
+        
+        # Convert back to ImageData
+        if out is None:
+            out = x.clone()
+        
+        if hasattr(inv_arr, 'detach'):  # torch tensor
+            inv_arr = inv_arr.detach().cpu().numpy()
+        
+        out.fill(inv_arr)
+        return out
 

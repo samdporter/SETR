@@ -34,11 +34,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class GPUVectorNorm(Function):
     """
-    GPU implementation of smoothed total variation applied separately to each modality.
+    GPU implementation of smoothed total variation for single-modality gradients.
 
-    Input: Jacobian tensor of shape (nx, ny, nz, M, d) where:
+    Input: Gradient tensor of shape (nx, ny, nz, d) where:
     - (nx, ny, nz) are spatial dimensions
-    - M is number of modalities
     - d is number of finite difference directions
     """
 
@@ -54,10 +53,10 @@ class GPUVectorNorm(Function):
 
     def direct(self, x):
         """
-        Compute the total variation functional value.
+        Compute the total variation functional value for single-modality gradients.
 
         Args:
-            x: Input Jacobian tensor of shape (nx, ny, nz, M, d)
+            x: Input gradient tensor of shape (nx, ny, nz, d)
 
         Returns:
             Total variation value
@@ -79,24 +78,15 @@ class GPUVectorNorm(Function):
         else:
             smoothing_func = nothing
 
-        # x shape: (nx, ny, nz, M, d)
-        # We want to process each modality separately
+        # x shape: (nx, ny, nz, d) - single modality gradients
+        # Compute gradient magnitude at each voxel: shape (nx, ny, nz)
+        grad_magnitudes = norm_func(x)
 
-        total_tv = 0.0
+        # Apply smoothing function
+        smoothed_grad = smoothing_func(grad_magnitudes, self.eps)
 
-        # Process each modality separately
-        for m in range(x.shape[-2]):  # Loop over M modalities
-            # Extract gradients for modality m: shape (nx, ny, nz, d)
-            modality_gradients = x[..., m, :]
-
-            # Compute gradient magnitude at each voxel: shape (nx, ny, nz)
-            grad_magnitudes = norm_func(modality_gradients)
-
-            # Apply smoothing function
-            smoothed_grad = smoothing_func(grad_magnitudes, self.eps)
-
-            # Sum over all voxels
-            total_tv += torch.sum(smoothed_grad)
+        # Sum over all voxels
+        total_tv = torch.sum(smoothed_grad)
 
         return torch.nan_to_num(total_tv, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -114,7 +104,7 @@ class GPUVectorNorm(Function):
         Compute the proximal operator of the total variation functional.
 
         Args:
-            x: Input Jacobian tensor of shape (nx, ny, nz, M, d)
+            x: Input gradient tensor of shape (nx, ny, nz, d)
             eps: Proximal parameter
 
         Returns:
@@ -132,15 +122,9 @@ class GPUVectorNorm(Function):
         else:
             raise ValueError("Norm not defined")
 
-        out = torch.zeros_like(x)
-
-        # Process each modality separately
-        for m in range(x.shape[-2]):  # Loop over M modalities
-            # Extract gradients for modality m: shape (nx, ny, nz, d)
-            modality_gradients = x[..., m, :]
-
-            # Apply proximal operator to each voxel's gradient vector
-            out[..., m, :] = prox_func(modality_gradients, eps)
+        # Apply proximal operator to each voxel's gradient vector
+        # x shape: (nx, ny, nz, d)
+        out = prox_func(x, eps)
 
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -149,7 +133,7 @@ class GPUVectorNorm(Function):
         Compute the gradient of the total variation functional.
 
         Args:
-            x: Input Jacobian tensor of shape (nx, ny, nz, M, d)
+            x: Input gradient tensor of shape (nx, ny, nz, d)
 
         Returns:
             Gradient tensor of same shape as x
@@ -175,31 +159,23 @@ class GPUVectorNorm(Function):
         else:
             grad_func = nothing_grad
 
-        gradient = torch.zeros_like(x)
+        # x shape: (nx, ny, nz, d) - single modality gradients
+        # Compute gradient magnitude at each voxel: shape (nx, ny, nz)
+        grad_magnitudes = norm_func(x)
 
-        # Process each modality separately
-        for m in range(x.shape[-2]):  # Loop over M modalities
-            # Extract gradients for modality m: shape (nx, ny, nz, d)
-            modality_gradients = x[..., m, :]
+        # Avoid division by zero
+        grad_mag_safe = torch.maximum(grad_magnitudes, torch.tensor(1e-9, device=x.device))
 
-            # Compute gradient magnitude at each voxel
-            grad_magnitudes = norm_func(modality_gradients)
+        # Compute derivative of smoothing function
+        smooth_deriv = grad_func(grad_magnitudes, self.eps)
 
-            # Avoid division by zero
-            grad_mag_safe = torch.maximum(grad_magnitudes, torch.tensor(1e-9, device=x.device))
-
-            # Compute derivative of smoothing function
-            smooth_deriv = grad_func(grad_magnitudes, self.eps)
-
-            # Chain rule: derivative w.r.t. original gradients
-            if self.norm == "l1":
-                # For L1 norm: ∂||g||₁/∂g = sign(g)
-                gradient[..., m, :] = smooth_deriv.unsqueeze(-1) * torch.sign(modality_gradients)
-            elif self.norm == "l2":
-                # For L2 norm: ∂||g||₂/∂g = g/||g||₂
-                gradient[..., m, :] = (smooth_deriv / grad_mag_safe).unsqueeze(
-                    -1
-                ) * modality_gradients
+        # Chain rule: derivative w.r.t. original gradients
+        if self.norm == "l1":
+            # For L1 norm: ∂||g||₁/∂g = sign(g)
+            gradient = smooth_deriv.unsqueeze(-1) * torch.sign(x)
+        elif self.norm == "l2":
+            # For L2 norm: ∂||g||₂/∂g = g/||g||₂
+            gradient = (smooth_deriv / grad_mag_safe).unsqueeze(-1) * x
 
         return torch.nan_to_num(gradient, nan=0.0, posinf=0.0, neginf=0.0)
 
