@@ -1,6 +1,8 @@
 import logging
 import os
 from types import MethodType
+from typing import Dict, List, Optional
+from pathlib import Path
 
 import numpy as np
 from cil.framework import BlockDataContainer
@@ -18,8 +20,6 @@ from sirf.STIR import (
     SPECTUBMatrix,
     TruncateToCylinderProcessor,
 )
-
-from setr.cil_extensions.operators import ScalingOperator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -143,12 +143,9 @@ def get_pet_data(path: str, suffix: str = "") -> dict:
     return pet_data
 
 
-from pathlib import Path
-from typing import Dict, List, Optional
-
-
 def get_pet_data_multiple_bed_pos(
-    path: str, suffixes: List[str], tof: bool = False
+    path: str, suffixes: List[str], tof: bool = False,
+    load_sinos: bool = True,
 ) -> Dict[str, object]:
     """
     Load PET data for multiple bed positions.
@@ -187,9 +184,10 @@ def get_pet_data_multiple_bed_pos(
     beds: Dict[str, Dict[str, object]] = {}
     for suf in suffixes:
         bp = {}
-        bp["acquisition_data"] = load_acq(base / f"prompts{suf}.hs")
-        bp["additive"] = load_acq(base / f"additive_term{suf}.hs")
-        bp["normalisation"] = load_acq(base / f"mult_factors{suf}.hs")
+        if load_sinos:
+            bp["acquisition_data"] = load_acq(base / f"prompts{suf}.hs")
+            bp["additive"] = load_acq(base / f"additive_term{suf}.hs")
+            bp["normalisation"] = load_acq(base / f"mult_factors{suf}.hs")
         bp["template_image"] = load_image(
             base / f"template_image{suf}.hv", clamp=False, required=True
         )
@@ -336,7 +334,7 @@ def normalise_kappa_squares(kappa_block, pct=95):
     """
     Scale each κ² image so its `pct` percentile == 1.
     """
-    arrays = [im.as_array() for im in kappa_block.containers]
+    arrays = [get_array(im) for im in kappa_block.containers]
     pvals = [np.percentile(a, pct) for a in arrays]
     for im, p in zip(kappa_block.containers, pvals):
         if p > 1e-12:
@@ -361,15 +359,12 @@ def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_
     return pet_obj_funs, spect_obj_funs
 
 
-def get_block_objective(desired_image, other_image, obj_fun, scale=1, order=0):
+def get_block_objective(desired_image, other_image, obj_fun, order=0):
     """Returns a block CIL objective function for the given SIRF objective function"""
 
     # Set up zero operators
     o2d_zero = ZeroOperator(other_image, desired_image)
-    if scale == 1:
-        d2d_id = IdentityOperator(desired_image)
-    else:
-        d2d_id = ScalingOperator(scale, desired_image)
+    d2d_id = IdentityOperator(desired_image)
 
     if order == 0:
         return OperatorCompositionFunction(obj_fun, BlockOperator(d2d_id, o2d_zero, shape=(1, 2)))
@@ -421,7 +416,7 @@ def get_s_inv_from_objs(obj_funs, initial_estimates):
                 sens += obj_fun.get_subset_sensitivity(0)
         # Compute maximum with zero (returning a new container)
         sens.maximum(0, out=sens)
-        sens_arr = sens.as_array().astype(np.float32)
+        sens_arr = get_array(sens).astype(np.float32)
         # We can afford to avoid zeros because
         # a zero sensitivity means we're outside the FOV
         inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
@@ -439,7 +434,7 @@ def get_s_inv_from_am(ams, initial_estimates):
             tmp = am.backward(one)
             el += tmp
         el = el.maximum(0)
-        el_arr = el.as_array()
+        el_arr = get_array(el)
         el_arr = np.reciprocal(el_arr, where=el_arr != 0)
         el.fill(np.nan_to_num(el_arr))
     return s_inv
@@ -455,7 +450,7 @@ def get_s_inv_from_subset_objs(obj_funs, initial_estimate):
             sens += obj_fun.get_subset_sensitivity(0)
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
-    sens_arr = sens.as_array().astype(np.float32)
+    sens_arr = get_array(sens).astype(np.float32)
     # We can afford to avoid zeros because
     # a zero sensitivity means we're outside the FOV
     inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
@@ -501,7 +496,7 @@ def compute_inv_hessian_diagonals(bdc, obj_funs_list):
         # Take absolute values and write the result
         hessian_diag = hessian_diag.abs()
 
-        hessian_diag_arr = hessian_diag.as_array()
+        hessian_diag_arr = get_array(hessian_diag)
         hessian_diag.fill(np.reciprocal(hessian_diag_arr, where=hessian_diag_arr != 0))
 
         outputs.append(hessian_diag)
@@ -514,6 +509,26 @@ def get_subset_data(data, num_subsets, stagger="staggered"):
     indices = list(range(views))
     partitions_idxs = partitioner.partition_indices(num_subsets, indices, stagger=stagger)
     return [data.get_subset(partitions_idxs[i]) for i in range(num_subsets)]
+
+
+def get_array(obj):
+    """
+    Get array from SIRF object, preferring asarray() over as_array() for performance.
+    
+    Falls back to as_array() if asarray() is not available (older SIRF versions).
+    
+    Args:
+        obj: SIRF object with asarray() or as_array() method
+        
+    Returns:
+        numpy array or reference to underlying array
+    """
+    if hasattr(obj, 'asarray'):
+        return obj.asarray()
+    elif hasattr(obj, 'as_array'):
+        return obj.as_array()
+    else:
+        raise AttributeError(f"Object {type(obj)} has neither asarray() nor as_array() method")
 
 
 def get_filters(fwhms=(10, 10, 10)):

@@ -46,23 +46,16 @@ class KernelOperator(LinearOperator):
 
         del tmp_acq_model, tmp_obj_fun
 
-    def get_alpha(self, x):
-        return self.current_alpha if self.freeze_alpha else x
-
     def direct(self, x, out=None):
+        
+        if self.current_alpha is None or not self.freeze_alpha:
+            self.current_alpha = x.copy()
         if out is None:
-            out = x.copy()
-
-        self.current_alpha = self.get_alpha(x)
+            return self.recon.compute_kernelised_image(x, self.current_alpha)
         out.fill(self.recon.compute_kernelised_image(x, self.current_alpha))
         return out
 
     def adjoint(self, x, out=None):
-        if self.current_alpha is None:
-            raise ValueError("No current alpha value set.")
 
-        if out is None:
-            out = x.copy()
+        return self.direct(x, out)  # Self-adjoint
 
-        out.fill(self.recon.compute_kernelised_image(x, self.current_alpha))
-        return out

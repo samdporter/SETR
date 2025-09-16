@@ -11,6 +11,8 @@ spect_reconstruction: "/home/sam/working/synergistic_recon/results/hkem_spect_1b
 transform_file: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140/spect2pet.nii"
 output_file: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom/spect.hv"
 
+2bpos: false  # Use 2 bed positions (false = single bed position)
+
 # Alternative output for different datasets
 # Uncomment and modify as needed:
 # pet_template: "${data_dir}/PET/phantom/template_image.hv"

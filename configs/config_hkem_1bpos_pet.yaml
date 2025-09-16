@@ -5,6 +5,7 @@
 modality: "PET"  # Options: "PET", "SPECT"
 method: "ista"   # Options: "kosmaposl", "ista"
 guidance: "attenuation"  # Options: "attenuation", "emission"
+use_scatter: true
 
 # Data paths
 data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom"
@@ -15,7 +16,7 @@ working_path: "/home/sam/working/synergistic_recon/tmp"
 # Algorithm parameters
 num_subsets: 9
 num_epochs: 30
-step_size: 0.1
+step_size: 1
 sampling: "sequential"  # Options: "sequential", "staggered"
 
 # Kernel operator parameters

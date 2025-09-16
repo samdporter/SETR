@@ -2,7 +2,7 @@
 """Test script for debugging diverging reconstructions in cluster environment.
 
 This script loads data and functions from run_dtnv_2bpos.py setup, then evaluates
-objective functions, gradients, and preconditioners on various test images including
+objective functions and gradients on various test images including
 initial images and scaled ellipsoid phantoms.
 """
 
@@ -27,7 +27,6 @@ from setr.scripts.common import (
     init_run_env,
 )
 from setr.scripts.dtnv_common import (
-    get_preconditioners,
     get_prior,
     gradient_energy_scale_sirf,
     apply_gradient_energy_scaling,
@@ -46,8 +45,7 @@ from setr.utils.sirf import get_filters
 def prepare_data(args):
     """Prepare PET and SPECT data - identical to run_dtnv_2bpos.py"""
     pet_data = get_pet_data_multiple_bed_pos(
-        args.pet_data_path, tof=args.use_tof, suffixes=["_f1b1", "_f2b1"]
-    )
+        args.pet_data_path, tof=args.use_tof, suffixes=["_f1b1", "_f2b1"])
 
     umap = pet_data["attenuation"]
     umap += (-umap).max()
@@ -107,6 +105,7 @@ def get_data_fidelity(args, pet_data, spect_data, uncombine_op, unshift_ops, cho
             attenuation=True,
         )
 
+    print("Partitioning PET data...")
     # Partition PET by bed
     pet_dfs = [
         partitioner.data_partition(
@@ -119,16 +118,19 @@ def get_data_fidelity(args, pet_data, spect_data, uncombine_op, unshift_ops, cho
         )[2]
         for suffix in pet_data["bed_positions"]
     ]
+    print("Done partitioning PET data.")
 
     # Keep raw copies for κ before operator wrapping
     pet_dfs_raw = [list(df_list) for df_list in pet_dfs]
 
+    print("Setting up PET subset objectives...")
     # Set up subset objs on their own bed template
     for i, suffix in enumerate(pet_data["bed_positions"]):
         tmpl = pet_data["bed_positions"][suffix]["template_image"]
         for j in range(len(pet_dfs[i])):
             pet_dfs[i][j].set_up(tmpl)
 
+    print("Partitioning SPECT data...")
     # Partition SPECT
     spect_dfs = partitioner.data_partition(
         spect_data["acquisition_data"],
@@ -138,10 +140,13 @@ def get_data_fidelity(args, pet_data, spect_data, uncombine_op, unshift_ops, cho
         mode="staggered",
         create_acq_model=get_spect_am_with_res,
     )[2]
+    print("Done partitioning SPECT data.")
     
+    print("Setting up SPECT subset objectives...")
     for obj_fun in spect_dfs:
         obj_fun.set_up(spect_data["initial_image"])
 
+    print("Done setting up SPECT subset objectives.")
     # Compute κ² images before op wrapping
     pet_kappa_bed_sq = []
     for df_list, suffix in zip(pet_dfs_raw, pet_data["bed_positions"]):
@@ -172,7 +177,7 @@ def get_data_fidelity(args, pet_data, spect_data, uncombine_op, unshift_ops, cho
         )
     )
     pet_s_inv = pet_sens_combined.clone()
-    pet_sens_array = pet_sens_combined.as_array()
+    pet_sens_array = get_array(pet_sens_combined)
     pet_s_inv.fill(np.reciprocal(pet_sens_array, where=pet_sens_array != 0))
     cyl, _ = get_filters()
     cyl.apply(pet_s_inv)
@@ -241,7 +246,7 @@ def create_ellipsoid_phantom(template_image, center=None, radii=None, intensity=
     
     # Create phantom
     phantom = template_image.get_uniform_copy(0)
-    phantom_array = phantom.as_array()
+    phantom_array = get_array(phantom)
     phantom_array[mask] = intensity
     phantom.fill(phantom_array)
     
@@ -270,26 +275,10 @@ def create_test_images(initial_estimates):
     )
     test_images['ellipsoid_central'] = EnhancedBlockDataContainer(pet_ellipsoid, spect_ellipsoid)
     
-    # Off-center ellipsoid
-    shape_pet = initial_estimates.containers[0].shape
-    shape_spect = initial_estimates.containers[1].shape
-    
-    pet_ellipsoid_off = create_ellipsoid_phantom(
-        initial_estimates.containers[0],
-        center=np.array(shape_pet) // 3,
-        intensity=pet_max * 0.7
-    )
-    spect_ellipsoid_off = create_ellipsoid_phantom(
-        initial_estimates.containers[1],
-        center=np.array(shape_spect) // 3,
-        intensity=spect_max * 0.7
-    )
-    test_images['ellipsoid_off'] = EnhancedBlockDataContainer(pet_ellipsoid_off, spect_ellipsoid_off)
-    
-    # Small uniform background
-    test_images['uniform_low'] = EnhancedBlockDataContainer(
-        initial_estimates.containers[0].get_uniform_copy(pet_max * 0.1),
-        initial_estimates.containers[1].get_uniform_copy(spect_max * 0.1)
+    # Zero background
+    test_images['uniform_zero'] = EnhancedBlockDataContainer(
+        initial_estimates.containers[0].get_uniform_copy(0),
+        initial_estimates.containers[1].get_uniform_copy(0)
     )
     
     return test_images
@@ -351,18 +340,6 @@ def evaluate_functions(test_image, data_fidelity_funs, prior_funs):
     return results
 
 
-def evaluate_preconditioners(test_image, preconditioner):
-    """Evaluate preconditioner on test image."""
-    # Apply preconditioner to get scaling
-    precond_result = test_image.copy()
-    preconditioner(precond_result, out=precond_result)
-    
-    return {
-        'preconditioned': precond_result.copy(),
-        'scaling_factor': precond_result.copy()  # This shows the local scaling
-    }
-
-
 def plot_coronal_slice(image_data, title, save_path, central_slice=None):
     """Plot central coronal slice of image data."""
     if hasattr(image_data, 'containers'):
@@ -372,7 +349,7 @@ def plot_coronal_slice(image_data, title, save_path, central_slice=None):
             axes = [axes]
             
         for i, container in enumerate(image_data.containers):
-            array = container.as_array()
+            array = get_array(container)
             if central_slice is None:
                 y_center = array.shape[1] // 2
             else:
@@ -387,7 +364,7 @@ def plot_coronal_slice(image_data, title, save_path, central_slice=None):
     else:
         # Single image
         fig, ax = plt.subplots(figsize=(8, 6))
-        array = image_data.as_array()
+        array = get_array(image_data)
         if central_slice is None:
             y_center = array.shape[1] // 2
         else:
@@ -403,6 +380,235 @@ def plot_coronal_slice(image_data, title, save_path, central_slice=None):
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close()
+
+def plot_all_gradients(results, test_name: str, out_dir: str):
+    """Plot gradients for all available components in `results`."""
+    # 1) Data fidelity: individual subsets
+    if 'data_fidelity_individual' in results:
+        for k, v in results['data_fidelity_individual'].items():
+            plot_coronal_slice(
+                v['gradient'],
+                f"Gradient ({k}): {test_name}",
+                os.path.join(out_dir, f"grad_{test_name}_{k}.png")
+            )
+
+    # 2) Prior: individual terms (if present)
+    if 'prior_individual' in results:
+        for k, v in results['prior_individual'].items():
+            plot_coronal_slice(
+                v['gradient'],
+                f"Gradient ({k}): {test_name}",
+                os.path.join(out_dir, f"grad_{test_name}_{k}.png")
+            )
+
+    # 3) Totals
+    plot_coronal_slice(
+        results['data_fidelity_total']['gradient'],
+        f"Gradient (data_total): {test_name}",
+        os.path.join(out_dir, f"grad_{test_name}_data_total.png")
+    )
+
+    if 'prior_total' in results:
+        plot_coronal_slice(
+            results['prior_total']['gradient'],
+            f"Gradient (prior_total): {test_name}",
+            os.path.join(out_dir, f"grad_{test_name}_prior_total.png")
+        )
+
+    plot_coronal_slice(
+        results['total_objective']['gradient'],
+        f"Gradient (total_objective): {test_name}",
+        os.path.join(out_dir, f"grad_{test_name}_total.png")
+    )
+
+def test_shift_operators(initial_estimates, bo, output_path):
+    """Test the shift operators by visualizing transformations through image spaces.
+    
+    Args:
+        initial_estimates: EnhancedBlockDataContainer with PET and SPECT initial images
+        bo: BlockOperator for transforming between spaces
+        output_path: Directory to save output images
+    """
+    logging.info("Testing shift operators...")
+    
+    # 1. Save original images (in modality-specific spaces)
+    logging.info("Saving original images...")
+    plot_coronal_slice(
+        initial_estimates, 
+        "Original Images (Modality-Specific Spaces)", 
+        os.path.join(output_path, "shift_test_01_original.png")
+    )
+    
+    # Also save individual modalities
+    plot_coronal_slice(
+        initial_estimates.containers[0], 
+        "Original PET Image", 
+        os.path.join(output_path, "shift_test_01a_original_pet.png")
+    )
+    plot_coronal_slice(
+        initial_estimates.containers[1], 
+        "Original SPECT Image", 
+        os.path.join(output_path, "shift_test_01b_original_spect.png")
+    )
+    
+    # 2. Transform to combined (prior) image space
+    logging.info("Transforming to combined image space...")
+    combined = bo.direct(initial_estimates)
+    
+    plot_coronal_slice(
+        combined, 
+        "Images in Combined (Prior) Space - Forward Transform", 
+        os.path.join(output_path, "shift_test_02_combined_forward.png")
+    )
+    
+    # Save individual components of combined space
+    plot_coronal_slice(
+        combined.containers[0], 
+        "Combined Space - PET Component", 
+        os.path.join(output_path, "shift_test_02a_combined_pet.png")
+    )
+    plot_coronal_slice(
+        combined.containers[1], 
+        "Combined Space - SPECT Component", 
+        os.path.join(output_path, "shift_test_02b_combined_spect.png")
+    )
+    
+    # 3. Transform back to original spaces (adjoint operation)
+    logging.info("Transforming back to original spaces...")
+    reconstructed = bo.adjoint(combined)
+    
+    plot_coronal_slice(
+        reconstructed, 
+        "Reconstructed Images (Back to Original Spaces)", 
+        os.path.join(output_path, "shift_test_03_reconstructed.png")
+    )
+    
+    # Save individual reconstructed modalities
+    plot_coronal_slice(
+        reconstructed.containers[0], 
+        "Reconstructed PET Image", 
+        os.path.join(output_path, "shift_test_03a_reconstructed_pet.png")
+    )
+    plot_coronal_slice(
+        reconstructed.containers[1], 
+        "Reconstructed SPECT Image", 
+        os.path.join(output_path, "shift_test_03b_reconstructed_spect.png")
+    )
+    
+    # 4. Compute and visualize differences (round-trip error)
+    logging.info("Computing round-trip transformation errors...")
+    
+    # Calculate differences
+    pet_diff = initial_estimates.containers[0].copy()
+    pet_diff -= reconstructed.containers[0]
+    
+    spect_diff = initial_estimates.containers[1].copy()
+    spect_diff -= reconstructed.containers[1]
+    
+    difference = EnhancedBlockDataContainer(pet_diff, spect_diff)
+    
+    plot_coronal_slice(
+        difference, 
+        "Round-trip Error (Original - Reconstructed)", 
+        os.path.join(output_path, "shift_test_04_roundtrip_error.png")
+    )
+    
+    plot_coronal_slice(
+        pet_diff, 
+        "PET Round-trip Error", 
+        os.path.join(output_path, "shift_test_04a_pet_error.png")
+    )
+    plot_coronal_slice(
+        spect_diff, 
+        "SPECT Round-trip Error", 
+        os.path.join(output_path, "shift_test_04b_spect_error.png")
+    )
+    
+    # 5. Generate numerical summary
+    logging.info("Generating shift operator test summary...")
+    
+    # Compute norms and relative errors
+    original_pet_norm = initial_estimates.containers[0].norm()
+    original_spect_norm = initial_estimates.containers[1].norm()
+    
+    combined_pet_norm = combined.containers[0].norm()
+    combined_spect_norm = combined.containers[1].norm()
+    
+    reconstructed_pet_norm = reconstructed.containers[0].norm()
+    reconstructed_spect_norm = reconstructed.containers[1].norm()
+    
+    pet_error_norm = pet_diff.norm()
+    spect_error_norm = spect_diff.norm()
+    
+    pet_relative_error = pet_error_norm / original_pet_norm if original_pet_norm > 0 else float('inf')
+    spect_relative_error = spect_error_norm / original_spect_norm if original_spect_norm > 0 else float('inf')
+    
+    # Check shapes
+    original_shapes = [c.shape for c in initial_estimates.containers]
+    combined_shapes = [c.shape for c in combined.containers]
+    reconstructed_shapes = [c.shape for c in reconstructed.containers]
+    
+    with open(os.path.join(output_path, "shift_operator_test_summary.txt"), "w") as f:
+        f.write("Shift Operator Test Summary\n")
+        f.write("=" * 50 + "\n\n")
+        
+        f.write("Image Shapes:\n")
+        f.write(f"Original PET shape:      {original_shapes[0]}\n")
+        f.write(f"Original SPECT shape:    {original_shapes[1]}\n")
+        f.write(f"Combined PET shape:      {combined_shapes[0]}\n")
+        f.write(f"Combined SPECT shape:    {combined_shapes[1]}\n")
+        f.write(f"Reconstructed PET shape: {reconstructed_shapes[0]}\n")
+        f.write(f"Reconstructed SPECT shape: {reconstructed_shapes[1]}\n\n")
+        
+        f.write("Image Norms:\n")
+        f.write(f"Original PET norm:      {original_pet_norm:.6e}\n")
+        f.write(f"Original SPECT norm:    {original_spect_norm:.6e}\n")
+        f.write(f"Combined PET norm:      {combined_pet_norm:.6e}\n")
+        f.write(f"Combined SPECT norm:    {combined_spect_norm:.6e}\n")
+        f.write(f"Reconstructed PET norm: {reconstructed_pet_norm:.6e}\n")
+        f.write(f"Reconstructed SPECT norm: {reconstructed_spect_norm:.6e}\n\n")
+        
+        f.write("Round-trip Errors:\n")
+        f.write(f"PET absolute error norm:     {pet_error_norm:.6e}\n")
+        f.write(f"SPECT absolute error norm:   {spect_error_norm:.6e}\n")
+        f.write(f"PET relative error:          {pet_relative_error:.6e}\n")
+        f.write(f"SPECT relative error:        {spect_relative_error:.6e}\n\n")
+        
+        # Quality checks
+        f.write("Quality Assessment:\n")
+        if pet_relative_error < 1e-10:
+            f.write("✓ PET round-trip error is excellent (< 1e-10)\n")
+        elif pet_relative_error < 1e-6:
+            f.write("✓ PET round-trip error is good (< 1e-6)\n")
+        elif pet_relative_error < 1e-3:
+            f.write("⚠ PET round-trip error is acceptable (< 1e-3)\n")
+        else:
+            f.write("✗ PET round-trip error is large (>= 1e-3)\n")
+            
+        if spect_relative_error < 1e-10:
+            f.write("✓ SPECT round-trip error is excellent (< 1e-10)\n")
+        elif spect_relative_error < 1e-6:
+            f.write("✓ SPECT round-trip error is good (< 1e-6)\n")
+        elif spect_relative_error < 1e-3:
+            f.write("⚠ SPECT round-trip error is acceptable (< 1e-3)\n")
+        else:
+            f.write("✗ SPECT round-trip error is large (>= 1e-3)\n")
+        
+        # Check if shapes are preserved
+        if original_shapes == reconstructed_shapes:
+            f.write("✓ Image shapes preserved through transformation\n")
+        else:
+            f.write("✗ Image shapes NOT preserved through transformation\n")
+    
+    logging.info("Shift operator test completed successfully!")
+    
+    return {
+        'original': initial_estimates,
+        'combined': combined,
+        'reconstructed': reconstructed,
+        'pet_relative_error': pet_relative_error,
+        'spect_relative_error': spect_relative_error
+    }
 
 
 def main(args):
@@ -439,6 +645,8 @@ def main(args):
         spect2pet,
         shape=(2, 2),
     )
+
+    shift_test_results = test_shift_operators(initial_estimates, bo, args.output_path)
     
     # Apply scaling
     kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
@@ -461,11 +669,6 @@ def main(args):
             attach_prior_hessian(priors_list[i])
     else:
         priors_list = None
-    
-    # Set up preconditioners
-    logging.info("Setting up preconditioners...")
-    update_interval = len(all_funs)
-    preconditioner = get_preconditioners(args, s_inv, all_funs, update_interval, priors_list, initial_estimates)
     
     # Save kappa and sensitivity images
     for i, image in enumerate(s_inv.containers):
@@ -496,25 +699,11 @@ def main(args):
         # Evaluate objective functions
         results = evaluate_functions(test_img, all_funs, priors_list)
         
-        # Evaluate preconditioners
-        precond_results = evaluate_preconditioners(test_img, preconditioner)
-        results['preconditioner'] = precond_results
-        
         all_results[test_name] = results
         
         # Plot gradients
-        plot_coronal_slice(
-            results['total_objective']['gradient'], 
-            f"Total Gradient: {test_name}", 
-            os.path.join(args.output_path, f"gradient_{test_name}.png")
-        )
+        plot_all_gradients(results, test_name, args.output_path)
         
-        # Plot preconditioner
-        plot_coronal_slice(
-            precond_results['preconditioned'], 
-            f"Preconditioned: {test_name}", 
-            os.path.join(args.output_path, f"preconditioner_{test_name}.png")
-        )
     
     # Generate summary report
     logging.info("Generating summary report...")
@@ -559,5 +748,7 @@ if __name__ == "__main__":
     config = load_config(cli.config)
     config = apply_overrides(config, cli.override)
     args = argparse.Namespace(**config)
+
+    msg = init_run_env(args)
     
     main(args)

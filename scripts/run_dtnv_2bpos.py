@@ -55,11 +55,11 @@ from setr.utils import (
     get_spect_data,
 )
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters
+from setr.utils.sirf import get_filters, get_array
 
 def prepare_data(args):
     """
-    Prepare theumapimage, PET and SPECT data, and initial estimates.
+    Prepare the umap image, PET and SPECT data, and initial estimates.
 
     Returns:
         ct: Normalizedumapimage.
@@ -108,7 +108,7 @@ def prepare_data(args):
 
     # check for nans in all data
     for data in [umap, pet_data["initial_image"], spect_data["initial_image"]]:
-        if np.isnan(data.as_array()).any():
+        if np.isnan(get_array(data)).any():
             logging.warning("An image contains NaNs")
             break
 
@@ -206,7 +206,7 @@ def get_data_fidelity(
         )
     )
     pet_s_inv = pet_sens_combined.clone()
-    pet_sens_array = pet_sens_combined.as_array()
+    pet_sens_array = get_array(pet_sens_combined)
     pet_s_inv.fill(np.reciprocal(pet_sens_array, where=pet_sens_array != 0))
     cyl, _ = get_filters()
     cyl.apply(pet_s_inv)

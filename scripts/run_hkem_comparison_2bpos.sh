@@ -39,8 +39,8 @@ PET_KOSMAPOSL_RESULTS="${RESULTS_DIR}/hkem_pet_kosmaposl_2bpos"
 # ================================
 # CONTROL FLAGS - Edit these to run specific parts
 # ================================
-DO_SPECT=true          # Run SPECT HKEM reconstruction (1 bed position)
-DO_RESAMPLE=true       # Resample SPECT to PET space
+DO_SPECT=false         # Run SPECT HKEM reconstruction (1 bed position)
+DO_RESAMPLE=false       # Resample SPECT to PET space
 DO_PET_HKEM=true       # Run PET HKEM (2 bed positions, hybrid with emission guidance)
 DO_PET_KEM=true        # Run PET KEM (2 bed positions, anatomical guidance only)
 DO_KOSMAPOSL=false     # Run KOSMAPOSL method (experimental)
@@ -64,7 +64,7 @@ if [ "$DO_SPECT" = true ]; then
     echo "SPECT HKEM reconstruction completed"
 fi
 
-if [ "$DO_RESAMPLE" = true ] && [ "$DO_SPECT" = true ]; then
+if [ "$DO_RESAMPLE" = true ]; then
     echo "=== Resampling SPECT reconstruction to PET space ==="
     python3 "$RESAMPLE_SCRIPT" --config "$RESAMPLE_CONFIG"
     echo "SPECT resampling completed"

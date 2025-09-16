@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from setr.utils.sirf import get_array
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -14,7 +15,7 @@ class BlockDataContainerToArray:
             raise ValueError(
                 "Input x must be a block data container with a 'containers' attribute."
             )
-        arrays = [d.as_array() for d in x.containers]
+        arrays = [get_array(d) for d in x.containers]
         if not self.gpu:
             return np.stack(arrays, axis=-1)
         tens = [torch.tensor(arr, device=device) for arr in arrays]

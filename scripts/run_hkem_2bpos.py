@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 import numpy as np
 from cil.optimisation.algorithms import ISTA
-from cil.optimisation.functions import OperatorCompositionFunction, SVRGFunction
+from cil.optimisation.functions import (
+    OperatorCompositionFunction, 
+    SumFunction,
+    SGFunction,
+)
 from cil.optimisation.operators import CompositionOperator
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
@@ -19,16 +23,22 @@ from setr.cil_extensions.preconditioners import (
     DualModalitySubsetKernelisedEMPreconditioner,
 )
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
+from setr.cil_extensions.operators import AdjointOperator, CouchShiftOperator
+from setr.cil_extensions.callbacks import (
+    PrintObjectiveCallback,
+    SaveImageCallback,
+    SaveObjectiveCallback,
+)
 from setr.scripts.common import (
     configure_logging,
-    get_sensitivity_from_subset_objs,
+    get_sensitivities_from_subset_objs,
     get_shift_operators,
     init_run_env,
 )
 from setr.scripts.hkem_common import get_kernel_hyperparams, get_kernel_operator
 from setr.utils import get_pet_data_multiple_bed_pos
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_pet_am
+from setr.utils.sirf import get_filters, get_pet_am, get_array
 
 
 def prepare_data(args):
@@ -54,14 +64,14 @@ def prepare_data(args):
     # Create initial estimates - for HKEM we just need PET
     initial_estimates = pet_data["initial_image"]
 
-    if np.isnan(initial_estimates.as_array()).any():
+    if np.isnan(get_array(initial_estimates)).any():
         logging.warning("Initial image contains NaNs")
 
     return pet_data, guidance, initial_estimates
 
 
 def get_data_fidelity(
-    args, pet_data, get_pet_am, num_subsets, uncombine_op, unshift_ops, choose_ops
+    args, pet_data, get_pet_am, num_subsets, uncombine_op, unshift_ops, choose_ops, unzero_shift_op
 ):
     """
     Set up data fidelity (objective) functions for multi-bed reconstruction.
@@ -92,29 +102,34 @@ def get_data_fidelity(
 
     # Get sensitivities for each bed position
     pet_sens = [
-        get_sensitivity_from_subset_objs(df)
+        get_sensitivities_from_subset_objs(df)
         for df in pet_dfs
     ]
+    
+    # save sensitivities for debugging
+    for i, sens in enumerate(pet_sens):
+        for j, s in enumerate(sens):
+            s.write(os.path.join(args.output_path, f"sens_bed{i}_subset{j}.hv"))
 
-    # Unshift and combine PET sensitivities to common PET grid
-    pet_sens_combined = uncombine_op.adjoint(
-        EnhancedBlockDataContainer(
-            *[unshift_op.adjoint(s) for unshift_op, s in zip(unshift_ops, pet_sens)]
+    # Combine corresponding subsets across bed positions
+    num_subsets = len(pet_sens[0])  # Get number of subsets from first bed position
+    pet_sens_combined = [
+        num_subsets * unzero_shift_op.adjoint(
+            uncombine_op.adjoint(
+                EnhancedBlockDataContainer(
+                    *[unshift_op.adjoint(sens[subset_idx]) 
+                    for unshift_op, sens in zip(unshift_ops, pet_sens)]
+                )
+            )
         )
-    )
-
-    # Create sensitivity inverse
-    s_inv = pet_sens_combined.clone()
-    sens_array = pet_sens_combined.as_array()
-    s_inv.fill(np.reciprocal(sens_array, where=sens_array != 0))
-
-    # Apply cylindrical filter
-    cyl, _ = get_filters()
-    cyl.apply(s_inv)
-
-    # Save sensitivity inverse
-    s_inv.write(os.path.join(args.output_path, "s_inv.hv"))
-    logging.info(f"Writing s_inv with max {s_inv.max()}")
+        for subset_idx in range(num_subsets)
+    ]
+    
+    
+    # debug print
+    print(f"Number of PET sensitivities combined: {len(pet_sens_combined)}")
+    print(f"type of first sensitivity: {type(pet_sens_combined[0])}")
+    print(f"Shape of first sensitivity: {pet_sens_combined[0].shape}")
 
     # Wrap PET objectives with uncombine/choose/unshift operators
     for i, suffix in enumerate(pet_data["bed_positions"]):
@@ -125,32 +140,18 @@ def get_data_fidelity(
                     unshift_ops[i],
                     choose_ops[i],
                     uncombine_op,
+                    unzero_shift_op
                 ),
             )
 
-    # Flatten the list to get one function per subset per bed
-    all_funs = [df for bed in pet_dfs for df in bed]
+    # Combine objectives across bed positions
+    all_funs = [SumFunction(*[funs[j] for funs in pet_dfs]) for j in range(num_subsets)]
+    print(f"len(all_funs): {len(all_funs)}")
 
-    # Create list of sensitivities for preconditioner
-    # We need to transform the bed-level sensitivities using the same operators
-    sens_bdcs = []
-    for bed_idx in range(len(pet_dfs)):  # For each bed
-        for _ in range(len(pet_dfs[bed_idx])):
-            # Transform the sensitivity from bed coordinates to combined coordinates
-            bed_sens = pet_sens[bed_idx]  # Sensitivity for this bed
-            combined_sens = uncombine_op.adjoint(
-                EnhancedBlockDataContainer(
-                    *[
-                        unshift_ops[i].adjoint(bed_sens)
-                        if i == bed_idx
-                        else pet_data["initial_image"].get_uniform_copy(0)
-                        for i in range(len(unshift_ops))
-                    ]
-                )
-            )
-            sens_bdcs.append(combined_sens)
-
-    return all_funs, s_inv, sens_bdcs
+    # save all sens
+    for i, s in enumerate(pet_sens_combined):
+        s.write(os.path.join(args.output_path, f"early_sensitivity_{i}.hv"))
+    return all_funs, pet_sens_combined
 
 
 def run_hkem_ista(args, pet_data, guidance, initial_estimates):
@@ -162,9 +163,18 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
 
     # Set up shift operators
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
+    shift = CouchShiftOperator.get_couch_shift_from_sinogram(
+        pet_data["bed_positions"]["_f2b1"]["acquisition_data"]
+    )
+    print( f"Using shift of {shift}mm for bed position 2" )
+    zero_shift_op = CouchShiftOperator(
+        pet_data["template_image"], 0
+    )
+    unzero_shift_op = AdjointOperator(zero_shift_op)
+    initial_estimates = zero_shift_op.direct(initial_estimates)
 
     # Set up data fidelity functions
-    all_funs, s_inv, sens_bdcs = get_data_fidelity(
+    all_funs, sens = get_data_fidelity(
         args,
         pet_data,
         get_pet_am_with_res,
@@ -172,35 +182,37 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
         uncombine_op,
         unshift_ops,
         choose_ops,
+        unzero_shift_op,
     )
 
     # Create kernel operators for each bed position
     hyperparams = get_kernel_hyperparams(args)
-    kernels = []
-    for suffix in pet_data["bed_positions"]:
-        guide = (
-            pet_data["bed_positions"][suffix]["attenuation"]
-            if args.guidance == "attenuation"
-            else pet_data["bed_positions"][suffix]["spect"]
-        )
-        kernel = get_kernel_operator(
-            args,
-            guide,
-            pet_data["bed_positions"][suffix]["template_image"],
-            pet_data["bed_positions"][suffix]["acquisition_data"],
-            hyperparams,
-        )
-        kernels.append(kernel)
+    if args.guidance == "attenuation":
+        guide = zero_shift_op.direct(pet_data["attenuation"])
+    elif args.guidance == "emission":
+        guide = zero_shift_op.direct(pet_data["spect"])
+    else:
+        raise ValueError(f"Unknown guidance type: {args.guidance}")
+    assert type(guide) is type(initial_estimates), f"Guidance and initial estimates must be same type. Got {type(guide)} and {type(initial_estimates)}"
+    
+    print("Image shapes:")
+    print(f"Guide shape: {guide.shape}")
+    print(f"Initial estimates shape: {initial_estimates.shape}")
+
+    kernel = get_kernel_operator(
+        args,
+        guide,
+        initial_estimates,
+        pet_data["bed_positions"]["_f2b1"]["acquisition_data"],
+        hyperparams,
+    )
 
     # Set up objective function
     update_interval = len(all_funs)
-    probs = [1 / update_interval] * len(all_funs)
 
-    f_obj = -SVRGFunction(
+    f_obj = -SGFunction(
         all_funs,
-        sampler=Sampler.random_with_replacement(len(all_funs), prob=probs),
-        snapshot_update_interval=update_interval * 2,
-        store_gradients=True,
+        sampler=Sampler.sequential(len(all_funs)),
     )
 
     # Set up preconditioners
@@ -208,14 +220,52 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
 
     # Create dual modality kernel preconditioner
     dual_precond = DualModalitySubsetKernelisedEMPreconditioner(
-        sens_bdcs=sens_bdcs,
-        kernel=kernels,
-        uncombine_ops=unshift_ops,
+        sens=sens,
+        kernel=kernel,
         num_subsets=len(all_funs),
         update_interval=update_interval,
         freeze_iter=args.freeze_iter,
         epsilon=max_val * 1e-12,
     )
+        
+    # save all sens
+    for i, s in enumerate(sens):
+        s.write(os.path.join(args.output_path, f"late_sensitivity_{i}.hv"))
+        k_s = kernel.direct(s)
+        k_s.write(os.path.join(args.output_path, f"kernel_sensitivity_{i}.hv"))
+
+    # Set up callbacks
+    class SaveKernelisedImageCallback:
+        """Save the kernelised image (x = K(alpha)) to disk."""
+
+        def __init__(self, filename, interval, kernel_op):
+            self.filename = filename
+            self.interval = interval
+            self.kernel_op = kernel_op
+
+        def __call__(self, algo):
+            if algo.iteration % self.interval != 0:
+                return
+            # Save the kernelised image
+            image = self.kernel_op.direct(algo.solution)
+            image.write(f"{self.filename}_{algo.iteration}.hv")
+
+    callbacks = [
+        SaveImageCallback(
+            os.path.join(args.output_path, "alpha"),
+            interval=args.num_subsets,
+        ),
+        SaveKernelisedImageCallback(
+            os.path.join(args.output_path, "x"),
+            interval=args.num_subsets,
+            kernel_op=kernel,
+        ),
+        PrintObjectiveCallback(interval=args.num_subsets),
+        SaveObjectiveCallback(
+            os.path.join(args.output_path, "objective"),
+            interval=args.num_subsets,
+        ),
+    ]
 
     # Set up algorithm
     algo = ISTA(
@@ -223,19 +273,21 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
         f=f_obj,
         g=BlockIndicatorBox(lower=0, upper=np.inf),
         preconditioner=dual_precond,  # Use kernel preconditioner
-        step_size=LinearDecayStepSizeRule(args.initial_step_size, args.relaxation_eta),
+        step_size=args.initial_step_size,
         update_objective_interval=update_interval,
     )
 
     num_subiterations = args.num_epochs * update_interval
     logging.info("Running HKEM-ISTA reconstruction...")
-    algo.run(num_subiterations, verbose=True)
+    algo.run(
+        num_subiterations, callbacks=callbacks, verbose=True
+    )
 
     # Get final results
     output_alpha = algo.solution
 
     # Apply first kernel to get kernelised image
-    output_x = kernels[0].direct(output_alpha)
+    output_x = kernel.direct(output_alpha)
 
     # Save final results
     output_alpha.write(os.path.join(args.output_path, "reconstruction_alpha.hv"))

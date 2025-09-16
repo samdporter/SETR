@@ -6,6 +6,7 @@ from cil.framework import BlockDataContainer, BlockGeometry
 from cil.optimisation.operators import LinearOperator
 from sirf.Reg import NiftyResample
 from sirf.STIR import ImageData, TruncateToCylinderProcessor
+from setr.utils.sirf import get_array
 
 
 class AdjointOperator(LinearOperator):
@@ -65,7 +66,7 @@ class ZeroEndSlicesOperator(LinearOperator):
     def direct(self, x, out=None):
         if out is None:
             out = x.copy()
-        out_arr = out.as_array()
+        out_arr = get_array(out)
         out_arr[-self.num_slices :, :, :] = 0
         out_arr[: self.num_slices, :, :] = 0
         out.fill(out_arr)
@@ -90,7 +91,7 @@ class NaNToZeroOperator(LinearOperator):
     def direct(self, x, out=None):
         if out is None:
             out = x.copy()
-        out_arr = out.as_array()
+        out_arr = get_array(out)
         out_arr[np.isnan(out_arr)] = 0
         out.fill(out_arr)
         return out
@@ -160,37 +161,106 @@ class DirectionalOperator(LinearOperator):
 
 
 class NiftyResampleOperator(LinearOperator):
-    def __init__(self, reference, floating, transform):
+    """
+    Resampling operator that handles both zooming and registration transformations.
+    """
+    
+    def __init__(self, reference, floating, transform, zoom_factors=None):
+        """
+        Initialize the resampling operator.
+        
+        Args:
+            reference: Reference ImageData
+            floating: Floating ImageData  
+            transform: Registration transformation
+            zoom_factors: Optional tuple of zoom factors (z, y, x) to apply before registration
+        """
         self.reference = reference.get_uniform_copy(0)
         self.floating = floating.get_uniform_copy(0)
         self.transform = transform
-
+        self.zoom_factors = zoom_factors
+        
         self.resampler = NiftyResample()
-        self.resampler.set_reference_image(reference)
-        self.resampler.set_floating_image(floating)
-        self.resampler.set_interpolation_type_to_cubic_spline()
+        self.resampler.set_reference_image(self.reference)
+        self.resampler.set_floating_image(self.floating)
+        self.resampler.set_interpolation_type_to_linear()
         self.resampler.set_padding_value(0)
         self.resampler.add_transformation(self.transform)
-
+        
+        # Calculate scaling factor for proper adjoint
+        vx_ref = self.reference.voxel_sizes()
+        vx_flt = self.floating.voxel_sizes()
+        self.scale = (vx_ref[0] * vx_ref[1] * vx_ref[2]) / (vx_flt[0] * vx_flt[1] * vx_flt[2])
+        
+        if self.zoom_factors:
+            # Adjust scale for zoom
+            zoom_volume_factor = self.zoom_factors[0] * self.zoom_factors[1] * self.zoom_factors[2]
+            self.scale /= zoom_volume_factor
+    
     def direct(self, x, out=None):
-        res = self.resampler.forward(x)
+        """Forward transformation: floating -> reference space."""
+        input_image = x
+        
+        # Apply zoom if specified
+        if self.zoom_factors:
+            input_image = x.zoom_image(self.zoom_factors, scaling='preserve_projections')
+            # Update resampler with zoomed image
+            self.resampler.set_floating_image(input_image)
+        
+        # Apply registration transformation
+        res = self.resampler.forward(input_image)
         return self._project_and_fill(res, out)
-
+    
     def adjoint(self, x, out=None):
-        res = self.resampler.backward(x)
+        """Adjoint transformation: reference -> floating space."""
+        # Apply registration transformation (backward)
+        res = self.resampler.backward(x) * self.scale
+        
+        # Apply inverse zoom if specified
+        if self.zoom_factors:
+            inv_zoom_factors = tuple(1.0 / z for z in self.zoom_factors)
+            res = res.zoom_image(inv_zoom_factors, scaling='preserve_projections')
+        
         return self._project_and_fill(res, out)
-
+    
     def _project_and_fill(self, res, out):
-        res = res.maximum(0)
+        """Helper method to handle output."""
+        # res = res.maximum(0)  # Ensure non-negativity if needed
         if out is not None:
             out.fill(res)
+            return out
         return res
-
+    
     def domain_geometry(self):
         return self.floating
-
+    
     def range_geometry(self):
         return self.reference
+
+
+def load_zoom_factors(spect_dir):
+    """
+    Load previously saved zoom factors from file.
+    
+    Args:
+        spect_dir: Directory containing the zoom factors file
+        
+    Returns:
+        tuple: Zoom factors (z, y, x)
+    """
+    zoom_file_path = os.path.join(spect_dir, "spect_to_pet_zoom_factors.txt")
+    
+    if not os.path.exists(zoom_file_path):
+        raise FileNotFoundError(f"Zoom factors file not found: {zoom_file_path}")
+    
+    with open(zoom_file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('#') and line:
+                zoom_values = line.split()
+                return (float(zoom_values[0]), float(zoom_values[1]), float(zoom_values[2]))
+    
+    raise ValueError("No zoom factors found in file")
 
 
 class CouchShiftOperator(LinearOperator):
@@ -206,7 +276,7 @@ class CouchShiftOperator(LinearOperator):
         The amount by which to shift the couch position along the z-axis (in mm).
     """
 
-    def __init__(self, image, shift):
+    def __init__(self, image, shift, path=""):
         """
         Initialize the CouchShiftOperator.
 
@@ -218,54 +288,46 @@ class CouchShiftOperator(LinearOperator):
             The amount by which to shift the couch position along the z-axis (in mm).
         """
         self.shift = shift
+        self.path=path
         # need to create range geometry by shifting the image
-        range_geometry = self.initialise_shift(image, out=None)
+        range_geometry = self.initialise_shift(image)
         super().__init__(domain_geometry=image, range_geometry=range_geometry)
 
         self.unshifted_image = image.copy()
         self.shifted_image = range_geometry.copy()
 
-    def initialise_shift(self, x, out=None):
+    def initialise_shift(self, x):
         """
         Apply the couch shift using an isolated temp directory.
         Returns a new ImageData with updated geometry if out is None.
         If out is provided, copies voxel data into out (geometry unchanged).
         """
-        import tempfile
-        from pathlib import Path
 
-        with tempfile.TemporaryDirectory(prefix="couchshift_") as td:
-            td = Path(td)
-            hv_path = td / "shifted.hv"  # writer will place the paired .v alongside
+        # writer will place the paired .v alongside
+        shift_path = os.path.join(self.path, f"shifted{self.shift}.hv")
 
-            x.write(str(hv_path))
-            self.modify_pixel_offset(str(hv_path), self.shift, 3)
+        x.write(shift_path)
+        self.modify_pixel_offset(shift_path, self.shift, 3)
 
-            shifted = ImageData(str(hv_path))
-
-            if out is None:
-                return shifted
-
-            out.fill(shifted.as_array())
-            return out
+        return ImageData(shift_path)
 
     def direct(self, x, out=None):
-        x_arr = x.as_array()
+        x_arr = get_array(x)
         if out is not None:
             out.fill(x_arr)
             return out
         else:
             self.shifted_image.fill(x_arr)
-            return self.shifted_image
+            return self.shifted_image.copy()
 
     def adjoint(self, x, out=None):
-        x_arr = x.as_array()
+        x_arr = get_array(x)
         if out is not None:
             out.fill(x_arr)
             return out
         else:
             self.unshifted_image.fill(x_arr)
-            return self.unshifted_image
+            return self.unshifted_image.copy()
 
     @staticmethod
     def modify_pixel_offset(file_path, new_offset, pixel_index):
@@ -279,15 +341,6 @@ class CouchShiftOperator(LinearOperator):
         new_offset : float
             The new value for 'first pixel offset (mm) [pixel_index]'.
         """
-        delete_file = False
-        if isinstance(file_path, ImageData):
-            print(
-                "This is supposed to be a file path but got an ImageData object. "
-                "Writing to a temporary file."
-            )
-            delete_file = True
-            file_path.write("tmp_shift.hv")
-            file_path = "tmp_shift.hv"
         try:
             # Read the file content
             with open(file_path, "r") as file:
@@ -306,9 +359,6 @@ class CouchShiftOperator(LinearOperator):
             raise RuntimeError(f"Failed to modify the file {file_path}: {e}")
 
         image = ImageData(file_path)
-
-        if delete_file:
-            os.remove(file_path)
 
         return image
 
@@ -431,14 +481,14 @@ class ImageCombineOperator(LinearOperator):
         zoomed_masks = [
             img.get_uniform_copy(1).zoom_image_as_template(reference) for img in images.containers
         ]
-        cov_arrs = [m.as_array() for m in zoomed_masks]
+        cov_arrs = [get_array(m) for m in zoomed_masks]
         coverage = sum(cov_arrs)  # integer count
         overlap = coverage >= 2  # boolean mask
 
         # 2) zoom sensitivities and pull raw arrays
         zoomed_sens = [s.zoom_image_as_template(reference) for s in sens_images.containers]
-        img_arrs = [z.as_array() for z in zoomed_imgs]
-        sens_arrs = [s.as_array() for s in zoomed_sens]
+        img_arrs = [get_array(z) for z in zoomed_imgs]
+        sens_arrs = [get_array(s) for s in zoomed_sens]
 
         # 3) numerator, denominator, simple sum
         num = sum(f * s for f, s in zip(img_arrs, sens_arrs))  # ∑ S_i·f_i
@@ -656,13 +706,13 @@ class ImageSummationOperator(LinearOperator):
             img.get_uniform_copy(1)  # Images are already zoomed, create masks from them
             for img in images.containers
         ]
-        cov_arrs = [m.as_array() for m in zoomed_masks]
+        cov_arrs = [get_array(m) for m in zoomed_masks]
         coverage = sum(cov_arrs)  # Integer count of how many images cover each pixel
         overlap = coverage >= 2  # Boolean mask where 2 or more images overlap
 
         # 2) Pull raw arrays for images and sensitivities
-        img_arrs = [z.as_array() for z in images.containers]
-        sens_arrs = [s.as_array() for s in sens_images.containers]
+        img_arrs = [get_array(z) for z in images.containers]
+        sens_arrs = [get_array(s) for s in sens_images.containers]
 
         # 3) Calculate components for the weighted sum formula
         num = sum(f * s for f, s in zip(img_arrs, sens_arrs))  # Numerator: ∑ (S_i * f_i)

@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 from cil.framework import BlockDataContainer
 from cil.optimisation.functions import ScaledFunction
@@ -291,18 +292,16 @@ class SubsetEMPreconditioner(SubsetPreconditioner):
 class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
     def __init__(
         self,
-        sens_bdcs,  # list of BlockDataContainer(s1,s2), length=num_subsets
+        sens,  # list of BlockDataContainer(s1,s2), length=num_subsets
         kernel,  # [K1, K2] kernel operators for each bed
-        uncombine_ops,  # [U1, U2] uncombine (adjoint) operators
         num_subsets,
         update_interval=1,
         freeze_iter=np.inf,
         epsilon=1e-6,
     ):
         super().__init__(num_subsets, update_interval, freeze_iter)
-        self.sens_bdcs = sens_bdcs
+        self.sens = sens
         self.kernel = kernel
-        self.uncombine_ops = uncombine_ops
         self.epsilon = epsilon
         self.freeze_kernel_iter = freeze_iter
 
@@ -323,9 +322,9 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
     def compute_preconditioner(self, algorithm, out=None):
         # for the kernelised EM, we need to freeze the alpha after a certain number of iterations
         # rather than freezing the whole preconditioner
-        if algorithm.iteration >= self.freeze_kernel_iter:
-            for k in self.kernel:
-                k.freeze_alpha = True
+        if algorithm.iteration >= self.freeze_kernel_iter and not self.kernel.freeze_alpha:
+            logging.info(f"Freezing kernel parameters at iteration {algorithm.iteration}")
+            self.kernel.freeze_alpha = True
 
         if isinstance(algorithm.f, ScaledFunction):
             sg = algorithm.f.function
@@ -336,20 +335,13 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
         except IndexError:  # can happen if the preconditioner is called before the first iteration
             subset_idx = 0
 
-        sens_bdc = self.sens_bdcs[subset_idx]
-
-        k_s = self.kernel[0].adjoint(sens_bdc.containers[0])
-        total = self.uncombine_ops[0].adjoint(k_s)
-        for i in range(1, len(sens_bdc.containers)):
-            k_s = self.kernel[i].adjoint(sens_bdc.containers[i])
-            total += self.uncombine_ops[i].adjoint(k_s)
-        total += self.epsilon  # to avoid division by zero
-        total = total.abs()
+        sens = self.sens[subset_idx]
+        adj = self.kernel.adjoint(sens) + self.epsilon
 
         if out is None:
-            return algorithm.solution / total
+            return algorithm.solution / adj
 
-        algorithm.solution.divide(total, out=out)
+        algorithm.solution.divide(adj, out=out)
         return out
 
 
