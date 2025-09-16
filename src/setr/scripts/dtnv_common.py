@@ -61,18 +61,26 @@ def get_kappa_squareds(obj_funs_list, image_list, normalise=True):
     )
     return EnhancedBlockDataContainer(*kappa_squareds)
 
-
 def get_callbacks(args, update_interval: int) -> List[Any]:
-    """Set up callbacks for DTNV algorithm monitoring (identical in both DTNV scripts)."""
-    return [
+    """Set up callbacks for DTNV algorithm monitoring."""
+    callbacks = [
         SaveImageCallback(os.path.join(args.output_path, "image"), update_interval),
-        SaveGradientUpdateCallback(os.path.join(args.output_path, "gradient"), update_interval),
-        SavePreconditionerCallback(
-            os.path.join(args.output_path, "preconditioner"), update_interval
-        ),
         PrintObjectiveCallback(update_interval),
         SaveObjectiveCallback(os.path.join(args.output_path, "objective"), update_interval),
     ]
+
+    if getattr(args, "save_gradients", False):
+        callbacks.append(
+            SaveGradientUpdateCallback(os.path.join(args.output_path, "gradient"), update_interval)
+        )
+
+    if getattr(args, "save_preconditioners", False):
+        callbacks.append(
+            SavePreconditionerCallback(os.path.join(args.output_path, "preconditioner"), update_interval)
+        )
+
+    return callbacks
+
 
 
 def get_algorithm(
@@ -137,7 +145,7 @@ def get_preconditioners(
     prior_precond = [
         ImageFunctionPreconditioner(
             p.inv_hessian_diag,
-            1.0,
+            1,
             freeze_iter=np.inf,
             epsilon=0,
         )

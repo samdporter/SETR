@@ -284,7 +284,7 @@ def main(args) -> None:
         return get_spect_am(
             spect_data,
             res=args.spect_res,
-            keep_all_views_in_cache=args.stop_keep_all_views_in_cache,
+            keep_all_views_in_cache=args.keep_all_views_in_cache,
             gauss_fwhm=args.spect_gauss_fwhm,
             attenuation=True,
         )
@@ -360,7 +360,7 @@ def main(args) -> None:
             len(all_funs),
             prob=probs,
         ),
-        snapshot_update_interval=update_interval * 2,
+        snapshot_update_interval=len(all_funs) * 2,
         store_gradients=True
     )
 

@@ -1,11 +1,11 @@
 # Sweep configuration for multiple bed positions
-sweep_name: "2bpos_alpha_beta"
+sweep_name: "2bpos_alpha_beta_sirt3"
 base_config: "config_2bpos.yaml"
 script: "run_dtnv_2bpos.py"
 
 # SGE resource requirements
 sge:
-  runtime: "112:00:00"
+  runtime: "240:00:00"
   memory: "60G"
   cores: 1
   queue: null  # Use default queue
@@ -15,9 +15,3 @@ sge:
 parameters:
   alpha_file: "alphas.csv"
   beta_file: "betas.csv"
-
-# Optional overrides for base config
-config_overrides:
-  num_epochs: 100
-  use_tof: false
-  # Add other parameters you want to override

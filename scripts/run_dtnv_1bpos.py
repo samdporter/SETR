@@ -295,7 +295,7 @@ def main(args) -> None:
             len(all_funs),
             prob=probs,
         ),
-        snapshot_update_interval=update_interval * 2,
+        snapshot_update_interval=len(all_funs) * 2,
         store_gradients=True
     )
 

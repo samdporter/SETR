@@ -12,19 +12,151 @@ SWEEPS_DIR="$SCRIPT_DIR"
 CONFIG_DIR="$SWEEPS_DIR/configs"
 PARAM_DIR="$SWEEPS_DIR/parameters"
 SCRIPTS_DIR="$SWEEPS_DIR/scripts"
+FAILED_NODES_FILE="$SWEEPS_DIR/failed_nodes.txt"
+PERMANENT_EXCLUSIONS="!hoots-207-2.local&!hoots-207-1.local"
 
 # Get sweep config from argument
 SWEEP_CONFIG="$1"
-TEST_MODE="${2:-}"
+MODE="${2:-full}"
+FORCE_FLAG="${3:-}"
 
-if [ -z "$SWEEP_CONFIG" ]; then
+# Functions for node management
+initialize_failed_nodes_file() {
+    if [ ! -f "$FAILED_NODES_FILE" ]; then
+        touch "$FAILED_NODES_FILE"
+        echo "Created failed nodes tracking file: $FAILED_NODES_FILE"
+    fi
+}
+
+get_hostname_exclusions() {
+    if [ ! -f "$FAILED_NODES_FILE" ] || [ ! -s "$FAILED_NODES_FILE" ]; then
+        echo ""
+        return
+    fi
+    
+    local exclusions=""
+    while IFS= read -r node; do
+        # Skip empty lines and comments
+        [[ -z "$node" || "$node" =~ ^[[:space:]]* ]] && continue
+        
+        if [ -z "$exclusions" ]; then
+            exclusions="!${node}"
+        else
+            exclusions="${exclusions}&!${node}"
+        fi
+    done < "$FAILED_NODES_FILE"
+    
+    if [ -n "$exclusions" ]; then
+        echo "$exclusions"
+    else
+        echo ""
+    fi
+}
+
+check_for_node_failure() {
+    log_file="$1"
+    
+    if [ ! -f "$log_file" ]; then
+        return
+    fi
+    
+    # Extract hostname from log
+    hostname=$(grep "^Host:" "$log_file" | awk '{print $2}' | head -1)
+    
+    if [ -z "$hostname" ]; then
+        return
+    fi
+    
+    # Check for node-related failure patterns - MUCH MORE COMPREHENSIVE
+    node_failure=false
+    failure_reason=""
+    
+    # GPU/CUDA errors - IMPROVED PATTERNS
+    if grep -q -E "(cudaMalloc.*error|CUDA.*error|GPU.*error)" "$log_file"; then
+        echo "Detected CUDA/GPU errors on node: $hostname"
+        node_failure=true
+        failure_reason="CUDA/GPU error"
+    fi
+    
+    # Specific ECC error patterns
+    if grep -q -E "(uncorrectable ECC error|ECC.*error)" "$log_file"; then
+        echo "Detected ECC errors on node: $hostname"
+        node_failure=true
+        failure_reason="ECC error"
+    fi
+    
+    # GPU busy/unavailable
+    if grep -q -E "(device.*busy.*unavailable|GPU.*busy|GPU.*unavailable)" "$log_file"; then
+        echo "Detected GPU busy/unavailable on node: $hostname"
+        node_failure=true
+        failure_reason="GPU busy/unavailable"
+    fi
+    
+    # CUDA memory allocation failures
+    if grep -q -E "(cudaMalloc.*failed|CUDA memory|cuda.*out of memory)" "$log_file"; then
+        echo "Detected CUDA memory issues on node: $hostname"
+        node_failure=true
+        failure_reason="CUDA memory error"
+    fi
+    
+    # Out of memory (system level)
+    if grep -q -E "(Out of memory|Cannot allocate memory|Killed.*memory)" "$log_file"; then
+        echo "Detected memory issues on node: $hostname"
+        node_failure=true
+        failure_reason="System memory error"
+    fi
+    
+    # Disk space issues
+    if grep -q -E "(No space left|Disk quota exceeded)" "$log_file"; then
+        echo "Detected disk space issues on node: $hostname"
+        node_failure=true
+        failure_reason="Disk space error"
+    fi
+    
+    # GPU prolog/epilog failures
+    if grep -q -E "(Not enough GPUs available|GPU.*failed|nvidia-smi.*failed)" "$log_file"; then
+        echo "Detected GPU allocation/management issues on node: $hostname"
+        node_failure=true
+        failure_reason="GPU allocation error"
+    fi
+    
+    if [ "$node_failure" = true ]; then
+        echo "Adding $hostname to blacklist for: $failure_reason"
+        add_failed_node "$hostname"
+    fi
+}
+
+add_failed_node() {
+    local hostname="$1"
+    
+    # Check if node is already in the failed list
+    if [ -f "$FAILED_NODES_FILE" ] && grep -q "^${hostname}$" "$FAILED_NODES_FILE"; then
+        echo "Node $hostname already in failed nodes list"
+        return
+    fi
+    
+    echo "$hostname" >> "$FAILED_NODES_FILE"
+    echo "Added $hostname to failed nodes list"
+}
+
+show_usage() {
     echo "=== SETR Sweep Launcher ==="
-    echo "Usage: $0 <sweep_config.yaml> [test]"
+    echo "Usage: $0 <sweep_config.yaml> [mode]"
+    echo ""
+    echo "Modes:"
+    echo "  full    - Run complete sweep (default)"
+    echo "  test    - Submit only one test job"
     echo ""
     echo "Available sweep configs:"
     ls -1 "$CONFIG_DIR"/*.yaml 2>/dev/null | sed 's/^/  /' || echo "  No configs found"
     echo ""
-    echo "Use 'test' as second argument to submit only one test job"
+    echo "Failed nodes management:"
+    echo "  View failed nodes: cat $FAILED_NODES_FILE"
+    echo "  Remove node from blacklist: grep -v 'nodename' $FAILED_NODES_FILE > tmp && mv tmp $FAILED_NODES_FILE"
+}
+
+if [ -z "$SWEEP_CONFIG" ]; then
+    show_usage
     exit 1
 fi
 
@@ -37,7 +169,11 @@ fi
 
 echo "=== SETR Sweep Launcher ==="
 echo "Config: $SWEEP_CONFIG"
+echo "Mode: $MODE"
 echo "Base directory: $BASE_DIR"
+
+# Initialize failed nodes tracking
+initialize_failed_nodes_file
 
 # Parse YAML config using Python
 CONFIG_VALUES=$(python3 -c "
@@ -93,20 +229,33 @@ SWEEP_OUT_DIR="$SWEEPS_DIR/output/$SWEEP_NAME"
 LOG_DIR="$SWEEP_OUT_DIR/_logs"
 mkdir -p "$LOG_DIR"
 
-# Set job array range
-if [ "$TEST_MODE" = "test" ]; then
-    JOB_RANGE="1"
-    echo "TEST MODE: Submitting only 1 job"
-else
-    JOB_RANGE="1-$TOTAL_JOBS"
-    echo "FULL MODE: Submitting $TOTAL_JOBS jobs"
-fi
+# Determine job range based on mode
+JOB_RANGE=""
+case "$MODE" in
+    "test")
+        JOB_RANGE="1"
+        echo "TEST MODE: Submitting only 1 job"
+        ;;
+    "full"|*)
+        JOB_RANGE="1-$TOTAL_JOBS"
+        echo "FULL MODE: Submitting $TOTAL_JOBS jobs"
+        ;;
+esac
 
 # Build qsub command
 QSUB_SCRIPT="$SCRIPTS_DIR/sweep_alpha_beta.qsub.sh"
 if [ ! -f "$QSUB_SCRIPT" ]; then
     echo "Error: SGE script not found: $QSUB_SCRIPT"
     exit 1
+fi
+
+# Get dynamic hostname exclusions for failed nodes
+DYNAMIC_EXCLUSIONS=$(get_hostname_exclusions)
+if [ -n "$DYNAMIC_EXCLUSIONS" ]; then
+    echo "Excluding failed nodes: $DYNAMIC_EXCLUSIONS"
+    HOSTNAME_OPTION="-l hostname='$DYNAMIC_EXCLUSIONS&$PERMANENT_EXCLUSIONS'"
+else
+    HOSTNAME_OPTION="-l hostname='$PERMANENT_EXCLUSIONS'"
 fi
 
 # Set SGE queue option
@@ -135,7 +284,9 @@ fi
 # Submit to SGE
 CMD="qsub \
   -t \"$JOB_RANGE\" \
+  -r y \
   -l h_rt=\"$SGE_RUNTIME\" \
+  $HOSTNAME_OPTION \
   $MEM_OPTION \
   $GPU_OPTION \
   $PE_OPTION \
@@ -148,13 +299,13 @@ CMD="qsub \
 
 echo ""
 echo "Submitting jobs to SGE..."
-
 echo "$CMD"
 eval "$CMD"
-
 
 echo ""
 echo "Jobs submitted successfully!"
 echo "Monitor with: ./monitor_sweep.sh $SWEEP_NAME"
 echo "Output root: $SWEEP_OUT_DIR"
 echo "Logs: $LOG_DIR"
+echo ""
+echo "Failed nodes file: $FAILED_NODES_FILE"

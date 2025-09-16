@@ -101,7 +101,7 @@ def attach_prior_hessian(prior, epsilon=0) -> None:
     prior.hessian_diag = MethodType(hessian_diag, prior)
 
 
-def get_shift_operators(pet_data):
+def get_shift_operators(pet_data, path=""):
     """
     Set up the couch shift and image combining operators for multi-bed reconstruction.
 
@@ -132,7 +132,7 @@ def get_shift_operators(pet_data):
 
     # Create shift operators
     shift_ops = [
-        CouchShiftOperator(pet_data["bed_positions"][suffix]["template_image"], pet_shift)
+        CouchShiftOperator(pet_data["bed_positions"][suffix]["template_image"], pet_shift, path=path)
         for suffix, pet_shift in zip(suffixes, pet_shifts)
     ]
 

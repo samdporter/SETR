@@ -38,10 +38,10 @@ use_tof: false
 use_scatter: true
 
 #== Data paths
-pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
-spect_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/SPECT"
-output_path: "/home/sam/working/synergistic_recon/output/debug_test"
-working_path: "/home/sam/working/synergistic_recon/tmp"
+pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/PET"
+spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/SPECT"
+output_path: "/home/sporter/synergistic_Y90/SETR/output/debug_test"
+working_path: "/home/sporter/synergistic_Y90/SETR/tmp"
 
 #== Miscellaneous
 save_images: true

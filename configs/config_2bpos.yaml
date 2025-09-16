@@ -1,9 +1,9 @@
 #== Reconstruction settings
 num_subsets: [9, 12]
-num_epochs: 2
+num_epochs: 500
 initial_step_size: 0.1
-update_interval: 1
-relaxation_eta: 0.02
+update_interval: 60
+relaxation_eta: 0.01
 use_scatter: true
 
 #== Regularisation
@@ -22,7 +22,7 @@ tv_both_directions: false
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true
-gamma_tnv: 100.0
+gamma_tnv: 1.0
 alpha: 1.0
 beta: 1.0
 tnv_stencil: "26"
@@ -38,14 +38,14 @@ spect_res: [0.81, 0.03, false] # Analytical collimator resolution for SPECT
 
 #== Forward models
 no_gpu: false
-stop_keep_all_views_in_cache: true
+keep_all_views_in_cache: true
 use_tof: false
 
 #== Data paths
-pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
-spect_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/SPECT"
-output_path: "/home/sam/working/synergistic_recon/output/test"
-working_path: "/home/sam/working/synergistic_recon/tmp"
+pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/PET"
+spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/SPECT"
+output_path: "/home/sporter/synergistic_Y90/output/test"
+working_path: "/home/sporter/synergistic_recon/tmp"
 
 #== Miscellaneous
 save_images: true

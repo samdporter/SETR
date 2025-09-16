@@ -172,16 +172,22 @@ class NiftyResampleOperator(LinearOperator):
         self.resampler.set_padding_value(0)
         self.resampler.add_transformation(self.transform)
 
+            
+        vx_ref = self.reference.voxel_sizes()  # (sx, sy, sz)
+        vx_flt = self.floating.voxel_sizes()
+        self.scale = (vx_ref[0]*vx_ref[1]*vx_ref[2]) / (vx_flt[0]*vx_flt[1]*vx_flt[2])
+
+
     def direct(self, x, out=None):
         res = self.resampler.forward(x)
         return self._project_and_fill(res, out)
 
     def adjoint(self, x, out=None):
-        res = self.resampler.backward(x)
+        res = self.resampler.backward(x) * self.scale
         return self._project_and_fill(res, out)
 
     def _project_and_fill(self, res, out):
-        res = res.maximum(0)
+        res = res.maximum(0) # remove for adjoint to work properly
         if out is not None:
             out.fill(res)
         return res
@@ -206,7 +212,7 @@ class CouchShiftOperator(LinearOperator):
         The amount by which to shift the couch position along the z-axis (in mm).
     """
 
-    def __init__(self, image, shift):
+    def __init__(self, image, shift, path=""):
         """
         Initialize the CouchShiftOperator.
 
@@ -218,36 +224,28 @@ class CouchShiftOperator(LinearOperator):
             The amount by which to shift the couch position along the z-axis (in mm).
         """
         self.shift = shift
+        self.path=path
         # need to create range geometry by shifting the image
-        range_geometry = self.initialise_shift(image, out=None)
+        range_geometry = self.initialise_shift(image)
         super().__init__(domain_geometry=image, range_geometry=range_geometry)
 
         self.unshifted_image = image.copy()
         self.shifted_image = range_geometry.copy()
 
-    def initialise_shift(self, x, out=None):
+    def initialise_shift(self, x):
         """
         Apply the couch shift using an isolated temp directory.
         Returns a new ImageData with updated geometry if out is None.
         If out is provided, copies voxel data into out (geometry unchanged).
         """
-        import tempfile
-        from pathlib import Path
 
-        with tempfile.TemporaryDirectory(prefix="couchshift_") as td:
-            td = Path(td)
-            hv_path = td / "shifted.hv"  # writer will place the paired .v alongside
+        # writer will place the paired .v alongside
+        shift_path = os.path.join(self.path, f"shifted{self.shift}.hv")
 
-            x.write(str(hv_path))
-            self.modify_pixel_offset(str(hv_path), self.shift, 3)
+        x.write(shift_path)
+        self.modify_pixel_offset(shift_path, self.shift, 3)
 
-            shifted = ImageData(str(hv_path))
-
-            if out is None:
-                return shifted
-
-            out.fill(shifted.as_array())
-            return out
+        return ImageData(shift_path)
 
     def direct(self, x, out=None):
         x_arr = x.as_array()
@@ -279,15 +277,6 @@ class CouchShiftOperator(LinearOperator):
         new_offset : float
             The new value for 'first pixel offset (mm) [pixel_index]'.
         """
-        delete_file = False
-        if isinstance(file_path, ImageData):
-            print(
-                "This is supposed to be a file path but got an ImageData object. "
-                "Writing to a temporary file."
-            )
-            delete_file = True
-            file_path.write("tmp_shift.hv")
-            file_path = "tmp_shift.hv"
         try:
             # Read the file content
             with open(file_path, "r") as file:
@@ -306,9 +295,6 @@ class CouchShiftOperator(LinearOperator):
             raise RuntimeError(f"Failed to modify the file {file_path}: {e}")
 
         image = ImageData(file_path)
-
-        if delete_file:
-            os.remove(file_path)
 
         return image
 
