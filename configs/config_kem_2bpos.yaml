@@ -4,6 +4,7 @@
 # Basic reconstruction parameters
 modality: "PET"
 method: "ista"   # Only ISTA supported for multi-bed reconstruction
+use_scatter: true
 
 # Data paths
 pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
@@ -42,7 +43,7 @@ pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
 
 # System parameters
 no_gpu: false
-use_tof: false
+use_tof: true
 seed: null
 
 # Multi-bed specific parameters

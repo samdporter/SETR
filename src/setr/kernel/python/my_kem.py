@@ -5,6 +5,7 @@ import numpy as np
 np.seterr(over="raise", invalid="raise")
 
 from cil.optimisation.operators import LinearOperator
+from setr.utils.sirf import get_array
 
 # try importing sliding_window_view from numpy
 try:
@@ -72,7 +73,7 @@ class BaseKernelOperator(LinearOperator):
 
     def set_anatomical_image(self, image):
         if self.parameters["normalize_features"]:
-            arr = image.as_array()
+            arr = get_array(image)
             std = arr.std()
             norm = arr / std if std > 1e-12 else arr
             tmp = image.clone()
@@ -86,7 +87,7 @@ class BaseKernelOperator(LinearOperator):
         n = self.parameters["num_neighbours"]
         K = n**3
         k = self.parameters["mask_k"] or K
-        arr = self.anatomical_image.as_array()
+        arr = self.get_array(anatomical_image)
         pad = n // 2
 
         arr_p = np.pad(arr, pad, mode="reflect")
@@ -119,7 +120,7 @@ class BaseKernelOperator(LinearOperator):
         res = self.apply(x)
         if out is None:
             return res
-        out.fill(res.as_array())
+        out.fill(get_array(res))
         return out
 
     def adjoint(self, x, out=None):
@@ -127,7 +128,7 @@ class BaseKernelOperator(LinearOperator):
         res = self.direct(x)
         if out is None:
             return res
-        out.fill(res.as_array())
+        out.fill(get_array(res))
         return out
 
 
@@ -146,8 +147,8 @@ class KernelOperator(BaseKernelOperator):
         distance_weighting,
         hybrid,
     ):
-        arr = image.as_array()
-        x_arr = x.as_array()
+        arr = get_array(image)
+        x_arr = get_array(x)
         n = num_neighbours
         pad = n // 2
         K = n**3
@@ -223,12 +224,12 @@ class KernelOperator(BaseKernelOperator):
             res = self.direct(x)
             if out is None:
                 return res
-            out.fill(res.as_array())
+            out.fill(get_array(res))
             return out
 
         # Non-symmetric adjoint implementation with sliding windows
-        arr = self.anatomical_image.as_array()
-        x_arr = x.as_array()
+        arr = self.get_array(anatomical_image)
+        x_arr = get_array(x)
         n = p["num_neighbours"]
         pad = n // 2
         K = n**3
@@ -353,8 +354,8 @@ if NUMBA_AVAIL:
             distance_weighting,
             hybrid,
         ):
-            arr = image.as_array()
-            x_arr = x.as_array()
+            arr = get_array(image)
+            x_arr = get_array(x)
             n = num_neighbours
 
             if use_mask:
@@ -405,8 +406,8 @@ if NUMBA_AVAIL:
             return out
 
         def adjoint(self, x, out=None):
-            arr = self.anatomical_image.as_array()
-            x_arr = x.as_array()
+            arr = self.get_array(anatomical_image)
+            x_arr = get_array(x)
             p = self.parameters
 
             if p["use_mask"] or p["hybrid"]:

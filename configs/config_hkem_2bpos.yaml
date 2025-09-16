@@ -4,6 +4,7 @@
 # Basic reconstruction parameters
 modality: "PET"
 method: "ista"   # Only ISTA supported for multi-bed reconstruction
+use_scatter: true
 
 # Data paths
 pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
@@ -13,16 +14,15 @@ working_path: "/home/sam/working/synergistic_recon/tmp"
 # Algorithm parameters
 num_subsets: 9
 num_epochs: 30
-initial_step_size: 1.0
-relaxation_eta: 0.02
+initial_step_size: 0.1
 
 # Kernel operator parameters
 num_neighbours: 5
 num_non_zero_features: 1
-sigma_anatomical: 0.1              # Anatomical similarity parameter
-sigma_emission: 0.1                # Emission similarity parameter
-sigma_distance_anatomical: 0.1     # Distance weighting parameter for anatomical features
-sigma_distance_emission: 0.1       # Distance weighting parameter for emission features
+sigma_anatomical: 3              # Anatomical similarity parameter
+sigma_emission: 1                # Emission similarity parameter
+sigma_distance_anatomical: 5     # Distance weighting parameter for anatomical features
+sigma_distance_emission: 5       # Distance weighting parameter for emission features
 normalize_features: false          # Normalize features before kernel computation
 normalize_kernel: false            # Normalize kernel before application
 use_mask: false                    # Use k-nearest neighbor masking
@@ -35,7 +35,7 @@ only_2D: false  # Use 2D kernels only (true = only_2D in old code)
 guidance: "emission"
 
 # Preconditioner parameters
-freeze_iter: 72  # Iteration to freeze kernel parameters (inf = never freeze)
+freeze_iter: 45  # Iteration to freeze kernel parameters (inf = never freeze)
 
 # Image processing parameters
 pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
@@ -44,13 +44,3 @@ pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
 no_gpu: false
 use_tof: false
 seed: null
-
-# Multi-bed specific parameters
-# Bed position suffixes are hardcoded as ["_f1b1", "_f2b1"]
-# These correspond to the expected file naming convention
-
-# Advanced parameters
-tail_singular_values: null
-delta: null
-stencil: "6"
-both_directions: false

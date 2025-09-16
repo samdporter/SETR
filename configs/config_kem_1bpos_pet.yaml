@@ -5,6 +5,7 @@
 modality: "PET"  # Options: "PET", "SPECT"
 method: "ista"   # Options: "kosmaposl", "ista"
 guidance: "attenuation"  # Options: "attenuation", "emission"
+use_scatter: true
 
 # Data paths
 data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom"

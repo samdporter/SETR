@@ -13,6 +13,7 @@ from sirf.STIR import ImageData
 
 from setr.core.gradients import Jacobian
 from setr.utils import BlockDataContainerToArray
+from setr.utils.sirf import get_array
 
 
 class WeightedVectorialTotalVariation(Function):
@@ -36,7 +37,7 @@ class WeightedVectorialTotalVariation(Function):
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if isinstance(anatomical, ImageData):
-            anatomical = anatomical.as_array()
+            anatomical = get_array(anatomical)
 
         # Jacobian operator: maps N×M images → N×M×d (stack of finite diffs)
         self.jacobian = Jacobian(
@@ -296,7 +297,7 @@ class WeightedTotalVariation(Function):
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if hasattr(anatomical, "as_array"):  # ImageData
-            anatomical = anatomical.as_array()
+            anatomical = get_array(anatomical)
 
         # Jacobian operator: maps N×M images → N×M×d (stack of finite diffs)
         self.jacobian = Jacobian(
@@ -464,7 +465,7 @@ class TotalVariation(Function):
         # Choose gradient operator based on anatomical guidance
         if anatomical is not None:
             if hasattr(anatomical, "as_array"):  # ImageData
-                anatomical_arr = anatomical.as_array()
+                anatomical_arr = get_array(anatomical)
             else:
                 anatomical_arr = anatomical
             
@@ -494,7 +495,7 @@ class TotalVariation(Function):
         if not isinstance(x, ImageData):
             raise TypeError("TotalVariation expects ImageData input")
         
-        x_arr = x.as_array()
+        x_arr = get_array(x)
         grad = self.gradient_op.direct(x_arr)  # Shape: (nz, ny, nx, d)
         
         # Apply weight and compute TV
@@ -506,7 +507,7 @@ class TotalVariation(Function):
         if not isinstance(x, ImageData):
             raise TypeError("TotalVariation expects ImageData input")
         
-        x_arr = x.as_array()
+        x_arr = get_array(x)
         grad = self.gradient_op.direct(x_arr)  # (nz, ny, nx, d)
         
         # Apply weight
@@ -534,7 +535,7 @@ class TotalVariation(Function):
         if not isinstance(x, ImageData):
             raise TypeError("TotalVariation expects ImageData input")
         
-        x_arr = x.as_array()
+        x_arr = get_array(x)
         grad = self.gradient_op.direct(x_arr)  # (nz, ny, nx, d)
         
         # Apply weight
@@ -562,7 +563,7 @@ class TotalVariation(Function):
         if not isinstance(x, ImageData):
             raise TypeError("TotalVariation expects ImageData input")
         
-        x_arr = x.as_array()
+        x_arr = get_array(x)
         grad = self.gradient_op.direct(x_arr)  # (nz, ny, nx, d)
         
         # Apply weight
@@ -587,7 +588,7 @@ class TotalVariation(Function):
     def inv_hessian_diag(self, x, out=None, epsilon=1e-9):
         """Inverse diagonal Hessian approximation."""
         h = self.hessian_diag(x, out=None)
-        h_arr = h.as_array()
+        h_arr = get_array(h)
         
         # Convert to torch if needed
         if not isinstance(h_arr, torch.Tensor):

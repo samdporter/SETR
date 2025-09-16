@@ -20,6 +20,7 @@ from cil.optimisation.functions import Function
 
 from setr.core.gradients import Jacobian
 from setr.utils import BlockDataContainerToArray
+from setr.utils.sirf import get_array
 
 try:
     import torch
@@ -214,7 +215,7 @@ class WeightedParallelLevelSets(Function):
 
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if hasattr(anatomical, "as_array"):
-            anatomical = anatomical.as_array()
+            anatomical = get_array(anatomical)
 
         self.jacobian = Jacobian(
             voxel_sizes,

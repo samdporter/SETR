@@ -43,6 +43,7 @@ from setr.priors import (
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.functions import BlockIndicatorBox
 from setr.cil_extensions.operators import ScalingOperator
+from setr.utils.sirf import get_array
 
 ISTA.update = ista_update_step
 
@@ -206,7 +207,7 @@ def normalise_kappa_squares(kappa_block, pct=95):
     """
     Scale each κ² image so its `pct` percentile == 1.
     """
-    arrays = [im.as_array() for im in kappa_block.containers]
+    arrays = [get_array(im) for im in kappa_block.containers]
     pvals = [np.percentile(a, pct) for a in arrays]
     for im, p in zip(kappa_block.containers, pvals):
         if p > 1e-12:
@@ -273,7 +274,7 @@ def get_s_inv_from_objs(obj_funs, initial_estimates):
                 sens += obj_fun.get_subset_sensitivity(0)
         # Compute maximum with zero (returning a new container)
         sens.maximum(0, out=sens)
-        sens_arr = sens.as_array().astype(np.float32)
+        sens_arr = get_array(sens).astype(np.float32)
         # We can afford to avoid zeros because
         # a zero sensitivity means we're outside the FOV
         inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
@@ -291,7 +292,7 @@ def get_s_inv_from_am(ams, initial_estimates):
             tmp = am.backward(one)
             el += tmp
         el = el.maximum(0)
-        el_arr = el.as_array()
+        el_arr = get_array(el)
         el_arr = np.reciprocal(el_arr, where=el_arr != 0)
         el.fill(np.nan_to_num(el_arr))
     return s_inv
@@ -307,7 +308,7 @@ def get_s_inv_from_subset_objs(obj_funs, initial_estimate):
             sens += obj_fun.get_subset_sensitivity(0)
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
-    sens_arr = sens.as_array().astype(np.float32)
+    sens_arr = get_array(sens).astype(np.float32)
     # We can afford to avoid zeros because
     # a zero sensitivity means we're outside the FOV
     inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
@@ -331,7 +332,7 @@ def compute_inv_hessian_diagonals(bdc, obj_funs_list):
         # Take absolute values and write the result
         hessian_diag = hessian_diag.abs()
 
-        hessian_diag_arr = hessian_diag.as_array()
+        hessian_diag_arr = get_array(hessian_diag)
         hessian_diag.fill(np.reciprocal(hessian_diag_arr, where=hessian_diag_arr != 0))
 
         outputs.append(hessian_diag)
@@ -365,8 +366,8 @@ def gradient_energy_scale_sirf(x_pet, x_spect, kappa_pet=None, kappa_spect=None,
         alpha* scale.
     """
     import numpy as np
-    xr = x_pet.as_array()
-    xs = x_spect.as_array()
+    xr = get_array(x_pet)
+    xs = get_array(x_spect)
 
     vz, vy, vx = x_pet.voxel_sizes()  # (z,y,x) spacings in mm
 
@@ -380,15 +381,15 @@ def gradient_energy_scale_sirf(x_pet, x_spect, kappa_pet=None, kappa_spect=None,
 
     # Apply base κ weights (broadcast over gradient components)
     if kappa_pet is not None:
-        kp = kappa_pet.as_array()
+        kp = get_array(kappa_pet)
         gr = gr * kp
     if kappa_spect is not None:
-        ks = kappa_spect.as_array()
+        ks = get_array(kappa_spect)
         gs = gs * ks
 
     # Optional mask
     if mask is not None:
-        m = mask.as_array().astype(bool)
+        m = get_array(mask).astype(bool)
         gr = gr[:, m]
         gs = gs[:, m]
     else:

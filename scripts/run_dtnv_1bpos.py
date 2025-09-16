@@ -48,9 +48,7 @@ from setr.scripts.dtnv_common import (
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import (
-    get_filters,
-)
+from setr.utils.sirf import get_filters, get_array
 
 
 def prepare_data(args):
@@ -86,7 +84,7 @@ def prepare_data(args):
 
     # check for nans in all data
     for data in [ct, pet_data["initial_image"], spect_data["initial_image"]]:
-        if np.isnan(data.as_array()).any():
+        if np.isnan(get_array(data)).any():
             logging.warning("An image contains NaNs")
             break
     for data in [
@@ -96,7 +94,7 @@ def prepare_data(args):
         pet_data["additive"],
         spect_data["additive"],
     ]:
-        if np.isnan(data.as_array()).any():
+        if np.isnan(get_array(data)).any():
             logging.warning("A ProjData contains NaNs")
             break
 

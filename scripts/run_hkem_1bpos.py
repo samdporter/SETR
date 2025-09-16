@@ -33,7 +33,7 @@ from setr.scripts.hkem_common import (
 )
 from setr.utils import get_pet_data, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_pet_am, get_spect_am
+from setr.utils.sirf import get_filters, get_pet_am, get_spect_am, get_array
 
 
 def prepare_data(args):
@@ -66,7 +66,7 @@ def prepare_data(args):
 
     # Check for NaNs in all data
     for key, value in data.items():
-        if hasattr(value, "as_array") and np.isnan(value.as_array()).any():
+        if get_array(value).any().isna():
             logging.warning(f"Data '{key}' contains NaNs")
 
     return data, guidance

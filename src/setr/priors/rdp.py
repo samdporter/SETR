@@ -44,6 +44,7 @@ from cil.optimisation.functions import Function
 # Project operators
 from setr.core.gradients import Gradient, DirectionalGradient, Sum, Jacobian
 from setr.utils import BlockDataContainerToArray
+from setr.utils.sirf import get_array
 
 # -------------------------------------------------------------------------
 # Device / dtype helpers
@@ -55,7 +56,7 @@ def _to_tensor(x):
     if isinstance(x, torch.Tensor):
         return x.to(_DEVICE, dtype=_DTYPE)
     if hasattr(x, "as_array"):
-        x = x.as_array()
+        x = get_array(x)
     return torch.as_tensor(x, device=_DEVICE, dtype=_DTYPE)
 
 def _from_tensor_like(template, t: torch.Tensor):
@@ -99,7 +100,7 @@ class RelativeDifferencePrior(Function):
         # Δ-operator: plain Gradient OR DirectionalGradient (projected)
         if anatomical is not None:
             if hasattr(anatomical, "as_array"):
-                anatomical = anatomical.as_array()
+                anatomical = get_array(anatomical)
             self.use_dir = True
             self.gradient_op = DirectionalGradient(
                 anatomical=anatomical,
@@ -219,7 +220,7 @@ class RelativeDifferencePrior(Function):
         g = one(x)
         if out is None:
             return g
-        out.fill(g.as_array())
+        out.fill(get_array(g))
         return out
 
     def hessian(self, x, v, out=None):
@@ -229,7 +230,7 @@ class RelativeDifferencePrior(Function):
         mapped = _from_tensor_like(v, Hv)
         if out is None:
             return mapped
-        out.fill(mapped.as_array() if hasattr(mapped, "as_array") else mapped)
+        out.fill(get_array(mapped) if hasattr(mapped, "as_array") else mapped)
         return out
 
     def hessian_diag(self, x):
@@ -312,7 +313,7 @@ class WeightedRDP(Function):
 
         # Jacobian over modalities
         if hasattr(anatomical, "as_array"):
-            anatomical = anatomical.as_array()
+            anatomical = get_array(anatomical)
         self.jacobian = Jacobian(
             voxel_sizes,
             anatomical=anatomical,

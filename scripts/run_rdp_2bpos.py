@@ -43,11 +43,11 @@ from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_filters, get_pet_am
 
 
-def prepare_data(args):
+def prepare_data(:
     """Prepare the multi-bed PET data."""
     pet_data = get_pet_data_multiple_bed_pos(
         args.pet_data_path, tof=args.use_tof, suffixes=["_f1b1", "_f2b1"]
-    )
+    , get_array)
 
     # Apply filters to initial images
     cyl, gauss = get_filters(fwhms=(20, 20, 20))
@@ -61,7 +61,7 @@ def prepare_data(args):
     # Create initial estimates - for RDP we just need PET
     initial_estimates = pet_data["initial_image"]
 
-    if np.isnan(initial_estimates.as_array()).any():
+    if np.isnan(get_array(initial_estimates)).any():
         logging.warning("Initial image contains NaNs")
 
     return pet_data, initial_estimates
@@ -114,7 +114,7 @@ def get_data_fidelity(args, pet_data, uncombine_op, unshift_ops, choose_ops):
 
     # Create sensitivity inverse
     s_inv = pet_sens_combined.clone()
-    sens_array = pet_sens_combined.as_array()
+    sens_array = get_array(pet_sens_combined)
     s_inv.fill(np.reciprocal(sens_array, where=sens_array != 0))
 
     # Apply cylindrical filter
