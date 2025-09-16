@@ -156,3 +156,7 @@ CODING_STANDARDS.md
 
 # Notebooks
 *.ipynb
+# experiment sweep noise
+sweeps/configs/*.yaml
+other/
+*.tmp
