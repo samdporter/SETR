@@ -66,7 +66,7 @@ def prepare_data(args):
 
     # Check for NaNs in all data
     for key, value in data.items():
-        if get_array(value).any().isna():
+        if np.isnan(get_array(value)).any():
             logging.warning(f"Data '{key}' contains NaNs")
 
     return data, guidance

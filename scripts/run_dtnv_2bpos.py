@@ -20,11 +20,6 @@ from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
-from setr.cil_extensions.preconditioners import (
-    BSREMPreconditioner,
-    ImageFunctionPreconditioner,
-    LehmerMeanPreconditioner,
-)
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
     attach_prior_hessian,

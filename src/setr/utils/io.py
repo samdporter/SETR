@@ -27,6 +27,69 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def load_config_with_inheritance(path: str) -> dict:
+    """
+    Load YAML config with inheritance support.
+
+    Supports 'inherit_from' key to inherit from base configs.
+    Base configs are resolved recursively and merged with override precedence.
+
+    Args:
+        path: Path to the config file
+
+    Returns:
+        Merged configuration dictionary
+    """
+    config = load_config(path)
+
+    # If no inheritance, return as-is
+    if 'inherit_from' not in config:
+        return config
+
+    # Get base config path(s)
+    inherit_from = config.pop('inherit_from')
+    if isinstance(inherit_from, str):
+        inherit_from = [inherit_from]
+
+    # Load and merge base configs
+    base_config = {}
+    config_dir = os.path.dirname(path)
+
+    for base_path in inherit_from:
+        # Resolve relative paths from config directory
+        if not os.path.isabs(base_path):
+            base_path = os.path.join(config_dir, base_path)
+
+        # Recursively load base config (may have its own inheritance)
+        base = load_config_with_inheritance(base_path)
+        base_config = _deep_merge(base_config, base)
+
+    # Merge current config over base configs
+    return _deep_merge(base_config, config)
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """
+    Deep merge two dictionaries, with override taking precedence.
+
+    Args:
+        base: Base dictionary
+        override: Override dictionary
+
+    Returns:
+        Merged dictionary
+    """
+    result = base.copy()
+
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+
+    return result
+
+
 def apply_overrides(cfg: dict, overrides: list[str]) -> dict:
     """
     Given overrides like ["alpha=0.5", "spect.gauss_fwhm=[1,2,3]"],

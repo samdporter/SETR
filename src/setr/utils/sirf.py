@@ -202,6 +202,30 @@ def get_pet_data_multiple_bed_pos(
     return pet_data
 
 
+def load_zoom_factors(spect_dir):
+    """
+    Load previously saved zoom factors from file.
+    
+    Args:
+        spect_dir: Directory containing the zoom factors file
+        
+    Returns:
+        tuple: Zoom factors (z, y, x)
+    """
+    zoom_file_path = os.path.join(spect_dir, "spect_to_pet_zoom_factors.txt")
+    
+    if not os.path.exists(zoom_file_path):
+        raise FileNotFoundError(f"Zoom factors file not found: {zoom_file_path}")
+    
+    with open(zoom_file_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith('#') and line:
+                zoom_values = line.split()
+                return (float(zoom_values[0]), float(zoom_values[1]), float(zoom_values[2]))
+    
+    raise ValueError("No zoom factors found in file")
+
 def get_spect_data(path: str) -> dict:
     """
     Load SPECT data from the given path.
@@ -253,7 +277,7 @@ def get_spect_data(path: str) -> dict:
         spect_data["initial_image"] = spect_data["template_image"].get_uniform_copy(1)
 
     # Load displacement field for SPECT to PET registration
-    displacement_path = os.path.join(path, "spect2pet.nii")
+    displacement_path = os.path.join(path, "spect2pet_zoom_nonrigid.nii")
     try:
         spect_data["displacement"] = NiftiImageData3DDisplacement(displacement_path)
     except Exception as e_displacement:
@@ -262,11 +286,20 @@ def get_spect_data(path: str) -> dict:
             str(e_displacement),
         )
         spect_data["displacement"] = None
+        
+    try:
+        spect_data["zoom_factors"] = load_zoom_factors(path)
+    except Exception as e_zoom:
+        logging.warning(
+            "No SPECT zoom factors found (%s). Zooming will not be available.",
+            str(e_zoom),
+        )
+        spect_data["zoom_factors"] = (1.0, 1.0, 1.0)
 
     return spect_data
 
 
-def create_spect_uniform_image(sinogram, origin=None):
+def create_spect_uniform_image(sinogram, origin=None, dims=None):
     """
     Create a uniform image for SPECT data based on the sinogram dimensions.
     Adjusts the z-direction voxel size and image dimensions to create a template
@@ -286,12 +319,13 @@ def create_spect_uniform_image(sinogram, origin=None):
     voxel_size = list(image.voxel_sizes())
     voxel_size[0] *= 2  # Adjust z-direction voxel size.
 
-    # Compute new dimensions based on the uniform image.
-    dims = list(image.dimensions())
-    dims[0] = dims[0] // 2 + dims[0] % 2  # Halve the first dimension (with rounding)
-    dims[1] -= dims[1] % 2  # Ensure even number for second dimension
-    dims[2] = dims[1]  # Set third dimension equal to second dimension
-
+    if dims is None:
+        # Compute new dimensions based on the uniform image.
+        dims = list(image.dimensions())
+        dims[0] = dims[0] // 2 + dims[0] % 2  # Halve the first dimension (with rounding)
+        dims[1] -= dims[1] % 2  # Ensure even number for second dimension
+        dims[2] = dims[1]  # Set third dimension equal to second dimension
+        
     if origin is None:
         origin = (0, 0, 0)
 

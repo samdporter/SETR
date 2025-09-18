@@ -53,10 +53,8 @@ def prepare_data(args):
     guidance /= guidance.max()
 
     # Apply filters to initial images
-    cyl, gauss = get_filters(fwhms=(20, 20, 20))
-    gauss.apply(pet_data["initial_image"])
-    cyl.apply(pet_data["initial_image"])
-
+    pet_data["initial_image"].fill(1)
+    
     pet_data["initial_image"].write(
         os.path.join(args.output_path, "initial_image.hv")
     )
@@ -114,7 +112,7 @@ def get_data_fidelity(
     # Combine corresponding subsets across bed positions
     num_subsets = len(pet_sens[0])  # Get number of subsets from first bed position
     pet_sens_combined = [
-        num_subsets * unzero_shift_op.adjoint(
+        unzero_shift_op.adjoint(
             uncombine_op.adjoint(
                 EnhancedBlockDataContainer(
                     *[unshift_op.adjoint(sens[subset_idx]) 
@@ -147,11 +145,6 @@ def get_data_fidelity(
     # Combine objectives across bed positions
     all_funs = [SumFunction(*[funs[j] for funs in pet_dfs]) for j in range(num_subsets)]
     print(f"len(all_funs): {len(all_funs)}")
-
-    # save all sens
-    for i, s in enumerate(pet_sens_combined):
-        s.write(os.path.join(args.output_path, f"early_sensitivity_{i}.hv"))
-    return all_funs, pet_sens_combined
 
 
 def run_hkem_ista(args, pet_data, guidance, initial_estimates):
@@ -191,6 +184,7 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
         guide = zero_shift_op.direct(pet_data["attenuation"])
     elif args.guidance == "emission":
         guide = zero_shift_op.direct(pet_data["spect"])
+        assert pet_data["spect"] is not None, "Emission guidance selected but no SPECT data provided"
     else:
         raise ValueError(f"Unknown guidance type: {args.guidance}")
     assert type(guide) is type(initial_estimates), f"Guidance and initial estimates must be same type. Got {type(guide)} and {type(initial_estimates)}"
@@ -227,12 +221,6 @@ def run_hkem_ista(args, pet_data, guidance, initial_estimates):
         freeze_iter=args.freeze_iter,
         epsilon=max_val * 1e-12,
     )
-        
-    # save all sens
-    for i, s in enumerate(sens):
-        s.write(os.path.join(args.output_path, f"late_sensitivity_{i}.hv"))
-        k_s = kernel.direct(s)
-        k_s.write(os.path.join(args.output_path, f"kernel_sensitivity_{i}.hv"))
 
     # Set up callbacks
     class SaveKernelisedImageCallback:
