@@ -60,7 +60,7 @@ def prepare_data(args):
     )
 
     # Create initial estimates - for HKEM we just need PET
-    initial_estimates = pet_data["initial_image"]
+    initial_estimates = pet_data["initial_image"].get_uniform_copy(1)
 
     if np.isnan(get_array(initial_estimates)).any():
         logging.warning("Initial image contains NaNs")
@@ -112,7 +112,8 @@ def get_data_fidelity(
     # Combine corresponding subsets across bed positions
     num_subsets = len(pet_sens[0])  # Get number of subsets from first bed position
     pet_sens_combined = [
-        unzero_shift_op.adjoint(
+        # scale by num_subsets
+        args.num_subsets * unzero_shift_op.adjoint(
             uncombine_op.adjoint(
                 EnhancedBlockDataContainer(
                     *[unshift_op.adjoint(sens[subset_idx]) 

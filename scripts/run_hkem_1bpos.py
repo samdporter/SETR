@@ -66,7 +66,7 @@ def prepare_data(args):
 
     # Check for NaNs in all data
     for key, value in data.items():
-        if np.isnan(get_array(value)).any():
+        if not isinstance(value, (int, float, tuple)) and value is not None and np.isnan(get_array(value)).any():
             logging.warning(f"Data '{key}' contains NaNs")
 
     return data, guidance
@@ -119,7 +119,7 @@ def run_ista(args, data, guidance, hyperparams):
     for obj in objs:
         sens = obj.get_subset_sensitivity(0)
         sens = sens.maximum(0)
-        sensitivities.append(sens*args.num_subsets)  # Scale by number of subsets
+        sensitivities.append(sens * args.num_subsets)  # Scale by number of subsets
 
     # Create preconditioner
     precond = SubsetKernelisedEMPreconditioner(
