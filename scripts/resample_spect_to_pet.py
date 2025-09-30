@@ -67,10 +67,10 @@ def main():
 
     if cfg["use_2bpos"]:
         pet_data = get_pet_data_multiple_bed_pos(
-            cfg["pet_dir"], tof=True, suffixes=["_f1b1", "_f2b1"]
+            cfg["pet_dir"], tof=cfg["use_tof"], suffixes=["_f1b1", "_f2b1"]
         )
     else:
-        pet_data = get_pet_data(cfg["pet_dir"], tof=True)
+        pet_data = get_pet_data(cfg["pet_dir"], tof=cfg["use_tof"])
     pet_template = pet_data["template_image"]
     spect_recon_path = cfg["spect_reconstruction"]
     transform_path = cfg["transform_file"]

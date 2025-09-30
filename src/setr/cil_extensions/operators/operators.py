@@ -159,6 +159,23 @@ class DirectionalOperator(LinearOperator):
         for el_x, el_y in zip(x.containers, y.containers):
             self.tmp += el_x * el_y
         return self.tmp
+    
+class FlipOperator(LinearOperator):
+    
+    def __init__(self, axis, image):
+        self.axis = axis
+        super().__init__(domain_geometry=image, range_geometry=image)
+        
+    def direct(self, x, out=None):
+        if out is None:
+            out = x.copy()
+        out_arr = get_array(out)
+        out_arr = np.flip(out_arr, axis=self.axis)
+        out.fill(out_arr)
+        return out
+
+    def adjoint(self, x, out=None):
+        return self.direct(x, out)
 
 def crop_central(volume: np.ndarray, size=(128, 128, 128)) -> np.ndarray:
     """

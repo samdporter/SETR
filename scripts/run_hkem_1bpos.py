@@ -17,10 +17,13 @@ from setr.cil_extensions.callbacks import (
     PrintObjectiveCallback,
     SaveImageCallback,
     SaveObjectiveCallback,
+    SaveGradientUpdateCallback,
+    SavePreconditionerCallback
 )
 from setr.cil_extensions.functions import BlockIndicatorBox
 from setr.cil_extensions.operators import TruncationOperator
 from setr.cil_extensions.preconditioners import SubsetKernelisedEMPreconditioner
+from setr.cil_extensions.algorithms import ista_update_step
 from setr.scripts.common import (
     configure_logging,
     init_run_env,
@@ -35,6 +38,9 @@ from setr.utils import get_pet_data, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_filters, get_pet_am, get_spect_am, get_array
 
+ISTA.update = ista_update_step  # Patch ISTA with our custom update step
+
+DEBUG = False  # Set to True to save more debugging information
 
 def prepare_data(args):
     """
@@ -55,20 +61,7 @@ def prepare_data(args):
     else:  # SPECT
         data = get_spect_data(args.data_path)
         guidance = get_attn_and_normalise(args)
-    # Apply filters to initial images
-    cyl, gauss = get_filters()
-    gauss.apply(data["initial_image"])
-    cyl.apply(data["initial_image"])
-
-    data["initial_image"].write(
-        os.path.join(args.output_path, "initial_image.hv")
-    )
-
-    # Check for NaNs in all data
-    for key, value in data.items():
-        if not isinstance(value, (int, float, tuple)) and value is not None and np.isnan(get_array(value)).any():
-            logging.warning(f"Data '{key}' contains NaNs")
-
+    
     return data, guidance
 
 
@@ -103,12 +96,19 @@ def run_ista(args, data, guidance, hyperparams):
         obj.set_up(data["initial_image"])
 
     K = get_kernel_operator(
-        args, guidance, data["initial_image"], data["acquisition_data"], hyperparams
+        args, 
+        guidance,
+        data["initial_image"], 
+        data["acquisition_data"], 
+        hyperparams
     )
 
     # Set up objective functions with kernel operator
-    truncate = TruncationOperator(data["initial_image"])
-    f_list = [OperatorCompositionFunction(obj, CompositionOperator(K, truncate)) for obj in objs]
+    f_list = [
+        OperatorCompositionFunction(
+            obj, K
+        ) for obj in objs
+    ]
 
     sampler = Sampler.sequential(args.num_subsets)
     f = -SGFunction(f_list, sampler)
@@ -131,6 +131,7 @@ def run_ista(args, data, guidance, hyperparams):
     )
 
     # Initialize alpha
+    truncate = TruncationOperator(data["initial_image"])
     init_alpha = data["initial_image"].get_uniform_copy(1)
     truncate.direct(init_alpha, out=init_alpha)  # Apply truncation
 
@@ -163,22 +164,37 @@ def run_ista(args, data, guidance, hyperparams):
             image = self.kernel_op.direct(algo.solution)
             image.write(f"{self.filename}_{algo.iteration}.hv")
 
+    interval = 1 if DEBUG else args.num_subsets
+
     callbacks = [
         SaveImageCallback(
             os.path.join(args.output_path, "alpha"),
-            interval=args.num_subsets,
+            interval=interval
         ),
         SaveKernelisedImageCallback(
             os.path.join(args.output_path, "x"),
-            interval=args.num_subsets,
-            kernel_op=K,
+            interval=interval,
+            kernel_op=K
         ),
         PrintObjectiveCallback(interval=args.num_subsets),
         SaveObjectiveCallback(
             os.path.join(args.output_path, "objective"),
-            interval=args.num_subsets,
+            interval=interval
         ),
+
     ]
+
+    if DEBUG:  # Only save preconditioner and gradient if debugging
+        callbacks.extend([
+            SavePreconditionerCallback(
+                os.path.join(args.output_path, "preconditioner"),
+                interval=interval
+            ),
+            SaveGradientUpdateCallback(
+                os.path.join(args.output_path, "gradient"),
+                interval=interval
+            ),
+        ])
 
     logging.info("Running ISTA reconstruction...")
     algo.run(num_subiterations, verbose=True, callbacks=callbacks)

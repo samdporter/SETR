@@ -343,6 +343,64 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
 
         algorithm.solution.divide(adj, out=out)
         return out
+    
+class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
+    def __init__(
+        self,
+        sens_bdcs,  # list of BlockDataContainer(s1,s2), length=num_subsets
+        kernel,  # [K1, K2] kernel operators for each bed
+        uncombine_ops,  # [U1, U2] uncombine (adjoint) operators
+        num_subsets,
+        update_interval=1,
+        freeze_iter=np.inf,
+        epsilon=1e-6,
+    ):
+        super().__init__(num_subsets, update_interval, freeze_iter)
+        self.sens_bdcs = sens_bdcs
+        self.kernel = kernel
+        self.uncombine_ops = uncombine_ops
+        self.epsilon = epsilon
+        self.freeze_kernel_iter = freeze_iter
+
+    def apply(self, algorithm, gradient, out=None):
+        """
+        Apply the preconditioner, managing freezing and update intervals.
+        """
+
+        if algorithm.iteration % self.update_interval == 0 or self.precond is None:
+            self.precond = self.compute_preconditioner(algorithm).abs()
+
+        if out is None:
+            return gradient * self.precond
+
+        gradient.multiply(self.precond, out=out)
+        return out
+
+    def compute_preconditioner(self, algorithm, out=None):
+        # for the kernelised EM, we need to freeze the alpha after a certain number of iterations
+        # rather than freezing the whole preconditioner
+        if algorithm.iteration >= self.freeze_kernel_iter:
+            for k in self.kernel:
+                k.freeze_alpha = True
+
+        if isinstance(algorithm.f, ScaledFunction):
+            sg = algorithm.f.function
+        else:
+            sg = algorithm.f
+
+        k_s = self.kernel[0].adjoint(self.sens_bdc.containers[0])
+        total = self.uncombine_ops[0].adjoint(k_s)
+        for i in range(1, len(self.sens_bdc.containers)):
+            k_s = self.kernel[i].adjoint(self.sens_bdc.containers[i])
+            total += self.uncombine_ops[i].adjoint(k_s)
+        total += self.epsilon  # to avoid division by zero
+        total = total.abs()
+
+        if out is None:
+            return algorithm.solution / total
+
+        algorithm.solution.divide(total, out=out)
+        return out
 
 
 class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
@@ -389,12 +447,17 @@ class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             sg = algorithm.f.function
         else:
             sg = algorithm.f
-        adj = self.kernel.adjoint(self.sensitivities[sg.data_passes_indices[-1][0]])
-        adj += self.epsilon
+        # if list is empty, return 0
+        try:
+            subset_idx = sg.data_passes_indices[-1][0]
+        except IndexError:  # can happen if the preconditioner is called before the first iteration
+            subset_idx = 0
+        adj = self.kernel.adjoint(self.sensitivities[subset_idx])
         adj = adj.abs()
+        adj += self.epsilon # avoid division by zero
 
         if out is None:
-            return algorithm.solution / adj
+            return algorithm.solution.divide(adj)
 
         algorithm.solution.divide(adj, out=out)
         return out

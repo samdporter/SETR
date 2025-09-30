@@ -10,6 +10,7 @@ from .operators import (
     ImageResampleOperator,
     ImageSummationOperator,
     NaNToZeroOperator,
+    FlipOperator,
     NiftyResampleOperator,
     ZoomOperator,
     EnlargementOperator,
@@ -31,5 +32,6 @@ __all__ = [
     "CouchShiftOperator",
     "ImageCombineOperator",
     "ImageResampleOperator",
+    "FlipOperator",
     "ImageSummationOperator",
 ]

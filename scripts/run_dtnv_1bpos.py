@@ -14,7 +14,11 @@ from cil.optimisation.functions import (
     SumFunction,
     SVRGFunction,
 )
-from cil.optimisation.operators import BlockOperator, IdentityOperator, ZeroOperator
+from cil.optimisation.operators import (
+    BlockOperator, IdentityOperator, 
+    ZeroOperator, FlipOperator,
+    CompositionOperator
+)
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
 from sirf.STIR import ImageData, MessageRedirector
@@ -225,6 +229,15 @@ def main(args) -> None:
         num_subsets,
     )
     
+    if args.flip:
+        spect2pet = CompositionOperator(
+            spect2pet,
+            FlipOperator(
+                axis=(0, 2), 
+                image=["initial_image"]
+            )
+        )
+
     bo = BlockOperator(
         IdentityOperator(pet_data["initial_image"]),  # pet2pet
         ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),  # zero_spect2pet
