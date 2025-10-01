@@ -38,8 +38,6 @@ class WeightedVectorialTotalVariation(Function):
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if isinstance(anatomical, ImageData):
             anatomical = get_array(anatomical)
-
-        # Jacobian operator: maps N×M images → N×M×d (stack of finite diffs)
         self.jacobian = Jacobian(
             voxel_sizes,
             anatomical=anatomical,
@@ -51,10 +49,9 @@ class WeightedVectorialTotalVariation(Function):
         self.hessian = hessian
         self.bdc2a = BlockDataContainerToArray(geometry)
 
-        # Pull out the weights as an array/tensor of shape (Nx,Ny,Nz,M)
-        self.weights = self.bdc2a.direct(weights)  # shape (..., M)
 
-        # Inverse‐weight is used in inv_hessian_diag
+        self.weights = self.bdc2a.direct(weights)
+
         self.inv_weights = torch.reciprocal(self.weights)
         self.inv_weights = torch.nan_to_num(self.inv_weights, nan=0.0, neginf=0.0, posinf=0.0)
 
@@ -72,25 +69,25 @@ class WeightedVectorialTotalVariation(Function):
         )
 
     def __call__(self, x):
-        x_arr = self.bdc2a.direct(x)  # shape (nx, ny, nz, M)
+        x_arr = self.bdc2a.direct(x) 
         J = self.jacobian.direct(x_arr)
 
-        w = self.weights.unsqueeze(-1)  # (..., M, 1)
-        U = w * J  # (..., M, d)
+        w = self.weights.unsqueeze(-1) 
+        U = w * J 
 
         return self.vtv(U)
 
     def gradient(self, x, out=None):
         
-        x_arr = self.bdc2a.direct(x)  # (nx, ny, nz, M)
+        x_arr = self.bdc2a.direct(x) 
         J = self.jacobian.direct(x_arr)
 
-        w = self.weights.unsqueeze(-1)  # (..., M, 1)
-        U = w * J  # (..., M, d)
+        w = self.weights.unsqueeze(-1)
+        U = w * J
 
-        inner = w * self.vtv.gradient(U)  # the vtv.gradient already accounts for smoothing etc.
+        inner = w * self.vtv.gradient(U)
 
-        ret = self.jacobian.adjoint(inner)  # shape (nx,ny,nz,M)
+        ret = self.jacobian.adjoint(inner)
         
         return self.bdc2a.adjoint(ret, out=out)
     
@@ -112,27 +109,18 @@ class WeightedVectorialTotalVariation(Function):
         * `self.jacobian.sensitivity(images)` returns per-direction scales (broadcast spatially),
             consistent with the `direct/adjoint` scaling (Δ, bank, both_directions).
         """
-        # ----- 1) Build A = w ⊙ (J x)
-        J = self.jacobian.direct(x_arr)                 # shape: (nx, ny, nz, M, d)
-        A = self.weights.unsqueeze(-1) * J              # shape: (nx, ny, nz, M, d)
+        J = self.jacobian.direct(x_arr) 
+        A = self.weights.unsqueeze(-1) * J
 
-        # ----- 2) Spectral IRLS weights (SVD-free inside your schatten backend)
-        #         omega_sigma: (..., r)  -> sum over singular values -> omega: (...,)
-        omega_sigma = self.vtv.hessian_surrogate(A)     # per-σ weights w(σ)
-        omega = omega_sigma.sum(dim=-1)                 # shape: (nx, ny, nz)
+        omega_sigma = self.vtv.hessian_surrogate(A)
+        omega = omega_sigma.sum(dim=-1)
 
-        # ----- 3) Per-direction scales from operator (already Δ/bank-consistent)
-        #         S has shape (nx, ny, nz, M, d) or is broadcastable to it
-        S = self.jacobian.sensitivity(x_arr)            # numpy or torch
+        S = self.jacobian.sensitivity(x_arr) 
         S = torch.as_tensor(S, device=A.device, dtype=A.dtype)
         if S.ndim < A.ndim:
-            # make sure it broadcasts to (nx, ny, nz, M, d)
             S = S.expand_as(A)
-        # square scales
-        S2 = S * S                                      # (..., M, d)
-
-        # ----- 4) Voxelwise participation counts n_dir(j) ∈ {1,2}
-        #         For forward differences along x/y/z: interior=2, boundary=1.
+        S2 = S * S 
+        
         nx, ny, nz, M, d = A.shape
 
         def _counts_1d(n: int):
@@ -141,32 +129,24 @@ class WeightedVectorialTotalVariation(Function):
                 c[0] = 1.0
                 if n > 1:
                     c[-1] = 1.0
-            return c  # (n,)
+            return c 
 
-        # start with all-2 (safe upper bound), then overwrite first min(3,d) axes with boundary-aware counts
         C = torch.full((nx, ny, nz, d), 2.0, device=A.device, dtype=A.dtype)
 
-        # x-axis counts in dir slot 0 (if present)
         if d >= 1:
             cx = _counts_1d(nx).view(nx, 1, 1).expand(nx, ny, nz)
             C[..., 0] = cx
-        # y-axis counts in dir slot 1 (if present)
         if d >= 2:
             cy = _counts_1d(ny).view(1, ny, 1).expand(nx, ny, nz)
             C[..., 1] = cy
-        # z-axis counts in dir slot 2 (if present)
         if d >= 3:
             cz = _counts_1d(nz).view(1, 1, nz).expand(nx, ny, nz)
             C[..., 2] = cz
 
-        # broadcast counts across modalities: (nx,ny,nz,1,d) -> (nx,ny,nz,M,d)
         C = C.unsqueeze(-2).expand(nx, ny, nz, M, d)
 
-        # ----- 5) Assemble operator-consistent diagonal energy S_jm
-        #         S_jm = sum_dir ( S^2 * counts )
-        S_jm = (S2 * C).sum(dim=-1)                     # shape: (nx, ny, nz, M)
+        S_jm = (S2 * C).sum(dim=-1)
 
-        # ----- 6) Final diagonal with damping and floor
         P_diag = (omega.unsqueeze(-1) * S_jm) * (self.weights * self.weights)  # (..., M)
         P_diag = eta * P_diag
         P_diag = torch.clamp(P_diag, min=epsilon)
@@ -178,8 +158,8 @@ class WeightedVectorialTotalVariation(Function):
         Returns a BlockDataContainer holding a diagonal positive surrogate H ≈ ∇²V(x).
         Shape matches x (nx,ny,nz,M). Guaranteed H >= epsilon.
         """
-        x_arr = self.bdc2a.direct(x)                               # (nx,ny,nz,M)
-        H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)   # torch tensor (...,M)
+        x_arr = self.bdc2a.direct(x)   
+        H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)  
         return self.bdc2a.adjoint(H, out=out)
 
     def _inv_hessian_diag_fast(self, x, eta: float = 0.7, epsilon: float = 1e-8, out=None):
@@ -198,37 +178,26 @@ class WeightedVectorialTotalVariation(Function):
         Core implementation to calculate the diagonal preconditioner weights
         based on the corrected Hessian derivation.
         """
-        # 1. Compute the Jacobian field, Jx.
         J = self.jacobian.direct(x_arr)
 
-        # 2. Apply the data-fidelity weights. This becomes the input 'A' for the VTV function.
         w = self.weights.unsqueeze(-1)
         A_field = w * J
 
-        # 3. Call the backend to get the Hessian components from the SVD of A_field.
         hess_coeffs, rank_one_fields = self.vtv.hessian_components(A_field)
 
-        # 4. Initialize the final diagonal preconditioner tensor P.
         P_diag = torch.zeros_like(x_arr)
 
-        # 5. Loop over each singular mode k, calculate its contribution, and accumulate.
         num_singular_values = rank_one_fields.shape[-3]
         for k in range(num_singular_values):
-            # a) Get the field of rank-1 matrices for this mode
-            C_k_field = rank_one_fields[..., k, :, :]  # Shape: (nx, ny, nz, M, d)
+            C_k_field = rank_one_fields[..., k, :, :] 
 
-            # b) The formula is p_i = sum_k h''(s_k) * ( (J^T u_k v_k^T)_i )^2
-            # The rank-one fields are u_k v_k^T from A=wJx. We need to compute J^T(w * u_k v_k^T).
             influence_image = self.jacobian.adjoint(
                 w * C_k_field
             ) 
-            # c) Get the corresponding h''(s_k) coefficients for this mode.
             h_double_prime_k = hess_coeffs[..., k]
 
-            # d) Unsqueeze the coefficient to broadcast over the M modalities.
             h_double_prime_k = h_double_prime_k.unsqueeze(-1)
             
-            # e) Accumulate the contribution for this mode: h''(s_k) * (J^T u_k v_k^T)^2
             P_diag += h_double_prime_k * (influence_image**2)
 
         return P_diag
@@ -249,14 +218,11 @@ class WeightedVectorialTotalVariation(Function):
         Computes the action of the inverse of the diagonal Hessian approximation.
         This is a simple element-wise division by the preconditioner weights.
         """
-        # 1. Get the preconditioner weights
         diag_arr = self._preconditioner_weights_core_slow(self.bdc2a.direct(x))
 
-        # 2. Invert the weights, adding epsilon for stability
         inv_arr = torch.reciprocal(diag_arr + epsilon)
         torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0, out=inv_arr)
 
-        # 3. Convert back to BlockDataContainer
         return self.bdc2a.adjoint(inv_arr, out=out)
 
     def hessian_diag(self, x, out=None):
@@ -299,7 +265,6 @@ class WeightedTotalVariation(Function):
         if hasattr(anatomical, "as_array"):  # ImageData
             anatomical = get_array(anatomical)
 
-        # Jacobian operator: maps N×M images → N×M×d (stack of finite diffs)
         self.jacobian = Jacobian(
             voxel_sizes,
             anatomical=anatomical,
@@ -311,30 +276,24 @@ class WeightedTotalVariation(Function):
         self.hessian = hessian
         self.bdc2a = BlockDataContainerToArray(geometry)
 
-        # Pull out the weights as an array/tensor of shape (Nx,Ny,Nz,M)
-        self.weights = self.bdc2a.direct(weights)  # shape (..., M)
-
-        # Inverse‐weight is used in inv_hessian_diag
+        self.weights = self.bdc2a.direct(weights)
+        
         self.inv_weights = torch.reciprocal(self.weights)
         self.inv_weights = torch.nan_to_num(self.inv_weights, nan=0.0, neginf=0.0, posinf=0.0)
 
-        # Create the GPU total variation backend
         from .vector_norm import GPUVectorNorm
 
         self.tv = GPUVectorNorm(eps=delta, norm=norm, smoothing_function=smoothing)
 
     def __call__(self, x):
         
-        x_arr = self.bdc2a.direct(x)  # shape (nx, ny, nz, M)
+        x_arr = self.bdc2a.direct(x) 
         J = self.jacobian.direct(x_arr)
 
         w = self.weights.unsqueeze(-1)
-        U = w * J  # (..., M, d)
-
-        # Apply GPUVectorNorm to each modality separately
+        U = w * J
         total_tv = 0.0
-        for m in range(U.shape[-2]):  # Loop over M modalities
-            # Extract gradients for modality m: shape (..., d)
+        for m in range(U.shape[-2]):
             modality_gradients = U[..., m, :]
             total_tv += self.tv(modality_gradients)
         
@@ -342,20 +301,19 @@ class WeightedTotalVariation(Function):
 
     def gradient(self, x, out=None):
 
-        x_arr = self.bdc2a.direct(x)  # (nx, ny, nz, M)
+        x_arr = self.bdc2a.direct(x)  
         J = self.jacobian.direct(x_arr)
 
         w = self.weights.unsqueeze(-1)
-        U = w * J  # (..., M, d)
+        U = w * J
 
-        # Apply GPUVectorNorm gradient to each modality separately
+  
         inner = torch.zeros_like(U)
-        for m in range(U.shape[-2]):  # Loop over M modalities
-            # Extract gradients for modality m: shape (..., d)
+        for m in range(U.shape[-2]):
             modality_gradients = U[..., m, :]
             inner[..., m, :] = w[..., m, :] * self.tv.gradient(modality_gradients)
 
-        ret = self.jacobian.adjoint(inner)  # shape (nx,ny,nz,M)
+        ret = self.jacobian.adjoint(inner) 
         
         return self.bdc2a.adjoint(ret, out=out)
 
@@ -363,21 +321,20 @@ class WeightedTotalVariation(Function):
         """
         Proximal operator for total variation.
         """
-        x_arr = self.bdc2a.direct(x)  # (nx,ny,nz,M)
-        J = self.jacobian.direct(x_arr)  # (nx,ny,nz,M,d)
+        x_arr = self.bdc2a.direct(x) 
+        J = self.jacobian.direct(x_arr) 
 
         w = self.weights.unsqueeze(-1)
-        U = w * J  # (...,M,d)
+        U = w * J 
 
-        # Apply GPUVectorNorm proximal to each modality separately
+    
         proxU = torch.zeros_like(U)
-        for m in range(U.shape[-2]):  # Loop over M modalities
-            # Extract gradients for modality m: shape (..., d)
+        for m in range(U.shape[-2]): 
             modality_gradients = U[..., m, :]
             proxU[..., m, :] = self.tv.proximal(modality_gradients, tau)
 
-        # Push back to image space:
-        ret = self.jacobian.adjoint(proxU * w)  # (nx,ny,nz,M)
+
+        ret = self.jacobian.adjoint(proxU * w)  
         return self.bdc2a.adjoint(ret, out=out)
 
     def hessian_diag(self, x, out=None, stabiliser: float = 1e-9, positive: bool = True):
@@ -386,32 +343,29 @@ class WeightedTotalVariation(Function):
         sum_j (w^2 * s_j^2) * h_j(U), with U = w * (Jx).
         Requires jacobian.sensitivity(...) -> (..., M, d) per-direction sensitivities.
         """
-        x_arr = self.bdc2a.direct(x)             # (..., M)
-        J     = self.jacobian.direct(x_arr)      # (..., M, d)
-        w     = self.weights.unsqueeze(-1)       # (..., M, 1)
-        U     = w * J                            # (..., M, d)
+        x_arr = self.bdc2a.direct(x)          
+        J     = self.jacobian.direct(x_arr)    
+        w     = self.weights.unsqueeze(-1)    
+        U     = w * J                         
 
-        # Apply GPUVectorNorm hessian_dir_diag to each modality separately
+
         h_dir = torch.zeros_like(U)
-        for m in range(U.shape[-2]):  # Loop over M modalities
-            # Extract gradients for modality m: shape (..., d)
+        for m in range(U.shape[-2]):  
             modality_gradients = U[..., m, :]
             h_dir[..., m, :] = self.tv.hessian_dir_diag(modality_gradients, stabiliser=stabiliser, positive=positive)
 
-        # Finite-difference sensitivities per direction
-        S = torch.as_tensor(self.jacobian.sensitivity(x_arr), device=U.device, dtype=U.dtype)  # (..., M, d)
-        S2 = S * S
-        w2 = (self.weights ** 2).unsqueeze(-1)   # (..., M, 1)
 
-        h_img = torch.sum(w2 * S2 * h_dir, dim=-1)  # (..., M)
+        S = torch.as_tensor(self.jacobian.sensitivity(x_arr), device=U.device, dtype=U.dtype)  
+        S2 = S * S
+        w2 = (self.weights ** 2).unsqueeze(-1)  
+
+        h_img = torch.sum(w2 * S2 * h_dir, dim=-1) 
 
         return self.bdc2a.adjoint(h_img, out=out)
 
 
     def inv_hessian_diag(self, x, out=None, epsilon=1e-9):
-        # reuse hessian_diag code
-        hess_arr = self.hessian_diag(x, out=None)  # BDC or array
-        # if it’s a numpy array, convert to torch:
+        hess_arr = self.hessian_diag(x, out=None) 
         H = torch.as_tensor(
             hess_arr if isinstance(hess_arr, torch.Tensor) else self.bdc2a.direct(hess_arr),
             device=device,
