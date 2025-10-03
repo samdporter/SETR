@@ -460,8 +460,9 @@ def get_prior(
             anatomical=umap if args.directional_tnv else None,
             stable=getattr(args, "stable", True),
             tail_singular_values=getattr(args, "tail_singular_values", None),
-            both_directions=getattr(args, "tnv_both_directions", False),
+            both_directions=getattr(args, "tnv_both_directions", True),
             stencil=getattr(args, "tnv_stencil", '6'),
+            hessian=getattr(args, "hessian_type", "slow"),
         )
         tnv_prior = OperatorCompositionFunction(vtv, bo)
 
