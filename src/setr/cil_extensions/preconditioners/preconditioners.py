@@ -73,6 +73,7 @@ class BSREMPreconditioner(PreconditionerWithInterval):
         freeze_iter=np.inf,
         epsilon=None,
         smooth=False,
+        max_val=None
     ):
         super().__init__(update_interval, freeze_iter)
         self.s_inv = s_inv
@@ -84,9 +85,13 @@ class BSREMPreconditioner(PreconditionerWithInterval):
         if epsilon is None:
             epsilon = s_inv.max() * 1e-10
         self.epsilon = epsilon
+        self.max_val = max_val
 
     def compute_preconditioner(self, algorithm, out=None):
         x = algorithm.solution.copy()
+        
+        if self.max_val is not None:
+            x = x.minimum(self.max_val)
 
         if isinstance(x, BlockDataContainer):
             for i, xi in enumerate(x.containers):
