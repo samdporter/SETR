@@ -277,15 +277,32 @@ def get_spect_data(path: str) -> dict:
         spect_data["initial_image"] = spect_data["template_image"].get_uniform_copy(1)
 
     # Load displacement field for SPECT to PET registration
-    displacement_path = os.path.join(path, "spect2pet_zoom_nonrigid.nii")
-    try:
-        spect_data["displacement"] = NiftiImageData3DDisplacement(displacement_path)
-    except Exception as e_displacement:
-        logging.warning(
-            "No SPECT displacement field found (%s). Registration will not be available.",
-            str(e_displacement),
-        )
+    displacement_files = [
+        "spect2pet_zoom_nonrigid.nii",
+        "spect2pet_zoom_rigid.nii",
+        "spect2pet.nii"
+    ]
+
+    displacement_path = None
+    for filename in displacement_files:
+        full_path = os.path.join(path, filename)
+        if os.path.exists(full_path):
+            displacement_path = full_path
+            break
+
+    if displacement_path is None:
+        logging.warning("No SPECT displacement field found. Registration will not be available.")
         spect_data["displacement"] = None
+    else:
+        try:
+            spect_data["displacement"] = NiftiImageData3DDisplacement(displacement_path)
+        except Exception as e_displacement:
+            logging.warning(
+                "Failed to load SPECT displacement field from %s (%s). Registration will not be available.",
+                displacement_path,
+                str(e_displacement),
+            )
+            spect_data["displacement"] = None
         
     try:
         spect_data["zoom_factors"] = load_zoom_factors(path)
@@ -393,12 +410,27 @@ def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_
     return pet_obj_funs, spect_obj_funs
 
 
-def get_block_objective(desired_image, other_image, obj_fun, order=0):
-    """Returns a block CIL objective function for the given SIRF objective function"""
+def get_block_objective(desired_image, other_image, obj_fun, scale=1, order=0):
+    """Returns a block CIL objective function for the given SIRF objective function.
+
+    Args:
+        desired_image: The image to apply the objective function to.
+        other_image: The other image in the block (receives zero operator).
+        obj_fun: The objective function to wrap.
+        scale: Scaling factor for the identity operator (default 1).
+        order: Position of desired_image in block (0 or 1).
+
+    Returns:
+        OperatorCompositionFunction: Block objective function.
+    """
+    from setr.cil_extensions.operators import ScalingOperator
 
     # Set up zero operators
     o2d_zero = ZeroOperator(other_image, desired_image)
-    d2d_id = IdentityOperator(desired_image)
+    if scale == 1:
+        d2d_id = IdentityOperator(desired_image)
+    else:
+        d2d_id = ScalingOperator(scale, desired_image)
 
     if order == 0:
         return OperatorCompositionFunction(obj_fun, BlockOperator(d2d_id, o2d_zero, shape=(1, 2)))
