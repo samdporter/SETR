@@ -205,7 +205,7 @@ print(f"{'Config':<30s}  {'Gradient':>12s}  {'Optimized':>12s}  {'Speedup':>8s}"
 print("-"*80)
 
 for bnd_cond, stencil, both_dir in benchmark_configs:
-    config = f"{bnd_cond} stencil={stencil}"
+    config = f"{bnd_cond} stencil={stencil}, both_dirs={both_dir}"
 
     grad = Gradient(
         voxel_sizes=(2.0, 2.0, 2.5),

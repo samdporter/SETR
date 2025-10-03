@@ -34,6 +34,7 @@ class WeightedVectorialTotalVariation(Function):
         both_directions=False,
         tail_singular_values=None,
         hessian="slow",
+        bnd_cond="Periodic",
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if isinstance(anatomical, ImageData):
@@ -43,6 +44,7 @@ class WeightedVectorialTotalVariation(Function):
             anatomical=anatomical,
             stencil=stencil,
             both_directions=both_directions,
+            bnd_cond=bnd_cond,
         )
 
         self.smoothing = smoothing
@@ -259,7 +261,8 @@ class WeightedTotalVariation(Function):
         diagonal=False,
         both_directions=False,
         hessian="slow",
-        stencil='6'
+        stencil='6',
+        bnd_cond="Periodic",
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if hasattr(anatomical, "as_array"):  # ImageData
@@ -270,6 +273,7 @@ class WeightedTotalVariation(Function):
             anatomical=anatomical,
             both_directions=both_directions,
             stencil=stencil,
+            bnd_cond=bnd_cond,
         )
 
         self.smoothing = smoothing
