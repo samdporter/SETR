@@ -1,8 +1,7 @@
 import logging
 import os
-from types import MethodType
-from typing import Dict, List, Optional
 from pathlib import Path
+from typing import Dict, List, Optional
 
 import numpy as np
 from cil.framework import BlockDataContainer
@@ -144,7 +143,9 @@ def get_pet_data(path: str, suffix: str = "") -> dict:
 
 
 def get_pet_data_multiple_bed_pos(
-    path: str, suffixes: List[str], tof: bool = False,
+    path: str,
+    suffixes: List[str],
+    tof: bool = False,
     load_sinos: bool = True,
 ) -> Dict[str, object]:
     """
@@ -205,26 +206,27 @@ def get_pet_data_multiple_bed_pos(
 def load_zoom_factors(spect_dir):
     """
     Load previously saved zoom factors from file.
-    
+
     Args:
         spect_dir: Directory containing the zoom factors file
-        
+
     Returns:
         tuple: Zoom factors (z, y, x)
     """
     zoom_file_path = os.path.join(spect_dir, "spect_to_pet_zoom_factors.txt")
-    
+
     if not os.path.exists(zoom_file_path):
         raise FileNotFoundError(f"Zoom factors file not found: {zoom_file_path}")
-    
-    with open(zoom_file_path, 'r') as f:
+
+    with open(zoom_file_path, "r") as f:
         for line in f:
             line = line.strip()
-            if not line.startswith('#') and line:
+            if not line.startswith("#") and line:
                 zoom_values = line.split()
                 return (float(zoom_values[0]), float(zoom_values[1]), float(zoom_values[2]))
-    
+
     raise ValueError("No zoom factors found in file")
+
 
 def get_spect_data(path: str) -> dict:
     """
@@ -280,7 +282,7 @@ def get_spect_data(path: str) -> dict:
     displacement_files = [
         "spect2pet_zoom_nonrigid.nii",
         "spect2pet_zoom_rigid.nii",
-        "spect2pet.nii"
+        "spect2pet.nii",
     ]
 
     displacement_path = None
@@ -303,7 +305,7 @@ def get_spect_data(path: str) -> dict:
                 str(e_displacement),
             )
             spect_data["displacement"] = None
-        
+
     try:
         spect_data["zoom_factors"] = load_zoom_factors(path)
     except Exception as e_zoom:
@@ -342,7 +344,7 @@ def create_spect_uniform_image(sinogram, origin=None, dims=None):
         dims[0] = dims[0] // 2 + dims[0] % 2  # Halve the first dimension (with rounding)
         dims[1] -= dims[1] % 2  # Ensure even number for second dimension
         dims[2] = dims[1]  # Set third dimension equal to second dimension
-        
+
     if origin is None:
         origin = (0, 0, 0)
 
@@ -394,8 +396,6 @@ def normalise_kappa_squares(kappa_block, pct=95):
             )
             im *= 1.0 / p
     return kappa_block
-
-
 
 
 def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_funs):
@@ -580,18 +580,18 @@ def get_subset_data(data, num_subsets, stagger="staggered"):
 def get_array(obj):
     """
     Get array from SIRF object, preferring asarray() over as_array() for performance.
-    
+
     Falls back to as_array() if asarray() is not available (older SIRF versions).
-    
+
     Args:
         obj: SIRF object with asarray() or as_array() method
-        
+
     Returns:
         numpy array or reference to underlying array
     """
-    if hasattr(obj, 'asarray'):
+    if hasattr(obj, "asarray"):
         return obj.asarray()
-    elif hasattr(obj, 'as_array'):
+    elif hasattr(obj, "as_array"):
         return obj.as_array()
     else:
         raise AttributeError(f"Object {type(obj)} has neither asarray() nor as_array() method")

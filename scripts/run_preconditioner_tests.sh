@@ -1,5 +1,7 @@
 #!/bin/bash
-# Run preconditioner comparison tests
+# Run preconditioner comparison tests (LOCAL VERSION)
+#
+# For cluster execution, use: functionality/preconditioners/launch_precond_sweep.sh
 #
 # Usage:
 #   ./scripts/run_preconditioner_tests.sh [quick|full]
@@ -10,20 +12,26 @@ MODE="${1:-full}"
 
 echo "=========================================="
 echo "VTV Preconditioner Comparison Tests"
+echo "LOCAL EXECUTION (shared setup)"
+echo ""
+echo "For cluster execution with independent"
+echo "setups per job, use:"
+echo "  functionality/preconditioners/launch_precond_sweep.sh"
 echo "=========================================="
 echo ""
 
 case "$MODE" in
   quick)
-    echo "Running QUICK test with 5 epochs (2 alphas × 3 step sizes × 2 preconditioners = 12 runs)"
-    echo "Estimated time: ~1 hour"
+    echo "Running QUICK test with 10 epochs"
+    echo "  3 alphas × 1 step size × 1 preconditioner = 3 runs"
+    echo "  Estimated time: ~1-2 hours"
     python scripts/test_preconditioners.py \
       --config configs/config_2bpos.yaml \
       --output results/preconditioner_tests_quick \
-      --alphas 100 500 \
-      --step-sizes 0.01 0.1 1.0 \
-      --precond-types bsrem vtv_fast \
-      --epochs 5
+      --alphas 500 5000 50000 \
+      --step-sizes 0.1 1 \
+      --precond-types bsrem vtv_svd_principal_alpha vtv_mm_jensen \
+      --epochs 10
 
     echo ""
     echo "Running analysis..."
@@ -32,8 +40,16 @@ case "$MODE" in
     ;;
 
   full)
-    echo "Running FULL test (50 epochs) (4 alphas × 4 step sizes × 3 preconditioners = 48 runs)"
-    echo "Estimated time: ~3-5 days"
+    echo "Running FULL test (50 epochs)"
+    echo "  4 alphas × 4 step sizes × 5 preconditioners = 80 runs"
+    echo "  Estimated time: ~4-6 days"
+    echo ""
+    echo "Preconditioner methods to test:"
+    echo "  1. bsrem (baseline, no VTV preconditioning)"
+    echo "  2. vtv_svd_principal_alpha (SVD principal + isotropic α)"
+    echo "  3. vtv_mm_jensen (MM/Jensen, SVD-free)"
+    echo "  4. vtv_frobenius_surrogate_pd (Frobenius surrogate, PD)"
+    echo "  5. vtv_vector_tv_per_modality (Per-modality vector TV)"
     echo ""
     read -p "Continue? (y/n) " -n 1 -r
     echo
@@ -47,7 +63,7 @@ case "$MODE" in
       --output results/preconditioner_tests \
       --alphas 50 100 500 1000 \
       --step-sizes 0.05 0.1 0.5 1.0 \
-      --precond-types bsrem vtv_fast vtv_slow \
+      --precond-types bsrem vtv_svd_principal_alpha vtv_mm_jensen vtv_frobenius_surrogate_pd vtv_vector_tv_per_modality \
       --epochs 50
 
     echo ""
@@ -59,8 +75,15 @@ case "$MODE" in
   *)
     echo "Usage: $0 [quick|full]"
     echo ""
-    echo "  quick: Fast test with 12 runs (~6-8 hours)"
-    echo "  full:  Complete test with 72 runs (~3-5 days)"
+    echo "  quick: Fast test with 18 runs (~1-2 hours)"
+    echo "  full:  Complete test with 80 runs (~4-6 days)"
+    echo ""
+    echo "Available preconditioner methods:"
+    echo "  - bsrem: Baseline (no VTV preconditioning)"
+    echo "  - vtv_svd_principal_alpha: SVD principal + isotropic α"
+    echo "  - vtv_mm_jensen: Jensen-bound MM, SVD-free"
+    echo "  - vtv_frobenius_surrogate_pd: Frobenius surrogate (PD)"
+    echo "  - vtv_vector_tv_per_modality: Per-modality vector TV"
     exit 1
     ;;
 esac

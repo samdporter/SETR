@@ -4,15 +4,14 @@
 import logging
 import os
 from types import SimpleNamespace
-import pandas as pd
 
 import numpy as np
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import (
-    OperatorCompositionFunction, ScaledFunction, 
-    SGFunction, SumFunction, SVRGFunction
+    ScaledFunction,
+    SumFunction,
+    SVRGFunction,
 )
-from cil.optimisation.operators import CompositionOperator
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
 
@@ -22,7 +21,6 @@ from setr.cil_extensions.callbacks import (
     SaveObjectiveCallback,
 )
 from setr.cil_extensions.functions import BlockIndicatorBox
-from setr.cil_extensions.operators import TruncationOperator
 from setr.cil_extensions.preconditioners import (
     BSREMPreconditioner,
     ImageFunctionPreconditioner,
@@ -37,7 +35,7 @@ from setr.scripts.common import (
 )
 from setr.utils import get_pet_data, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_pet_am, get_spect_am, get_array
+from setr.utils.sirf import get_array, get_filters, get_pet_am, get_spect_am
 
 
 def prepare_data(args):
@@ -57,9 +55,7 @@ def prepare_data(args):
     gauss.apply(data["initial_image"])
     cyl.apply(data["initial_image"])
 
-    data["initial_image"].write(
-        os.path.join(args.output_path, "initial_image.hv")
-    )
+    data["initial_image"].write(os.path.join(args.output_path, "initial_image.hv"))
 
     # Check for NaNs in all data
     for key, value in data.items():
@@ -102,17 +98,18 @@ def run_rdp_ista(args, data):
 
     # Compute sensitivity inverse for BSREM preconditioner
     from setr.scripts.common import get_sensitivity_from_subset_objs
+
     sensitivity = get_sensitivity_from_subset_objs(objs)
-    
+
     # Create sensitivity inverse
     s_inv = sensitivity.clone()
     sens_array = get_array(sensitivity)
     s_inv.fill(np.reciprocal(sens_array, where=sens_array != 0))
-    
+
     # Apply filters to sensitivity
     cyl, _ = get_filters()
     cyl.apply(s_inv)
-    
+
     # Save sensitivity inverse
     s_inv.write(os.path.join(args.output_path, "s_inv.hv"))
     logging.info(f"Writing s_inv with max {s_inv.max()}")
@@ -136,27 +133,21 @@ def run_rdp_ista(args, data):
     all_funs = []
     for obj in objs:
         all_funs.append(SumFunction(obj, prior))
-        
+
     update_interval = len(objs)
 
     # Set up data fidelity function
     sampler = Sampler.sequential(args.num_subsets)
-    f_obj = -SVRGFunction(
-        all_funs, sampler, snapshot_update_interval=2*update_interval
-    )
+    f_obj = -SVRGFunction(all_funs, sampler, snapshot_update_interval=2 * update_interval)
 
     # BSREM preconditioner using sensitivity
-    bsrem_precond = BSREMPreconditioner(
-        s_inv, 
-        update_interval=update_interval
-    )
-    
+    bsrem_precond = BSREMPreconditioner(s_inv, update_interval=update_interval)
+
     # Prior preconditioner using RDP inverse Hessian
     prior_precond = ImageFunctionPreconditioner(
-        prior.inv_hessian_diag,
-        update_interval=update_interval
+        prior.inv_hessian_diag, update_interval=update_interval
     )
-    
+
     # Combined preconditioner using LehmerMean
     preconditioner = LehmerMeanPreconditioner(
         [bsrem_precond, prior_precond],
@@ -172,7 +163,7 @@ def run_rdp_ista(args, data):
 
     # Set up callbacks
     callbacks = []
-    
+
     # Save images callback
     if args.save_images:
         save_callback = SaveImageCallback(
@@ -180,14 +171,14 @@ def run_rdp_ista(args, data):
             filename=os.path.join(args.output_path, "rdp_image"),
         )
         callbacks.append(save_callback)
-    
+
     # Save objective callback
     obj_callback = SaveObjectiveCallback(
         interval=update_interval,
         filename=os.path.join(args.output_path, "objective.csv"),
     )
     callbacks.append(obj_callback)
-    
+
     # Print progress callback
     print_callback = PrintObjectiveCallback(interval=update_interval)
     callbacks.append(print_callback)

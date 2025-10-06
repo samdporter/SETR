@@ -6,17 +6,17 @@ from .operators import (
     AdjointOperator,
     CouchShiftOperator,
     DirectionalOperator,
+    EnlargementOperator,
+    FlipOperator,
     ImageCombineOperator,
     ImageResampleOperator,
     ImageSummationOperator,
     NaNToZeroOperator,
-    FlipOperator,
     NiftyResampleOperator,
-    ZoomOperator,
-    EnlargementOperator,
     ScalingOperator,
     TruncationOperator,
     ZeroEndSlicesOperator,
+    ZoomOperator,
 )
 
 __all__ = [

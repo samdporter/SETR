@@ -8,19 +8,17 @@ import logging
 import os
 import string
 
+from cil.optimisation.operators import CompositionOperator
 from sirf.Reg import NiftiImageData3DDisplacement
 from sirf.STIR import ImageData
 
-from cil.optimisation.operators import CompositionOperator
-
 from setr.cil_extensions.operators import (
+    EnlargementOperator,
     NiftyResampleOperator,
     ZoomOperator,
-    EnlargementOperator,
 )
-    
+from setr.utils import get_pet_data, get_pet_data_multiple_bed_pos, get_spect_data
 from setr.utils.io import apply_overrides, load_config
-from setr.utils import get_pet_data_multiple_bed_pos, get_pet_data, get_spect_data
 
 
 def parse_args():
@@ -48,12 +46,9 @@ def main():
 
     cfg = load_config(args.config)
     cfg = apply_overrides(cfg, args.override)
-    
+
     template = string.Template
-    cfg = {
-        k: template(v).safe_substitute(cfg) if isinstance(v, str) else v
-        for k, v in cfg.items()
-    }
+    cfg = {k: template(v).safe_substitute(cfg) if isinstance(v, str) else v for k, v in cfg.items()}
 
     # Expand environment variables in paths
     for key in [
@@ -75,7 +70,7 @@ def main():
     spect_recon_path = cfg["spect_reconstruction"]
     transform_path = cfg["transform_file"]
     output_path = cfg["output_file"]
-    
+
     spect_data = get_spect_data(cfg["spect_dir"])
 
     logging.info(f"Loading SPECT reconstruction: {spect_recon_path}")
@@ -86,7 +81,7 @@ def main():
 
     # Create resampler
     enlarger = EnlargementOperator(
-        enlarged_shape=(128,256,256),
+        enlarged_shape=(128, 256, 256),
         enlargement_sino=spect_data["acquisition_data"],
         original_floating=spect_recon,
     )
@@ -96,9 +91,9 @@ def main():
         pet_template.voxel_sizes(),
     )
     resampler = NiftyResampleOperator(
-        reference=pet_template, 
+        reference=pet_template,
         floating=zoomer.direct(enlarger.direct(spect_recon)),
-        transform=transform
+        transform=transform,
     )
     composition = CompositionOperator(resampler, zoomer, enlarger)
 

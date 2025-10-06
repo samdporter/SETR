@@ -16,18 +16,20 @@ use_modality_specific_priors: false
 prior: "tv" # can be tv or rdp
 gamma_pet: 100.0
 gamma_spect: 10.0
-tv_stencil: "6" # can be 6, 18, or 26
+tv_stencil: "18" # can be 6, 18, or 26
+tv_bnd_cond: "Periodic"
 directional_tv: true
 tv_both_directions: false
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true
 gamma_tnv: 1.0
-alpha: 100.0
-beta: 10.0
-tnv_stencil: "26"
+alpha: 500.0
+beta: 500.0
+tnv_stencil: "18"
+tnv_bnd_cond: "Periodic"
 directional_tnv: true
-tnv_both_directions: false
+tnv_both_directions: true
 tail_singular_values: null
 stable: false
 

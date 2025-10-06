@@ -34,29 +34,26 @@ from setr.priors import RelativeDifferencePrior
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,
-    get_resampling_operators,
     get_shift_operators,
     init_run_env,
 )
 from setr.utils import get_pet_data_multiple_bed_pos
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_pet_am
+from setr.utils.sirf import get_array, get_filters, get_pet_am
 
 
-def prepare_data(:
+def prepare_data(args):
     """Prepare the multi-bed PET data."""
     pet_data = get_pet_data_multiple_bed_pos(
         args.pet_data_path, tof=args.use_tof, suffixes=["_f1b1", "_f2b1"]
-    , get_array)
+    )
 
     # Apply filters to initial images
     cyl, gauss = get_filters(fwhms=(20, 20, 20))
     gauss.apply(pet_data["initial_image"])
     cyl.apply(pet_data["initial_image"])
 
-    pet_data["initial_image"].write(
-        os.path.join(args.output_path, "initial_image.hv")
-    )
+    pet_data["initial_image"].write(os.path.join(args.output_path, "initial_image.hv"))
 
     # Create initial estimates - for RDP we just need PET
     initial_estimates = pet_data["initial_image"]
@@ -70,11 +67,12 @@ def prepare_data(:
 def get_data_fidelity(args, pet_data, uncombine_op, unshift_ops, choose_ops):
     """
     Set up data fidelity functions for multi-bed reconstruction.
-    
+
     Returns:
         all_funs: List of block objective functions (PET all beds)
         s_inv: Sensitivity inverse images (combined across beds)
     """
+
     # Get acquisition model function
     def get_pet_am_with_res():
         return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.pet_gauss_fwhm)
@@ -100,10 +98,8 @@ def get_data_fidelity(args, pet_data, uncombine_op, unshift_ops, choose_ops):
 
     # Get sensitivities for each bed position
     from setr.scripts.common import get_sensitivity_from_subset_objs
-    pet_sens = [
-        get_sensitivity_from_subset_objs(df)
-        for df in pet_dfs
-    ]
+
+    pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
 
     # Unshift and combine PET sensitivities to common PET grid
     pet_sens_combined = uncombine_op.adjoint(
@@ -162,13 +158,6 @@ def run_rdp_ista(args, pet_data, initial_estimates):
     update_interval = len(all_funs)
     probs = [1 / update_interval] * len(all_funs)
 
-    data_fidelity = -SVRGFunction(
-        all_funs,
-        sampler=Sampler.random_with_replacement(len(all_funs), prob=probs),
-        snapshot_update_interval=update_interval * 2,
-        store_gradients=True,
-    )
-
     # Set up RDP prior in combined image space
     rdp_prior = RelativeDifferencePrior(
         domain_geometry=initial_estimates,
@@ -198,17 +187,13 @@ def run_rdp_ista(args, pet_data, initial_estimates):
 
     # Set up preconditioners following DTNV pattern
     # BSREM preconditioner using sensitivity
-    bsrem_precond = BSREMPreconditioner(
-        s_inv, 
-        update_interval=update_interval
-    )
-    
+    bsrem_precond = BSREMPreconditioner(s_inv, update_interval=update_interval)
+
     # Prior preconditioner using RDP inverse Hessian
     prior_precond = ImageFunctionPreconditioner(
-        prior.inv_hessian_diag,
-        update_interval=update_interval
+        prior.inv_hessian_diag, update_interval=update_interval
     )
-    
+
     # Combined preconditioner using LehmerMean
     preconditioner = LehmerMeanPreconditioner(
         [bsrem_precond, prior_precond],
@@ -221,7 +206,7 @@ def run_rdp_ista(args, pet_data, initial_estimates):
 
     # Set up callbacks
     callbacks = []
-    
+
     # Save images callback
     if args.save_images:
         save_callback = SaveImageCallback(
@@ -229,14 +214,14 @@ def run_rdp_ista(args, pet_data, initial_estimates):
             filename=os.path.join(args.output_path, "rdp_image"),
         )
         callbacks.append(save_callback)
-    
+
     # Save objective callback
     obj_callback = SaveObjectiveCallback(
         interval=update_interval,
         filename=os.path.join(args.output_path, "objective.csv"),
     )
     callbacks.append(obj_callback)
-    
+
     print_callback = PrintObjectiveCallback(interval=update_interval)
     callbacks.append(print_callback)
 

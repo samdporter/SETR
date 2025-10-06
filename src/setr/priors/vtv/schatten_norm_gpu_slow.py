@@ -5,27 +5,27 @@ import torch
 from cil.optimisation.functions import Function
 
 from .common import (
-    to_tensor,
+    charbonnier,
+    charbonnier_grad,
+    charbonnier_hessian_diag,
+    charbonnier_hessian_surrogate,
+    fair,
+    fair_grad,
+    fair_hessian_diag,
+    fair_hessian_surrogate,
+    get_mask,
     l1_norm,
     l1_norm_prox,
     l2_norm,
     l2_norm_prox,
-    charbonnier,
-    charbonnier_grad,
-    charbonnier_hessian_surrogate,
-    charbonnier_hessian_diag,
-    fair,
-    fair_grad,
-    fair_hessian_surrogate,
-    fair_hessian_diag,
-    perona_malik,
-    perona_malik_grad,
-    perona_malik_hessian_surrogate,
-    perona_malik_hessian_diag,
     nothing,
     nothing_grad,
-    get_mask,
-    nothing_hessian_diag
+    nothing_hessian_diag,
+    perona_malik,
+    perona_malik_grad,
+    perona_malik_hessian_diag,
+    perona_malik_hessian_surrogate,
+    to_tensor,
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -73,11 +73,11 @@ class GPUVectorialTotalVariation(Function):
 
         S = torch.linalg.svdvals(x)
         if self.tail is not None:
-            mask = get_mask(S, self.tail)         # 1 on the smallest `tail` σ
+            mask = get_mask(S, self.tail)  # 1 on the smallest `tail` σ
             s_smoothed = smoothing_func(S * mask, self.eps)
-            s_to_norm  = s_smoothed + S * (1 - mask)      # <-- pass head through
+            s_to_norm = s_smoothed + S * (1 - mask)  # <-- pass head through
         else:
-            s_to_norm  = smoothing_func(S, self.eps)      # (or just S if smoothing=None)
+            s_to_norm = smoothing_func(S, self.eps)  # (or just S if smoothing=None)
         out = norm_func(s_to_norm)
 
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
@@ -143,7 +143,7 @@ class GPUVectorialTotalVariation(Function):
         # Reconstruct the gradient matrix: U diag(h'(s)) V^T
         out = torch.matmul(U, Vh * S_grad_values[..., None])
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    
+
     def hessian_surrogate(self, x):
         x = to_tensor(x)
 
@@ -202,9 +202,7 @@ class GPUVectorialTotalVariation(Function):
         # Target shape: (..., r, M, d)
 
         # U shape is (..., M, r). We need k to be an outer dimension.
-        U_perm = U.permute(
-            *range(U.ndim - 2), -1, -2
-        )  # Swap last two dims -> (..., r, M)
+        U_perm = U.permute(*range(U.ndim - 2), -1, -2)  # Swap last two dims -> (..., r, M)
 
         # Unsqueeze to prepare for batched matrix multiplication (outer product)
         # U_perm becomes (..., r, M, 1)

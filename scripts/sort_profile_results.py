@@ -1,6 +1,6 @@
-
 import argparse
 import pstats
+
 
 def print_leaf_hotspots(profile_path: str, limit: int = 50):
     """
@@ -22,7 +22,7 @@ def print_leaf_hotspots(profile_path: str, limit: int = 50):
     leaves.sort(key=lambda x: x[0], reverse=True)
     for tottime, ncalls, f in leaves[:limit]:
         print(f"{tottime:10.3f}s  ncalls={ncalls:<9}  {pstats.func_std_string(f)}")
-        
+
 
 def parse_args():
     parser = argparse.ArgumentParser()

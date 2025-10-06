@@ -1,5 +1,5 @@
-import torch
 import numpy as np
+import torch
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -9,6 +9,7 @@ def to_tensor(x):
         return torch.tensor(x, device=device, dtype=torch.float32)
     else:
         return x.to(device, dtype=torch.float32)
+
 
 def pseudo_inverse(H):
     """Inverse except when element is zero."""
@@ -26,8 +27,8 @@ def l1_norm_prox(x, eps):
 def l2_norm(x):
     return torch.sqrt(torch.sum(x**2, dim=-1))
 
-def l2_norm_prox(x, eps):
 
+def l2_norm_prox(x, eps):
     eps_unsqueezed = eps.unsqueeze(-1)
     norms = torch.linalg.norm(x, dim=-1, keepdim=True)
     norms = torch.maximum(norms, torch.tensor(1e-9, device=x.device))
@@ -49,11 +50,11 @@ def charbonnier_hessian_surrogate(x, eps):
 
 
 def charbonnier_hessian_diag(x, eps):
-    return eps ** 2 / (x ** 2 + eps ** 2) ** 1.5
+    return eps**2 / (x**2 + eps**2) ** 1.5
 
 
 def charbonnier_inv_hessian_diag(x, eps):
-    return (x ** 2 + eps ** 2) ** 1.5 / (eps**2)
+    return (x**2 + eps**2) ** 1.5 / (eps**2)
 
 
 def fair(x, eps):
@@ -83,16 +84,17 @@ def perona_malik(x, eps):
 def perona_malik_grad(x, eps):
     return x * torch.exp(-(x**2) / (eps**2)) / (eps**2)
 
+
 def perona_malik_hessian_surrogate(x, eps):
-    return  0.5 * torch.exp(-(x**2) / (eps**2)) / (eps**2)
+    return 0.5 * torch.exp(-(x**2) / (eps**2)) / (eps**2)
 
 
 def perona_malik_hessian_diag(x, eps):
-    return (eps ** 2 - 2 * x ** 2) * torch.exp(-x ** 2 / (eps ** 2)) / (eps ** 3)
+    return (eps**2 - 2 * x**2) * torch.exp(-(x**2) / (eps**2)) / (eps**3)
 
 
 def perona_malik_inv_hessian_diag(x, eps):
-    return (eps ** 3) * torch.exp(x ** 2 / (eps ** 2)) / (eps ** 2 - 2 * x ** 2)
+    return (eps**3) * torch.exp(x**2 / (eps**2)) / (eps**2 - 2 * x**2)
 
 
 def nothing(x, eps=0):
@@ -102,8 +104,10 @@ def nothing(x, eps=0):
 def nothing_grad(x, eps=0):
     return torch.ones_like(x)
 
+
 def nothing_hessian_diag(x, eps=0):
     return torch.zeros_like(x)
+
 
 def get_mask(S, tail: int):
     """
@@ -124,6 +128,6 @@ def add_identity(H, rel=1e-7):
     # rel is relative to the average diagonal scale
     n = H.shape[-1]
     tr = torch.clamp(torch.diagonal(H, dim1=-2, dim2=-1).sum(-1), min=torch.finfo(H.dtype).tiny)
-    jitter = rel * (tr / n)                        # scale with matrix size
+    jitter = rel * (tr / n)  # scale with matrix size
     I = torch.eye(n, dtype=H.dtype, device=H.device).expand_as(H)
     return (H + jitter[..., None, None] * I).contiguous()

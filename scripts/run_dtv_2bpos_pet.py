@@ -12,13 +12,19 @@ import os
 import pstats
 
 import numpy as np
+from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import OperatorCompositionFunction, SumFunction, SVRGFunction
 from cil.optimisation.operators import CompositionOperator
 from cil.optimisation.utilities import Sampler
-from cil.optimisation.algorithms import ISTA
 from sirf.contrib.partitioner import partitioner
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
+from setr.cil_extensions.functions import BlockIndicatorBox
+from setr.cil_extensions.preconditioners import (
+    BSREMPreconditioner,
+    ImageFunctionPreconditioner,
+    LehmerMeanPreconditioner,
+)
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.priors import TotalVariation
 from setr.scripts.common import (
@@ -32,11 +38,9 @@ from setr.scripts.dtnv_common import (
     compute_kappa_squared_image_from_partitioned_objective,
     get_callbacks,
 )
-from setr.cil_extensions.functions import BlockIndicatorBox
-from setr.cil_extensions.preconditioners import BSREMPreconditioner, ImageFunctionPreconditioner, LehmerMeanPreconditioner
 from setr.utils import get_pet_am, get_pet_data_multiple_bed_pos
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_array
+from setr.utils.sirf import get_array, get_filters
 
 
 def prepare_data(args):
@@ -51,16 +55,17 @@ def prepare_data(args):
         args.pet_data_path, tof=args.use_tof, suffixes=["_f1b1", "_f2b1"]
     )
 
-    # PET guidance: use emission guidance if available, otherwise use PET umap  
-    if getattr(args, 'use_emission_guidance', False) and hasattr(args, 'emission_guidance_path'):
+    # PET guidance: use emission guidance if available, otherwise use PET umap
+    if getattr(args, "use_emission_guidance", False) and hasattr(args, "emission_guidance_path"):
         logging.info("Using emission guidance for PET reconstruction")
         from sirf.STIR import ImageData
+
         guidance_image = ImageData(args.emission_guidance_path)
     else:
         logging.info("Using umap guidance for PET reconstruction")
         # Use the combined attenuation map from multi-bed PET data
         guidance_image = pet_data["attenuation"]
-    
+
     # Normalize guidance
     guidance_image += (-guidance_image).max()
     guidance_image /= guidance_image.max()
@@ -69,7 +74,7 @@ def prepare_data(args):
     cyl, gauss = get_filters(fwhms=(20, 20, 20))
     gauss.apply(pet_data["initial_image"])
     cyl.apply(pet_data["initial_image"])
-    pet_data["initial_image"].write(os.path.join(args.output_path, 'initial_image_pet.hv'))
+    pet_data["initial_image"].write(os.path.join(args.output_path, "initial_image_pet.hv"))
 
     # Set delta (smoothing parameter) if not provided
     if args.delta is None:
@@ -84,7 +89,9 @@ def prepare_data(args):
     return guidance_image, pet_data
 
 
-def get_data_fidelity(args, pet_data, get_pet_am, num_subsets, uncombine_op, unshift_ops, choose_ops):
+def get_data_fidelity(
+    args, pet_data, get_pet_am, num_subsets, uncombine_op, unshift_ops, choose_ops
+):
     """
     Set up data fidelity (objective) functions for multi-bed PET.
 
@@ -142,7 +149,7 @@ def get_data_fidelity(args, pet_data, get_pet_am, num_subsets, uncombine_op, uns
     s_inv = pet_sens_combined.clone()
     pet_sens_array = get_array(pet_sens_combined)
     s_inv.fill(np.reciprocal(pet_sens_array, where=pet_sens_array != 0))
-    
+
     cyl, gauss = get_filters()
     cyl.apply(s_inv)
     gauss.apply(kappa)
@@ -178,7 +185,7 @@ def main(args) -> None:
 
     # Set up operators for multiple bed positions
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
-    
+
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
@@ -187,8 +194,13 @@ def main(args) -> None:
 
     # Set up data fidelity
     obj_funs, s_inv, kappa = get_data_fidelity(
-        args, pet_data, get_pet_am_with_res, args.num_subsets,
-        uncombine_op, unshift_ops, choose_ops,
+        args,
+        pet_data,
+        get_pet_am_with_res,
+        args.num_subsets,
+        uncombine_op,
+        unshift_ops,
+        choose_ops,
     )
 
     # write κ² image
@@ -203,18 +215,20 @@ def main(args) -> None:
         weight = args.gamma_pet
         if kappa is not None:
             logging.info("Using kappa-weighted DTV prior")
-            
+
         dtv_prior = TotalVariation(
             geometry=pet_data["initial_image"],
             weight=weight,
             delta=args.delta,
             anatomical=guidance_image,
-            stencil=getattr(args, "pet_stencil", '6'),
+            stencil=getattr(args, "pet_stencil", "6"),
             both_directions=getattr(args, "pet_both_directions", False),
         )
-        
+
         # Attach Hessian for preconditioner
-        dtv_prior.inv_hessian_diag = lambda x, out=None, epsilon=1e-9: dtv_prior.inv_hessian_diag(x, out, epsilon)
+        dtv_prior.inv_hessian_diag = lambda x, out=None, epsilon=1e-9: dtv_prior.inv_hessian_diag(
+            x, out, epsilon
+        )
         prior = -dtv_prior
 
     ui = getattr(args, "update_interval", None)
@@ -222,10 +236,13 @@ def main(args) -> None:
 
     # Set up preconditioners
     bsrem_precond = BSREMPreconditioner(s_inv, 1, np.inf, epsilon=0, smooth=True)
-    
+
     if prior is not None:
         prior_precond = ImageFunctionPreconditioner(
-            dtv_prior.inv_hessian_diag, 1.0, freeze_iter=np.inf, epsilon=0,
+            dtv_prior.inv_hessian_diag,
+            1.0,
+            freeze_iter=np.inf,
+            epsilon=0,
         )
         precond = LehmerMeanPreconditioner(
             [bsrem_precond, prior_precond],
@@ -237,14 +254,16 @@ def main(args) -> None:
         precond = bsrem_precond
 
     # Calculate probabilities for 2 bed positions
-    probs = [1.0/update_interval] * len(obj_funs)
-    assert abs(sum(probs) - len(obj_funs)/update_interval) < 1e-10, f"Probabilities incorrect: {sum(probs)}"
+    probs = [1.0 / update_interval] * len(obj_funs)
+    assert abs(sum(probs) - len(obj_funs) / update_interval) < 1e-10, (
+        f"Probabilities incorrect: {sum(probs)}"
+    )
 
     f_obj = SVRGFunction(
         obj_funs,
         sampler=Sampler.random_with_replacement(len(obj_funs), prob=probs),
         snapshot_update_interval=update_interval * 2,
-        store_gradients=True
+        store_gradients=True,
     )
 
     # Set up step size
@@ -286,7 +305,7 @@ if __name__ == "__main__":
         main(args)
         profiler.disable()
         profiler.dump_stats(f"{args.output_path}/profile_data.prof")
-        
+
         output_file = os.path.join(args.output_path, "profiling_results.txt")
         with open(output_file, "w") as f:
             ps = pstats.Stats(profiler, stream=f)

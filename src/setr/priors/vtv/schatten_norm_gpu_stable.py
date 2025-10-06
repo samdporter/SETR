@@ -1,48 +1,44 @@
 # stabilized_schatten_norm_gpu_stable.py
 import math
+
 import numpy as np
 import torch
 from cil.optimisation.functions import Function
 
 from .common import (
-    to_tensor,
+    charbonnier,
+    charbonnier_grad,
+    charbonnier_hessian_surrogate,
+    fair,
+    fair_grad,
+    fair_hessian_surrogate,
+    get_mask,  # Use original tail masking function
     l1_norm,
     l1_norm_prox,
     l2_norm,
     l2_norm_prox,
-    charbonnier,
-    charbonnier_grad,
-    charbonnier_hessian_surrogate,
-    charbonnier_hessian_diag,
-    fair,
-    fair_grad,
-    fair_hessian_surrogate,
-    fair_hessian_diag,
+    nothing,
+    nothing_grad,
     perona_malik,
     perona_malik_grad,
     perona_malik_hessian_surrogate,
-    perona_malik_hessian_diag,
-    nothing,
-    nothing_grad,
-    nothing_hessian_diag,
-    get_mask,  # Use original tail masking function
+    to_tensor,
 )
 from .small_eig import (
     eigenvalsh_2x2,
-    eigenvecsh_2x2,
     eigenvalsh_3x3_cardano,
+    eigenvecsh_2x2,
     eigenvecsh_3x3_cardano,
 )
-
 from .svd_free_hessian import (
-    hessian_components_hybrid_small,
-    _kappa_proxy_3x3,
-    _log_kappa_proxy_3x3,
     _dtype_cond_threshold,
-    _trace_normalize
+    _log_kappa_proxy_3x3,
+    _trace_normalize,
+    hessian_components_hybrid_small,
 )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def safe_svd_with_fallback(x, condition_threshold=None):
     """
@@ -53,18 +49,18 @@ def safe_svd_with_fallback(x, condition_threshold=None):
         *lead, m, n = x.shape
         r = min(m, n)
         Xb = x.reshape(-1, m, n).contiguous()
-        B  = Xb.shape[0]
+        B = Xb.shape[0]
 
         Uout = torch.empty(B, m, r, dtype=x.dtype, device=x.device)
-        Sout = torch.empty(B, r,    dtype=x.dtype, device=x.device)
-        Vhout= torch.empty(B, r, n, dtype=x.dtype, device=x.device)
+        Sout = torch.empty(B, r, dtype=x.dtype, device=x.device)
+        Vhout = torch.empty(B, r, n, dtype=x.dtype, device=x.device)
 
         if m <= n:
             order = 1
-            H = Xb @ Xb.transpose(1, 2)                       # (B, m, m)
+            H = Xb @ Xb.transpose(1, 2)  # (B, m, m)
         else:
             order = 0
-            H = Xb.transpose(1, 2) @ Xb                       # (B, n, n)
+            H = Xb.transpose(1, 2) @ Xb  # (B, n, n)
 
         H = 0.5 * (H + H.transpose(1, 2))
         H = torch.nan_to_num(H, nan=0.0, posinf=0.0, neginf=0.0)
@@ -72,10 +68,10 @@ def safe_svd_with_fallback(x, condition_threshold=None):
         if r == 2:
             # Analytic 2x2
             S2 = eigenvalsh_2x2(H)
-            Bmat = eigenvecsh_2x2(H, S2)                      # eigenvectors (U if order=1, V if order=0)
+            Bmat = eigenvecsh_2x2(H, S2)  # eigenvectors (U if order=1, V if order=0)
             S = torch.sqrt(torch.clamp(S2, min=0.0))
             tiny = torch.finfo(S.dtype).eps * 100
-            Sinv = torch.where(S > tiny, 1.0/S, torch.zeros_like(S))
+            Sinv = torch.where(S > tiny, 1.0 / S, torch.zeros_like(S))
 
             if order == 1:
                 Uout = Bmat
@@ -83,36 +79,38 @@ def safe_svd_with_fallback(x, condition_threshold=None):
             else:
                 V = Bmat
                 Vhout = V.transpose(1, 2)
-                Uout  = (Xb @ V) * Sinv[..., None, :]
+                Uout = (Xb @ V) * Sinv[..., None, :]
             Sout = S
 
         elif r == 3:
             # Hybrid per-voxel
             Hn, alpha = _trace_normalize(H)
-            #cond_thr = _dtype_cond_threshold(x.dtype) if condition_threshold is None else condition_threshold
-            #proxy = _kappa_proxy_3x3(Hn)
-            #ok = (proxy < cond_thr) & torch.isfinite(proxy)   # (B,)
+            # cond_thr = _dtype_cond_threshold(x.dtype) if condition_threshold is None else condition_threshold
+            # proxy = _kappa_proxy_3x3(Hn)
+            # ok = (proxy < cond_thr) & torch.isfinite(proxy)   # (B,)
             proxy = _log_kappa_proxy_3x3(Hn)
-            thr   = math.log(_dtype_cond_threshold(x.dtype) if condition_threshold is None
-                                else float(condition_threshold))
-            ok = proxy < thr      # finite by construction; no need for isfinite()
-
+            thr = math.log(
+                _dtype_cond_threshold(x.dtype)
+                if condition_threshold is None
+                else float(condition_threshold)
+            )
+            ok = proxy < thr  # finite by construction; no need for isfinite()
 
             if ok.all():
                 # --- all analytic, no boolean indexing ---
-                S2_all = eigenvalsh_3x3_cardano(Hn)                               # (B,3)
-                B_all  = eigenvecsh_3x3_cardano(Hn, S2_all)                        # (B,3,3)
-                S_all  = torch.sqrt(torch.clamp(S2_all * alpha.unsqueeze(-1), min=0.0))
-                tiny   = torch.finfo(S_all.dtype).eps * 100
-                Sinv   = torch.where(S_all > tiny, 1.0 / S_all, torch.zeros_like(S_all))
+                S2_all = eigenvalsh_3x3_cardano(Hn)  # (B,3)
+                B_all = eigenvecsh_3x3_cardano(Hn, S2_all)  # (B,3,3)
+                S_all = torch.sqrt(torch.clamp(S2_all * alpha.unsqueeze(-1), min=0.0))
+                tiny = torch.finfo(S_all.dtype).eps * 100
+                Sinv = torch.where(S_all > tiny, 1.0 / S_all, torch.zeros_like(S_all))
 
                 if order == 1:
-                    Uout  = B_all
+                    Uout = B_all
                     Vhout = (B_all.transpose(1, 2) @ Xb) * Sinv[..., None]
                 else:
-                    V_all  = B_all
-                    Vhout  = V_all.transpose(1, 2)
-                    Uout   = (Xb @ V_all) * Sinv[..., None, :]
+                    V_all = B_all
+                    Vhout = V_all.transpose(1, 2)
+                    Uout = (Xb @ V_all) * Sinv[..., None, :]
                 Sout = S_all
 
             elif (~ok).all():
@@ -124,18 +122,18 @@ def safe_svd_with_fallback(x, condition_threshold=None):
                 # --- mixed case: boolean index only once per side ---
                 # analytic on ok
                 S2_ok = eigenvalsh_3x3_cardano(Hn[ok])
-                B_ok  = eigenvecsh_3x3_cardano(Hn[ok], S2_ok)
-                S_ok  = torch.sqrt(torch.clamp(S2_ok * alpha[ok].unsqueeze(-1), min=0.0))
-                tiny  = torch.finfo(S_ok.dtype).eps * 100
+                B_ok = eigenvecsh_3x3_cardano(Hn[ok], S2_ok)
+                S_ok = torch.sqrt(torch.clamp(S2_ok * alpha[ok].unsqueeze(-1), min=0.0))
+                tiny = torch.finfo(S_ok.dtype).eps * 100
                 Sinv_ok = torch.where(S_ok > tiny, 1.0 / S_ok, torch.zeros_like(S_ok))
 
                 if order == 1:
-                    Uout[ok]   = B_ok
-                    Vhout[ok]  = (B_ok.transpose(1, 2) @ Xb[ok]) * Sinv_ok[..., None]
+                    Uout[ok] = B_ok
+                    Vhout[ok] = (B_ok.transpose(1, 2) @ Xb[ok]) * Sinv_ok[..., None]
                 else:
-                    V_ok       = B_ok
-                    Vhout[ok]  = V_ok.transpose(1, 2)
-                    Uout[ok]   = (Xb[ok] @ V_ok) * Sinv_ok[..., None, :]
+                    V_ok = B_ok
+                    Vhout[ok] = V_ok.transpose(1, 2)
+                    Uout[ok] = (Xb[ok] @ V_ok) * Sinv_ok[..., None, :]
                 Sout[ok] = S_ok
 
                 # SVD on ~ok
@@ -152,12 +150,11 @@ def safe_svd_with_fallback(x, condition_threshold=None):
         # reshape back
         U = Uout.view(*lead, m, r)
         S = Sout.view(*lead, r)
-        Vh= Vhout.view(*lead, r, n)
+        Vh = Vhout.view(*lead, r, n)
         return U, S, Vh, True
     except Exception:
         U, S, Vh = torch.linalg.svd(x, full_matrices=False)
         return U, S, Vh, False
-
 
 
 def safe_vals_with_fallback(x, condition_threshold=None):
@@ -168,16 +165,16 @@ def safe_vals_with_fallback(x, condition_threshold=None):
     try:
         *lead, m, n = x.shape
         r = min(m, n)
-        Xb = x.reshape(-1, m, n).contiguous()     # (B, m, n)
-        B  = Xb.shape[0]
+        Xb = x.reshape(-1, m, n).contiguous()  # (B, m, n)
+        B = Xb.shape[0]
 
         # Build Gram per block
         if m <= n:
             order = 1
-            H = Xb @ Xb.transpose(1, 2)                       # (B, m, m)
+            H = Xb @ Xb.transpose(1, 2)  # (B, m, m)
         else:
             order = 0
-            H = Xb.transpose(1, 2) @ Xb                       # (B, n, n)
+            H = Xb.transpose(1, 2) @ Xb  # (B, n, n)
 
         H = 0.5 * (H + H.transpose(1, 2))
         H = torch.nan_to_num(H, nan=0.0, posinf=0.0, neginf=0.0)
@@ -190,14 +187,16 @@ def safe_vals_with_fallback(x, condition_threshold=None):
             S[:] = torch.sqrt(torch.clamp(S2, min=0.0))
         elif r == 3:
             Hn, alpha = _trace_normalize(H)
-            #cond_thr = _dtype_cond_threshold(x.dtype) if condition_threshold is None else condition_threshold
-            #proxy = _kappa_proxy_3x3(Hn)
-            #ok = (proxy < cond_thr) & torch.isfinite(proxy)
+            # cond_thr = _dtype_cond_threshold(x.dtype) if condition_threshold is None else condition_threshold
+            # proxy = _kappa_proxy_3x3(Hn)
+            # ok = (proxy < cond_thr) & torch.isfinite(proxy)
             proxy = _log_kappa_proxy_3x3(Hn)
-            thr   = math.log(_dtype_cond_threshold(x.dtype) if condition_threshold is None
-                                else float(condition_threshold))
-            ok = proxy < thr      # finite by construction; no need for isfinite()
-
+            thr = math.log(
+                _dtype_cond_threshold(x.dtype)
+                if condition_threshold is None
+                else float(condition_threshold)
+            )
+            ok = proxy < thr  # finite by construction; no need for isfinite()
 
             if ok.all():
                 # --- all analytic ---
@@ -211,7 +210,7 @@ def safe_vals_with_fallback(x, condition_threshold=None):
             else:
                 # --- mixed ---
                 S2_ok = eigenvalsh_3x3_cardano(Hn[ok])
-                S_ok  = torch.sqrt(torch.clamp(S2_ok * alpha[ok].unsqueeze(-1), min=0.0))
+                S_ok = torch.sqrt(torch.clamp(S2_ok * alpha[ok].unsqueeze(-1), min=0.0))
                 S[ok] = S_ok
                 bad = ~ok
                 if bad.any():
@@ -236,7 +235,7 @@ class GPUVectorialTotalVariation(Function):
     def __init__(
         self,
         eps=None,
-        norm="nuclear", 
+        norm="nuclear",
         smoothing_function=None,
         numpy_out=True,
         tail=None,
@@ -247,7 +246,7 @@ class GPUVectorialTotalVariation(Function):
             self.eps = torch.tensor(eps, device=device)
         else:
             self.eps = torch.tensor(0.0, device=device)
-        
+
         self.norm = norm
         self.smoothing_function = smoothing_function
         self.numpy_out = numpy_out
@@ -277,11 +276,11 @@ class GPUVectorialTotalVariation(Function):
             S, _ = safe_vals_with_fallback(x)
         else:
             S = torch.linalg.svdvals(x)
-            
+
         # --- Exact original tailing logic ---
-        mask = get_mask(S, self.tail)       # 1 on smallest `tail` σ
+        mask = get_mask(S, self.tail)  # 1 on smallest `tail` σ
         s_smoothed = smoothing_func(S * mask, self.eps)
-        s_to_norm  = s_smoothed + S * (1 - mask)    # <-- pass head unchanged
+        s_to_norm = s_smoothed + S * (1 - mask)  # <-- pass head unchanged
         out = norm_func(s_to_norm)
 
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
@@ -359,7 +358,7 @@ class GPUVectorialTotalVariation(Function):
         # Exact original reconstruction
         out = torch.matmul(U, Vh * S_grad_values[..., None])
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-    
+
     def hessian_surrogate(self, x):
         # Exact original parameter handling
         x = to_tensor(x)
@@ -380,10 +379,10 @@ class GPUVectorialTotalVariation(Function):
             S, _ = safe_vals_with_fallback(x)
         else:
             S = torch.linalg.svdvals(x)
-            
+
         # Exact original tailing logic
         mask = torch.ones_like(S) if self.tail is None else get_mask(S, self.tail)
-        
+
         # Exact original hessian computation
         out = hessian_func(S, self.eps)
 
@@ -404,12 +403,12 @@ class GPUVectorialTotalVariation(Function):
             tail=self.tail,
             smoothing_function=self.smoothing_function,
             eps_tensor=self.eps,
-            condition_threshold=None,                 # or expose arg to this method
+            condition_threshold=None,  # or expose arg to this method
             order=1 if x.shape[-2] <= x.shape[-1] else 0,
         )
-        return torch.nan_to_num(coeffs, nan=0.0, posinf=0.0, neginf=0.0), \
-            torch.nan_to_num(rank_one, nan=0.0, posinf=0.0, neginf=0.0)
-
+        return torch.nan_to_num(coeffs, nan=0.0, posinf=0.0, neginf=0.0), torch.nan_to_num(
+            rank_one, nan=0.0, posinf=0.0, neginf=0.0
+        )
 
     def stability_report(self, x, condition_threshold=None, quantiles=(0.5, 0.9, 0.99)):
         """
@@ -427,7 +426,7 @@ class GPUVectorialTotalVariation(Function):
         x = to_tensor(x)
         *lead, m, n = x.shape
         r = min(m, n)
-        uses_small = (r <= 3)
+        uses_small = r <= 3
 
         # If blocks aren't small, we won't use the analytic path at all
         if not uses_small:
@@ -435,12 +434,12 @@ class GPUVectorialTotalVariation(Function):
                 "uses_small_matrix_optimization": False,
                 "matrix_shape": (m, n),
                 "analytic_fraction": 0.0,
-                "reason": "min(m,n) > 3 → always SVD"
+                "reason": "min(m,n) > 3 → always SVD",
             }
 
         # Flatten to batch
         Xb = x.reshape(-1, m, n)
-        B  = Xb.shape[0]
+        B = Xb.shape[0]
 
         # Which side for Gram?
         order = 1 if m <= n else 0
@@ -464,15 +463,18 @@ class GPUVectorialTotalVariation(Function):
 
         # r == 3 → compute per-voxel gate
         Hn, _alpha = _trace_normalize(H)
-        
-        #thr = _dtype_cond_threshold(x.dtype) if condition_threshold is None else condition_threshold
-        #proxy = _kappa_proxy_3x3(Hn)  # larger means more ill-conditioned
-        #ok = (proxy < thr) & torch.isfinite(proxy)
-        
+
+        # thr = _dtype_cond_threshold(x.dtype) if condition_threshold is None else condition_threshold
+        # proxy = _kappa_proxy_3x3(Hn)  # larger means more ill-conditioned
+        # ok = (proxy < thr) & torch.isfinite(proxy)
+
         proxy = _log_kappa_proxy_3x3(Hn)
-        thr   = math.log(_dtype_cond_threshold(x.dtype) if condition_threshold is None
-                            else float(condition_threshold))
-        ok = proxy < thr      # finite by construction; no need for isfinite()
+        thr = math.log(
+            _dtype_cond_threshold(x.dtype)
+            if condition_threshold is None
+            else float(condition_threshold)
+        )
+        ok = proxy < thr  # finite by construction; no need for isfinite()
 
         ok_count = int(ok.sum().item())
         bad_count = int((~ok).sum().item())
@@ -497,5 +499,5 @@ class GPUVectorialTotalVariation(Function):
             "ok_count": ok_count,
             "bad_count": bad_count,
             "threshold_used": float(thr),
-            "proxy_quantiles": {f"q{int(q*100)}": v for q, v in zip(quantiles, qs or [])},
+            "proxy_quantiles": {f"q{int(q * 100)}": v for q, v in zip(quantiles, qs or [])},
         }

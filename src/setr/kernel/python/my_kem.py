@@ -5,6 +5,7 @@ import numpy as np
 np.seterr(over="raise", invalid="raise")
 
 from cil.optimisation.operators import LinearOperator
+
 from setr.utils.sirf import get_array
 
 # try importing sliding_window_view from numpy

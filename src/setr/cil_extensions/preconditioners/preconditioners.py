@@ -1,4 +1,5 @@
 import logging
+
 import numpy as np
 from cil.framework import BlockDataContainer
 from cil.optimisation.functions import ScaledFunction
@@ -67,13 +68,7 @@ class BSREMPreconditioner(PreconditionerWithInterval):
     """Preconditioner for BSREM."""
 
     def __init__(
-        self,
-        s_inv,
-        update_interval=1,
-        freeze_iter=np.inf,
-        epsilon=None,
-        smooth=False,
-        max_val=None
+        self, s_inv, update_interval=1, freeze_iter=np.inf, epsilon=None, smooth=False, max_val=None
     ):
         super().__init__(update_interval, freeze_iter)
         self.s_inv = s_inv
@@ -89,7 +84,7 @@ class BSREMPreconditioner(PreconditionerWithInterval):
 
     def compute_preconditioner(self, algorithm, out=None):
         x = algorithm.solution.copy()
-        
+
         if self.max_val is not None:
             x = x.minimum(self.max_val)
 
@@ -127,7 +122,6 @@ class ImageFunctionPreconditioner(PreconditionerWithInterval):
         self.max_value = max_value
 
     def compute_preconditioner(self, algorithm, out=None):
-        
         precond = self.function(algorithm.solution)
         precond = precond.maximum(self.epsilon)
         precond = precond.minimum(self.max_value)
@@ -183,7 +177,6 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         self.epsilon = epsilon
 
     def compute_preconditioner(self, algorithm, out=None):
-
         # Collect (and, if needed, clamp) inputs
         precond_values = [p.compute_preconditioner(algorithm) for p in self.preconds]
 
@@ -196,8 +189,8 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         base_num = x0
         base_den = x0.maximum(eps) if need_clamp_for_den else x0
 
-        num = base_num.power(p)          # Σ x^p
-        den = base_den.power(p - 1)      # Σ x^(p-1), safe if p<1
+        num = base_num.power(p)  # Σ x^p
+        den = base_den.power(p - 1)  # Σ x^(p-1), safe if p<1
 
         # Accumulate remaining terms
         for x in precond_values[1:]:
@@ -214,7 +207,6 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         return out
 
 
-
 class ArithmeticMeanPreconditioner(PreconditionerWithInterval):
     """Preconditioner that combines two preconditioners using a simple mean."""
 
@@ -223,13 +215,12 @@ class ArithmeticMeanPreconditioner(PreconditionerWithInterval):
         self.preconds = preconds
 
     def compute_preconditioner(self, algorithm, out=None):
-        
         # prepare output buffer
         acc = self.preconds[0].compute_preconditioner(algorithm)
 
         for p in self.preconds[1:]:
             acc += p.compute_preconditioner(algorithm)
-            
+
         if out is None:
             return acc / len(self.preconds)
 
@@ -348,7 +339,8 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
 
         algorithm.solution.divide(adj, out=out)
         return out
-    
+
+
 class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
     def __init__(
         self,
@@ -459,7 +451,7 @@ class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             subset_idx = 0
         adj = self.kernel.adjoint(self.sensitivities[subset_idx])
         adj = adj.abs()
-        adj += self.epsilon # avoid division by zero
+        adj += self.epsilon  # avoid division by zero
 
         if out is None:
             return algorithm.solution.divide(adj)

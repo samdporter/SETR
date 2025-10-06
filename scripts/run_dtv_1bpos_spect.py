@@ -8,32 +8,33 @@ import pstats
 from types import SimpleNamespace
 
 import numpy as np
+from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import SumFunction, SVRGFunction
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
-from cil.optimisation.algorithms import ISTA
-from sirf.STIR import ImageData, MessageRedirector
+from sirf.STIR import ImageData
 
+from setr.cil_extensions.functions import BlockIndicatorBox
+from setr.cil_extensions.preconditioners import (
+    BSREMPreconditioner,
+    ImageFunctionPreconditioner,
+    LehmerMeanPreconditioner,
+)
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.priors import TotalVariation
 from setr.scripts.common import (
-    attach_prior_hessian,
     configure_logging,
     init_run_env,
     save_results,
 )
 from setr.scripts.dtnv_common import (
-    get_algorithm,
+    compute_kappa_squared_image_from_partitioned_objective,
     get_callbacks,
     get_s_inv_from_subset_objs,
-    compute_kappa_squared_image_from_partitioned_objective,
 )
-from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
-from setr.cil_extensions.functions import BlockIndicatorBox
-from setr.cil_extensions.preconditioners import BSREMPreconditioner, ImageFunctionPreconditioner, LehmerMeanPreconditioner
 from setr.utils import get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_array
+from setr.utils.sirf import get_array, get_filters
 
 
 def prepare_data(args):
@@ -49,7 +50,7 @@ def prepare_data(args):
     # SPECT guidance: always use SPECT umap
     logging.info("Using umap guidance for SPECT reconstruction")
     guidance_image = ImageData(os.path.join(args.spect_data_path, "mu_map.hv"))
-    
+
     # Normalize guidance
     guidance_image += (-guidance_image).max()
     guidance_image /= guidance_image.max()
@@ -90,7 +91,7 @@ def get_data_fidelity(args, spect_data, get_spect_am, num_subsets):
         mode="staggered",
         create_acq_model=get_spect_am,
     )
-    
+
     for obj_fun in obj_funs:
         obj_fun.set_up(spect_data["initial_image"])
 
@@ -101,7 +102,9 @@ def get_data_fidelity(args, spect_data, get_spect_am, num_subsets):
     # Compute kappa image if requested
     _, gauss = get_filters()
     if args.use_kappa:
-        kappa = compute_kappa_squared_image_from_partitioned_objective(obj_funs, spect_data["initial_image"])
+        kappa = compute_kappa_squared_image_from_partitioned_objective(
+            obj_funs, spect_data["initial_image"]
+        )
         gauss.apply(kappa)
     else:
         kappa = None
@@ -149,18 +152,20 @@ def main(args) -> None:
         weight = args.gamma_spect
         if kappa is not None:
             logging.info("Using kappa-weighted DTV prior")
-            
+
         dtv_prior = TotalVariation(
             geometry=spect_data["initial_image"],
             weight=weight,
             delta=args.delta,
             anatomical=guidance_image,
-            stencil=getattr(args, "spect_stencil", '6'),
+            stencil=getattr(args, "spect_stencil", "6"),
             both_directions=getattr(args, "spect_both_directions", False),
         )
-        
+
         # Attach Hessian for preconditioner
-        dtv_prior.inv_hessian_diag = lambda x, out=None, epsilon=1e-9: dtv_prior.inv_hessian_diag(x, out, epsilon)
+        dtv_prior.inv_hessian_diag = lambda x, out=None, epsilon=1e-9: dtv_prior.inv_hessian_diag(
+            x, out, epsilon
+        )
         prior = -dtv_prior
 
     ui = getattr(args, "update_interval", None)
@@ -168,10 +173,13 @@ def main(args) -> None:
 
     # Set up preconditioners
     bsrem_precond = BSREMPreconditioner(s_inv, 1, np.inf, epsilon=0, smooth=True)
-    
+
     if prior is not None:
         prior_precond = ImageFunctionPreconditioner(
-            dtv_prior.inv_hessian_diag, 1.0, freeze_iter=np.inf, epsilon=0,
+            dtv_prior.inv_hessian_diag,
+            1.0,
+            freeze_iter=np.inf,
+            epsilon=0,
         )
         precond = LehmerMeanPreconditioner(
             [bsrem_precond, prior_precond],
@@ -182,14 +190,14 @@ def main(args) -> None:
     else:
         precond = bsrem_precond
 
-    # Set up probabilities  
-    probs = [1.0/len(obj_funs)] * len(obj_funs)
+    # Set up probabilities
+    probs = [1.0 / len(obj_funs)] * len(obj_funs)
 
     f_obj = SVRGFunction(
         obj_funs,
         sampler=Sampler.random_with_replacement(len(obj_funs), prob=probs),
         snapshot_update_interval=update_interval * 2,
-        store_gradients=True
+        store_gradients=True,
     )
 
     # Set up step size

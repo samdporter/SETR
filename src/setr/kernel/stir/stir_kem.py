@@ -1,23 +1,26 @@
 from cil.optimisation.operators import LinearOperator
-from cil.optimisation.utilities import Preconditioner
-from sirf.STIR import (KOSMAPOSLReconstructor, 
-                       make_Poisson_loglikelihood, 
-                       AcquisitionModelUsingRayTracingMatrix)
+from sirf.STIR import (
+    AcquisitionModelUsingRayTracingMatrix,
+    KOSMAPOSLReconstructor,
+    make_Poisson_loglikelihood,
+)
+
 
 class KernelOperator(LinearOperator):
-
-    def __init__(self, 
-                    template_image, template_data, 
-                    anatomical_image,
-                    num_neighbours = 5, 
-                    num_non_zero_features = 1,
-                    sigma_m = 2.0, # anatomical
-                    sigma_p = 3.0, # functional
-                    sigma_dm = 5.0,
-                    sigma_dp = 5.0,
-                    only_2D = False,
-                    hybrid = True):
-        
+    def __init__(
+        self,
+        template_image,
+        template_data,
+        anatomical_image,
+        num_neighbours=5,
+        num_non_zero_features=1,
+        sigma_m=2.0,  # anatomical
+        sigma_p=3.0,  # functional
+        sigma_dm=5.0,
+        sigma_dp=5.0,
+        only_2D=False,
+        hybrid=True,
+    ):
         tmp_acq_model = AcquisitionModelUsingRayTracingMatrix()
         tmp_obj_fun = make_Poisson_loglikelihood(template_data)
         tmp_obj_fun.set_acquisition_model(tmp_acq_model)
@@ -36,13 +39,12 @@ class KernelOperator(LinearOperator):
         self.recon.set_input(template_data)
         self.recon.set_up(template_image)
 
-        super().__init__(domain_geometry=template_image, 
-                      range_geometry=template_image)
-        
+        super().__init__(domain_geometry=template_image, range_geometry=template_image)
+
         self.current_alpha = template_image.clone()
-        self.alpha_set=False
+        self.alpha_set = False
         self.freeze_alpha = False
-        
+
         del tmp_acq_model, tmp_obj_fun
 
     def get_alpha(self, x):
@@ -50,37 +52,23 @@ class KernelOperator(LinearOperator):
             return self.current_alpha
         else:
             return x
-        
-    def direct(self, x, out=None):
 
+    def direct(self, x, out=None):
         self.current_alpha.fill(self.get_alpha(x))
-        self.alpha_set=True
+        self.alpha_set = True
 
         if out is None:
-            return self.recon.compute_kernelised_image(
-                x, self.current_alpha
-            )
+            return self.recon.compute_kernelised_image(x, self.current_alpha)
 
-        out.fill(
-            self.recon.compute_kernelised_image(
-                x, self.current_alpha
-            )
-        )
+        out.fill(self.recon.compute_kernelised_image(x, self.current_alpha))
         return out
-    
-    def adjoint(self, x, out=None):
 
+    def adjoint(self, x, out=None):
         if not self.alpha_set:
             self.current_alpha.fill(self.get_alpha(x))
             self.alpha_set = True
         if out is None:
-            return self.recon.compute_kernelised_image(
-                x, self.current_alpha
-            )
+            return self.recon.compute_kernelised_image(x, self.current_alpha)
 
-        out.fill(
-            self.recon.compute_kernelised_image(
-                x, self.current_alpha
-            )
-        )
+        out.fill(self.recon.compute_kernelised_image(x, self.current_alpha))
         return out

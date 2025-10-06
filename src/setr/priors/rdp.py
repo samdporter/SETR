@@ -38,11 +38,12 @@ If both_directions=True, multiply edge terms by 1/2 (de-dup).
 """
 
 from __future__ import annotations
+
 import torch
 from cil.optimisation.functions import Function
 
 # Project operators
-from setr.core.gradients import Gradient, DirectionalGradient, Sum, Jacobian
+from setr.core.gradients import DirectionalGradient, Gradient, Jacobian, Sum
 from setr.utils import BlockDataContainerToArray
 from setr.utils.sirf import get_array
 
@@ -50,7 +51,8 @@ from setr.utils.sirf import get_array
 # Device / dtype helpers
 # -------------------------------------------------------------------------
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-_DTYPE  = torch.float32
+_DTYPE = torch.float32
+
 
 def _to_tensor(x):
     if isinstance(x, torch.Tensor):
@@ -58,6 +60,7 @@ def _to_tensor(x):
     if hasattr(x, "as_array"):
         x = get_array(x)
     return torch.as_tensor(x, device=_DEVICE, dtype=_DTYPE)
+
 
 def _from_tensor_like(template, t: torch.Tensor):
     arr = t.detach().to("cpu").numpy()
@@ -79,7 +82,7 @@ class RelativeDifferencePrior(Function):
         stencil: str = "6",
         both_directions: bool = False,
         epsilon: float = 1e-12,
-        anatomical=None,         # if not None → use DirectionalGradient
+        anatomical=None,  # if not None → use DirectionalGradient
         gamma_dir: float = 1.0,  # projector strength for DirectionalGradient
         eta_dir: float = 1e-6,
         bnd_cond: str = "Neumann",
@@ -111,7 +114,7 @@ class RelativeDifferencePrior(Function):
                 numpy_out=False,
                 stencil=stencil,
                 both_directions=both_directions,
-                normalize=False
+                normalize=False,
             )
         else:
             self.use_dir = False
@@ -121,7 +124,7 @@ class RelativeDifferencePrior(Function):
                 numpy_out=False,
                 stencil=stencil,
                 both_directions=both_directions,
-                normalize=False
+                normalize=False,
             )
 
         # Σ-operator: always the standard Sum
@@ -135,8 +138,8 @@ class RelativeDifferencePrior(Function):
 
     # ========================== CORE TENSOR METHODS ==========================
     def _edges(self, x_t: torch.Tensor):
-        Δ_t = self.gradient_op.direct(x_t)   # (..., n_dir)
-        Σ_t = self.sum_op.direct(x_t)        # (..., n_dir)
+        Δ_t = self.gradient_op.direct(x_t)  # (..., n_dir)
+        Σ_t = self.sum_op.direct(x_t)  # (..., n_dir)
         if Δ_t.shape != Σ_t.shape:
             raise RuntimeError(
                 f"Gradient and Sum produce different edge shapes: {Δ_t.shape} vs {Σ_t.shape}."
@@ -153,7 +156,7 @@ class RelativeDifferencePrior(Function):
         # second partials (a.e.)
         absΔ = torch.abs(Δ_t)
         D3 = D2 * D_t
-        φ_dd = 2.0 / D_t - 4.0 * gamma * absΔ / D2 + 2.0 * (gamma ** 2) * Δ2 / D3
+        φ_dd = 2.0 / D_t - 4.0 * gamma * absΔ / D2 + 2.0 * (gamma**2) * Δ2 / D3
         φ_ds = 2.0 * (gamma * Δ2 * torch.sign(Δ_t) - Δ_t * D_t) / D3
         φ_ss = 2.0 * Δ2 / D3
         return dφ_dΔ, dφ_dΣ, φ_dd, φ_ds, φ_ss
@@ -185,7 +188,7 @@ class RelativeDifferencePrior(Function):
         Δ_t, _, D_t = self._edges(x_t)
         _, _, φ_dd, φ_ds, φ_ss = self._partials_phi(Δ_t, D_t, self.gamma)
         # per-edge endpoint contributions (forward orientation)
-        plus  = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)  # source j
+        plus = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)  # source j
         minus = -self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)  # sink   k
         # Scatter distinct src/sink values via combination of Dᵀ and Sᵀ:
         # For arrays s,t on edges: Dᵀ s + Sᵀ t gives (src: s+t, sink: -s+t).
@@ -244,7 +247,7 @@ class RelativeDifferencePrior(Function):
         """
         xt = _to_tensor(x if hasattr(x, "as_array") else x)
         Hii_t = self._hess_diag_tensor(xt)
-        safe  = torch.where(torch.abs(Hii_t) < damping, torch.sign(Hii_t) * damping, Hii_t)
+        safe = torch.where(torch.abs(Hii_t) < damping, torch.sign(Hii_t) * damping, Hii_t)
         inv_t = 1.0 / safe
         return _from_tensor_like(x, inv_t)
 
@@ -290,13 +293,13 @@ class WeightedRDP(Function):
 
     def __init__(
         self,
-        geometry,                 # BlockDataContainer geometry
-        weights,                  # BlockDataContainer of per-modality weights
+        geometry,  # BlockDataContainer geometry
+        weights,  # BlockDataContainer of per-modality weights
         gamma: float = 1,
         stencil: str = "6",
         both_directions: bool = False,
         epsilon: float = 1e-12,
-        anatomical=None,          # optional, forwarded to Jacobian
+        anatomical=None,  # optional, forwarded to Jacobian
         bnd_cond: str = "Neumann",
     ):
         self.gamma = gamma
@@ -332,7 +335,7 @@ class WeightedRDP(Function):
         )
 
         # Cache weights on device: shape (..., M)
-        w_arr = self.bdc2a.direct(weights)        # numpy or torch
+        w_arr = self.bdc2a.direct(weights)  # numpy or torch
         self.weights = torch.as_tensor(w_arr, device=_DEVICE, dtype=_DTYPE)
 
     # ---------- helpers to apply Sum per modality ----------
@@ -354,9 +357,9 @@ class WeightedRDP(Function):
     def _edges(self, X_t: torch.Tensor):
         # G: (..., M, d)
         G = torch.as_tensor(self.jacobian.direct(X_t), device=_DEVICE, dtype=_DTYPE)
-        Σ = self._sum_direct_multi(X_t)                                 # (..., M, d)
-        w = self.weights.to(device=X_t.device, dtype=X_t.dtype)         # (..., M)
-        U = w.unsqueeze(-1) * G                                         # (..., M, d)
+        Σ = self._sum_direct_multi(X_t)  # (..., M, d)
+        w = self.weights.to(device=X_t.device, dtype=X_t.dtype)  # (..., M)
+        U = w.unsqueeze(-1) * G  # (..., M, d)
         D = Σ + self.gamma * torch.abs(U) + self.epsilon
         return U, Σ, D, w, G
 
@@ -369,7 +372,7 @@ class WeightedRDP(Function):
         # seconds (a.e.)
         absU = torch.abs(U)
         D3 = D2 * D
-        φ_dd = 2.0 / D - 4.0 * gamma * absU / D2 + 2.0 * (gamma ** 2) * U2 / D3
+        φ_dd = 2.0 / D - 4.0 * gamma * absU / D2 + 2.0 * (gamma**2) * U2 / D3
         φ_ds = 2.0 * (gamma * U2 * torch.sign(U) - U * D) / D3
         φ_ss = 2.0 * U2 / D3
         return dφ_dU, dφ_dΣ, φ_dd, φ_ds, φ_ss
@@ -382,10 +385,10 @@ class WeightedRDP(Function):
         U, Σ, D, w, _ = self._edges(X_t)
         dφ_dU, dφ_dΣ, _, _, _ = self._partials_phi(U, D, self.gamma)
         cJ = self.edge_factor * (w.unsqueeze(-1) * dφ_dU)  # (..., M, d)
-        cS = self.edge_factor * dφ_dΣ                      # (..., M, d)
+        cS = self.edge_factor * dφ_dΣ  # (..., M, d)
         # adjoints:
         Jt = torch.as_tensor(self.jacobian.adjoint(cJ), device=_DEVICE, dtype=_DTYPE)  # (..., M)
-        St = self._sum_adjoint_multi(cS)                                                       # (..., M)
+        St = self._sum_adjoint_multi(cS)  # (..., M)
         return -(Jt + St)
 
     def _hess_vec_tensor(self, X_t: torch.Tensor, V_t: torch.Tensor) -> torch.Tensor:
@@ -393,15 +396,16 @@ class WeightedRDP(Function):
         _, _, φ_dd, φ_ds, φ_ss = self._partials_phi(U, D, self.gamma)
 
         Gv = torch.as_tensor(self.jacobian.direct(V_t), device=_DEVICE, dtype=_DTYPE)  # (..., M, d)
-        Sv = self._sum_direct_multi(V_t)                                              # (..., M, d)
+        Sv = self._sum_direct_multi(V_t)  # (..., M, d)
         Uv = w.unsqueeze(-1) * Gv
 
         # Jᵀ term gets an extra factor w from gradient chain rule
-        Y = φ_dd * Uv + φ_ds * Sv                             # (..., M, d)
-        Z = φ_ds * Uv + φ_ss * Sv                             # (..., M, d)
+        Y = φ_dd * Uv + φ_ds * Sv  # (..., M, d)
+        Z = φ_ds * Uv + φ_ss * Sv  # (..., M, d)
 
-        part_J = torch.as_tensor(self.jacobian.adjoint(w.unsqueeze(-1) * Y),
-                                device=_DEVICE, dtype=_DTYPE)
+        part_J = torch.as_tensor(
+            self.jacobian.adjoint(w.unsqueeze(-1) * Y), device=_DEVICE, dtype=_DTYPE
+        )
         part_S = self._sum_adjoint_multi(Z)
 
         return -self.edge_factor * (part_J + part_S)
@@ -410,37 +414,38 @@ class WeightedRDP(Function):
         U, Σ, D, w, _ = self._edges(X_t)
         _, _, φ_dd, φ_ds, φ_ss = self._partials_phi(U, D, self.gamma)
 
-        plus  = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)
+        plus = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)
         minus = -self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)
 
         # Scatter distinct src/sink adds via combination of Jᵀ and Sᵀ:
-        s = 0.5 * (plus - minus)    # for Jᵀ (difference)
-        t = 0.5 * (plus + minus)    # for Sᵀ (sum)
+        s = 0.5 * (plus - minus)  # for Jᵀ (difference)
+        t = 0.5 * (plus + minus)  # for Sᵀ (sum)
 
         # Jᵀ needs the same per-edge weighting factor w as in the gradient path
-        diag_J = torch.as_tensor(self.jacobian.adjoint(w.unsqueeze(-1) * s),
-                                device=_DEVICE, dtype=_DTYPE)  # (..., M)
-        diag_S = self._sum_adjoint_multi(t)                                     # (..., M)
+        diag_J = torch.as_tensor(
+            self.jacobian.adjoint(w.unsqueeze(-1) * s), device=_DEVICE, dtype=_DTYPE
+        )  # (..., M)
+        diag_S = self._sum_adjoint_multi(t)  # (..., M)
         return diag_J + diag_S
 
     # ============================ PUBLIC API ============================
     def __call__(self, x) -> float:
-        X_arr = self.bdc2a.direct(x)                     # (nx,ny,nz,M)
-        X_t   = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
+        X_arr = self.bdc2a.direct(x)  # (nx,ny,nz,M)
+        X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
         return float(self._value_tensor(X_t).detach().item())
 
     def gradient(self, x, out=None):
         X_arr = self.bdc2a.direct(x)
-        X_t   = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
-        g_t   = self._grad_tensor(X_t)                  # (..., M)
+        X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
+        g_t = self._grad_tensor(X_t)  # (..., M)
         return self.get_arr_and_fill(g_t, out)
 
     def hessian(self, x, v, out=None):
         X_arr = self.bdc2a.direct(x)
         V_arr = self.bdc2a.direct(v)
-        X_t   = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
-        V_t   = torch.as_tensor(V_arr, device=_DEVICE, dtype=_DTYPE)
-        Hv_t  = self._hess_vec_tensor(X_t, V_t)
+        X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
+        V_t = torch.as_tensor(V_arr, device=_DEVICE, dtype=_DTYPE)
+        Hv_t = self._hess_vec_tensor(X_t, V_t)
         return self.get_arr_and_fill(Hv_t, out)
 
     def get_arr_and_fill(self, arg0, out):
@@ -449,16 +454,16 @@ class WeightedRDP(Function):
 
     def hessian_diag(self, x):
         X_arr = self.bdc2a.direct(x)
-        X_t   = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
+        X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
         Hii_t = self._hess_diag_tensor(X_t)
         Hii_arr = Hii_t.detach().to("cpu").numpy()
         return self.bdc2a.adjoint(Hii_arr)
 
     def inv_hessian_diag(self, x, damping: float = 1e-8):
         X_arr = self.bdc2a.direct(x)
-        X_t   = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
+        X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
         Hii_t = self._hess_diag_tensor(X_t)
-        safe  = torch.where(torch.abs(Hii_t) < damping, torch.sign(Hii_t) * damping, Hii_t)
+        safe = torch.where(torch.abs(Hii_t) < damping, torch.sign(Hii_t) * damping, Hii_t)
         inv_t = 1.0 / safe
         inv_arr = inv_t.detach().to("cpu").numpy()
         return self.bdc2a.adjoint(inv_arr)

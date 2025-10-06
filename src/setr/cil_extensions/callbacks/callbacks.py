@@ -1,4 +1,5 @@
 import logging
+
 import pandas as pd
 from cil.framework import BlockDataContainer
 from cil.optimisation.utilities import callbacks
@@ -63,6 +64,7 @@ class SaveGradientUpdateCallback(Callback):
     """
     CIL Callback that saves the gradient update to disk.
     """
+
     def __init__(self, filename, interval, **kwargs):
         super().__init__(interval, **kwargs)
         self.filename = filename
@@ -81,6 +83,7 @@ class PrintObjectiveCallback(Callback):
     """
     CIL Callback that prints the objective function value to the console.
     """
+
     def __call__(self, algo):
         if algo.iteration % algo.update_objective_interval == 0:
             logging.info(f"iter: {algo.iteration} objective: {algo.objective[-1]}")

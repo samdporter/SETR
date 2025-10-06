@@ -12,10 +12,11 @@ from cil.optimisation.operators import (
     IdentityOperator,
     ZeroOperator,
 )
+
 from setr.cil_extensions.operators import (
+    EnlargementOperator,
     NiftyResampleOperator,
     ZoomOperator,
-    EnlargementOperator,
 )
 
 
@@ -50,9 +51,9 @@ def save_results(bsrem: ISTA, args: argparse.Namespace) -> None:
 
 
 def get_resampling_operators(
-    pet_data: dict, 
+    pet_data: dict,
     spect_data: dict,
-    enlarged_shape=(128,256,256),
+    enlarged_shape=(128, 256, 256),
 ):
     """
     Set up resampling operators for SPECT images to PET images.
@@ -67,7 +68,6 @@ def get_resampling_operators(
     Raises:
         RuntimeError: If displacement field is not available
     """
-
 
     if spect_data["displacement"] is None:
         raise RuntimeError(
@@ -93,9 +93,8 @@ def get_resampling_operators(
         floating=zoomer.direct(enlarger.direct(spect_data["initial_image"])),
         transform=spect_data["displacement"],
     )
-    
-    return CompositionOperator(resampler, zoomer, enlarger)
 
+    return CompositionOperator(resampler, zoomer, enlarger)
 
 
 def attach_prior_hessian(prior, epsilon=0) -> None:
@@ -152,7 +151,9 @@ def get_shift_operators(pet_data, path=""):
 
     # Create shift operators
     shift_ops = [
-        CouchShiftOperator(pet_data["bed_positions"][suffix]["template_image"], pet_shift, path=path)
+        CouchShiftOperator(
+            pet_data["bed_positions"][suffix]["template_image"], pet_shift, path=path
+        )
         for suffix, pet_shift in zip(suffixes, pet_shifts)
     ]
 

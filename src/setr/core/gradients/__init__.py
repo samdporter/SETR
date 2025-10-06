@@ -8,10 +8,10 @@ from .gradients import (
     DirectionalGradient,
     Gradient,
     GradientOptimized,
-    Sum,
     Jacobian,
-    gpu_directional_op,
+    Sum,
     check_adjoint,
+    gpu_directional_op,
 )
 
 __all__ = [

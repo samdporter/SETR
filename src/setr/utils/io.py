@@ -43,11 +43,11 @@ def load_config_with_inheritance(path: str) -> dict:
     config = load_config(path)
 
     # If no inheritance, return as-is
-    if 'inherit_from' not in config:
+    if "inherit_from" not in config:
         return config
 
     # Get base config path(s)
-    inherit_from = config.pop('inherit_from')
+    inherit_from = config.pop("inherit_from")
     if isinstance(inherit_from, str):
         inherit_from = [inherit_from]
 

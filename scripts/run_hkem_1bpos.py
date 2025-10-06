@@ -5,25 +5,22 @@ import logging
 import os
 from types import SimpleNamespace
 
-import numpy as np
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import OperatorCompositionFunction, SGFunction
-from cil.optimisation.operators import CompositionOperator
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
-from sirf.STIR import MessageRedirector
 
+from setr.cil_extensions.algorithms import ista_update_step
 from setr.cil_extensions.callbacks import (
     PrintObjectiveCallback,
+    SaveGradientUpdateCallback,
     SaveImageCallback,
     SaveObjectiveCallback,
-    SaveGradientUpdateCallback,
-    SavePreconditionerCallback
+    SavePreconditionerCallback,
 )
 from setr.cil_extensions.functions import BlockIndicatorBox
 from setr.cil_extensions.operators import TruncationOperator
 from setr.cil_extensions.preconditioners import SubsetKernelisedEMPreconditioner
-from setr.cil_extensions.algorithms import ista_update_step
 from setr.scripts.common import (
     configure_logging,
     init_run_env,
@@ -36,11 +33,12 @@ from setr.scripts.hkem_common import (
 )
 from setr.utils import get_pet_data, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_pet_am, get_spect_am, get_array
+from setr.utils.sirf import get_pet_am, get_spect_am
 
 ISTA.update = ista_update_step  # Patch ISTA with our custom update step
 
 DEBUG = False  # Set to True to save more debugging information
+
 
 def prepare_data(args):
     """
@@ -61,7 +59,7 @@ def prepare_data(args):
     else:  # SPECT
         data = get_spect_data(args.data_path)
         guidance = get_attn_and_normalise(args)
-    
+
     return data, guidance
 
 
@@ -96,19 +94,11 @@ def run_ista(args, data, guidance, hyperparams):
         obj.set_up(data["initial_image"])
 
     K = get_kernel_operator(
-        args, 
-        guidance,
-        data["initial_image"], 
-        data["acquisition_data"], 
-        hyperparams
+        args, guidance, data["initial_image"], data["acquisition_data"], hyperparams
     )
 
     # Set up objective functions with kernel operator
-    f_list = [
-        OperatorCompositionFunction(
-            obj, K
-        ) for obj in objs
-    ]
+    f_list = [OperatorCompositionFunction(obj, K) for obj in objs]
 
     sampler = Sampler.sequential(args.num_subsets)
     f = -SGFunction(f_list, sampler)
@@ -167,34 +157,25 @@ def run_ista(args, data, guidance, hyperparams):
     interval = 1 if DEBUG else args.num_subsets
 
     callbacks = [
-        SaveImageCallback(
-            os.path.join(args.output_path, "alpha"),
-            interval=interval
-        ),
+        SaveImageCallback(os.path.join(args.output_path, "alpha"), interval=interval),
         SaveKernelisedImageCallback(
-            os.path.join(args.output_path, "x"),
-            interval=interval,
-            kernel_op=K
+            os.path.join(args.output_path, "x"), interval=interval, kernel_op=K
         ),
         PrintObjectiveCallback(interval=args.num_subsets),
-        SaveObjectiveCallback(
-            os.path.join(args.output_path, "objective"),
-            interval=interval
-        ),
-
+        SaveObjectiveCallback(os.path.join(args.output_path, "objective"), interval=interval),
     ]
 
     if DEBUG:  # Only save preconditioner and gradient if debugging
-        callbacks.extend([
-            SavePreconditionerCallback(
-                os.path.join(args.output_path, "preconditioner"),
-                interval=interval
-            ),
-            SaveGradientUpdateCallback(
-                os.path.join(args.output_path, "gradient"),
-                interval=interval
-            ),
-        ])
+        callbacks.extend(
+            [
+                SavePreconditionerCallback(
+                    os.path.join(args.output_path, "preconditioner"), interval=interval
+                ),
+                SaveGradientUpdateCallback(
+                    os.path.join(args.output_path, "gradient"), interval=interval
+                ),
+            ]
+        )
 
     logging.info("Running ISTA reconstruction...")
     algo.run(num_subiterations, verbose=True, callbacks=callbacks)
@@ -247,5 +228,5 @@ if __name__ == "__main__":
     args = SimpleNamespace(**cfg_dict)
 
     msg = init_run_env(args)
-    
+
     main(args)

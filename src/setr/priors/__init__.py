@@ -8,15 +8,15 @@ from .mutual_information import (
     MutualInformationImagePrior,
 )
 from .rdp import RelativeDifferencePrior, WeightedRDP
+from .vtv import (
+    schatten_norm_gpu,
+    schatten_norm_gpu_slow,
+    schatten_norm_gpu_stable,
+)
 from .vtv.vtv import (
     TotalVariation,
     WeightedTotalVariation,
     WeightedVectorialTotalVariation,
-)
-from .vtv import (
-    schatten_norm_gpu_slow,
-    schatten_norm_gpu_stable,
-    schatten_norm_gpu,
 )
 
 __all__ = [

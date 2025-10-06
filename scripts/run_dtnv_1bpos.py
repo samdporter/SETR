@@ -9,27 +9,22 @@ from types import SimpleNamespace
 
 import numpy as np
 from cil.optimisation.functions import (
-    OperatorCompositionFunction,
-    ScaledFunction,
     SumFunction,
     SVRGFunction,
 )
 from cil.optimisation.operators import (
-    BlockOperator, IdentityOperator, 
-    ZeroOperator, FlipOperator,
-    CompositionOperator
+    BlockOperator,
+    CompositionOperator,
+    FlipOperator,
+    IdentityOperator,
+    ZeroOperator,
 )
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
-from sirf.STIR import ImageData, MessageRedirector
+from sirf.STIR import ImageData
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
-from setr.priors import (
-    WeightedTotalVariation, 
-    WeightedVectorialTotalVariation, 
-    WeightedRDP,
-)
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,
@@ -38,21 +33,21 @@ from setr.scripts.common import (
     save_results,
 )
 from setr.scripts.dtnv_common import (
+    apply_gradient_energy_scaling,
     get_algorithm,
     get_block_objective,
     get_callbacks,
     get_kappa_squareds,
     get_preconditioners,
+    get_prior,
     get_probabilities,
     get_s_inv_from_objs,
-    normalise_kappa_squares,
     gradient_energy_scale_sirf,
-    get_prior,
-    apply_gradient_energy_scaling,
+    normalise_kappa_squares,
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_array
+from setr.utils.sirf import get_array, get_filters
 
 
 def prepare_data(args):
@@ -168,7 +163,7 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     ]
 
     _, gauss = get_filters()
-    
+
     if args.use_kappa:
         kappa = get_kappa_squareds(
             [pet_obj_funs, spect_obj_funs],
@@ -191,18 +186,17 @@ def main(args) -> None:
 
     # Data preparation.
     umap, pet_data, spect_data = prepare_data(args)
-    
+
     # Set up resampling operators.
     spect2pet = get_resampling_operators(pet_data, spect_data)
 
     initial_estimates = EnhancedBlockDataContainer(
         pet_data["initial_image"], spect_data["initial_image"]
     )
-    
-    
+
     for i, image in enumerate(initial_estimates.containers):
         image.write(os.path.join(args.output_path, f"initial_image_{i}.hv"))
-        
+
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
@@ -228,14 +222,10 @@ def main(args) -> None:
         get_spect_am_with_res,
         num_subsets,
     )
-    
+
     if args.flip:
         spect2pet = CompositionOperator(
-            spect2pet,
-            FlipOperator(
-                axis=(0, 2), 
-                image=["initial_image"]
-            )
+            spect2pet, FlipOperator(axis=(0, 2), image=["initial_image"])
         )
 
     bo = BlockOperator(
@@ -245,11 +235,12 @@ def main(args) -> None:
         spect2pet,  # spect2pet
         shape=(2, 2),
     )
-    
+
     kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
     combined = bo.direct(initial_estimates)
     scale = gradient_energy_scale_sirf(
-        combined[0], combined[1], 
+        combined[0],
+        combined[1],
         mask=None,
         kappa_pet=kappas.containers[0] if kappas else None,
         kappa_spect=kappas.containers[1] if kappas else None,
@@ -281,9 +272,7 @@ def main(args) -> None:
         priors_list = []
     else:
         # Set up the prior.
-        priors_list = get_prior(
-            args, umap, combined, bo, kappas
-        )        
+        priors_list = get_prior(args, umap, combined, bo, kappas)
         for i, p in enumerate(priors_list):
             attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
@@ -293,9 +282,7 @@ def main(args) -> None:
 
     # Set up preconditioners.
     precond = get_preconditioners(
-        args, s_inv, all_funs, 
-        update_interval, priors_list, 
-        initial_estimates
+        args, s_inv, all_funs, update_interval, priors_list, initial_estimates
     )
 
     probs = get_probabilities(args, num_subsets, len(all_funs))
@@ -307,7 +294,7 @@ def main(args) -> None:
             prob=probs,
         ),
         snapshot_update_interval=len(all_funs) * 2,
-        store_gradients=True
+        store_gradients=True,
     )
 
     # Set up step size
@@ -322,10 +309,13 @@ def main(args) -> None:
     # Run algorithm using shared function
     subiterations = args.num_epochs * len(all_funs)
     algo = get_algorithm(
-        initial_estimates, 
+        initial_estimates,
         -SumFunction(f_obj, prior) if prior else -f_obj,
-        precond, step_size, 
-        update_interval, subiterations, callbacks
+        precond,
+        step_size,
+        update_interval,
+        subiterations,
+        callbacks,
     )
 
     save_results(algo, args)

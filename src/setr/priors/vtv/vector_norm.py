@@ -1,30 +1,28 @@
 # gpu_total_variation.py
 
+import numpy as np
+import torch
 from cil.optimisation.functions import Function
 
-import torch
-from functorch import vmap
-import numpy as np
-
 from .common import (
-    l1_norm,
-    l2_norm,
-    l1_norm_prox,
-    l2_norm_prox,
-    fair,
     charbonnier,
-    perona_malik,
-    nothing,
-    fair_grad,
     charbonnier_grad,
-    perona_malik_grad,
-    nothing_grad,
-    fair_hessian_diag,
     charbonnier_hessian_diag,
-    perona_malik_hessian_diag,
-    nothing_hessian_diag,
-    fair_hessian_surrogate,
     charbonnier_hessian_surrogate,
+    fair,
+    fair_grad,
+    fair_hessian_diag,
+    fair_hessian_surrogate,
+    l1_norm,
+    l1_norm_prox,
+    l2_norm,
+    l2_norm_prox,
+    nothing,
+    nothing_grad,
+    nothing_hessian_diag,
+    perona_malik,
+    perona_malik_grad,
+    perona_malik_hessian_diag,
     perona_malik_hessian_surrogate,
     to_tensor,
 )
@@ -186,8 +184,8 @@ class GPUVectorNorm(Function):
         alpha = phi'(r)/r, beta = phi''(r) - alpha.
         """
         U = to_tensor(U)
-        r2 = torch.sum(U * U, dim=-1)                  # (...,)
-        r  = torch.sqrt(r2 + stabiliser)               # (...,)
+        r2 = torch.sum(U * U, dim=-1)  # (...,)
+        r = torch.sqrt(r2 + stabiliser)  # (...,)
 
         eps = self.eps
         if self.smoothing_function == "charbonnier":
@@ -203,10 +201,10 @@ class GPUVectorNorm(Function):
             phi1 = nothing_grad
             phi2 = nothing_hessian_diag
 
-        phi1_r = phi1(r, eps)                          # (...,)
-        phi2_r = phi2(r, eps)                          # (...,)
-        alpha  = phi1_r / r                            # (...,)
-        beta   = phi2_r - alpha                        # (...,)
+        phi1_r = phi1(r, eps)  # (...,)
+        phi2_r = phi2(r, eps)  # (...,)
+        alpha = phi1_r / r  # (...,)
+        beta = phi2_r - alpha  # (...,)
         return r2, r, alpha, beta
 
     def hessian_dir_diag(self, U, stabiliser: float = 1e-9, positive: bool = True):
@@ -217,7 +215,6 @@ class GPUVectorNorm(Function):
         """
         U = to_tensor(U)
         r2, r, alpha, beta = self.radial_derivatives(U, stabiliser=stabiliser, positive=positive)
-        frac = (U * U) / (r2.unsqueeze(-1) + stabiliser)   # (..., d)
+        frac = (U * U) / (r2.unsqueeze(-1) + stabiliser)  # (..., d)
         h_dir = alpha.unsqueeze(-1) + beta.unsqueeze(-1) * frac
         return torch.nan_to_num(h_dir, nan=0.0, posinf=0.0, neginf=0.0)
-

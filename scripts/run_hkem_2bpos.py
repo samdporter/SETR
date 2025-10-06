@@ -1,42 +1,36 @@
 #!/usr/bin/env python3
 """SETR HKEM reconstruction for multiple bed positions - Simplified version using shared modules."""
 
+import cProfile
 import logging
 import os
-import cProfile
 import pstats
 from types import SimpleNamespace
 
-import numpy as np
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import (
-    OperatorCompositionFunction, 
-    SumFunction,
+    OperatorCompositionFunction,
     SGFunction,
+    SumFunction,
 )
 from cil.optimisation.operators import CompositionOperator
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
-from sirf.STIR import MessageRedirector
 
+from setr.cil_extensions.algorithms import ista_update_step
+from setr.cil_extensions.callbacks import (
+    PrintObjectiveCallback,
+    SaveGradientUpdateCallback,
+    SaveImageCallback,
+    SaveObjectiveCallback,
+    SavePreconditionerCallback,
+)
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.functions import BlockIndicatorBox
+from setr.cil_extensions.operators import AdjointOperator, CouchShiftOperator, TruncationOperator
 from setr.cil_extensions.preconditioners import (
     SubsetKernelisedEMPreconditioner,
 )
-from setr.cil_extensions.operators import (
-    AdjointOperator, 
-    CouchShiftOperator,
-    TruncationOperator
-)
-from setr.cil_extensions.callbacks import (
-    PrintObjectiveCallback,
-    SaveImageCallback,
-    SaveObjectiveCallback,
-    SaveGradientUpdateCallback,
-    SavePreconditionerCallback
-)
-from setr.cil_extensions.algorithms import ista_update_step
 from setr.scripts.common import (
     configure_logging,
     get_shift_operators,
@@ -45,7 +39,7 @@ from setr.scripts.common import (
 from setr.scripts.hkem_common import get_kernel_hyperparams, get_kernel_operator
 from setr.utils import get_pet_data_multiple_bed_pos
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_pet_am, get_array
+from setr.utils.sirf import get_pet_am
 
 DEBUG = False
 
@@ -56,6 +50,7 @@ if DEBUG:
 else:
     logging.basicConfig(level=logging.INFO)
     logging.info("Debug mode is OFF.")
+
 
 def prepare_data(args):
     """Prepare the multi-bed PET data and guidance image."""
@@ -68,18 +63,19 @@ def prepare_data(args):
         guidance = pet_data["attenuation"]
     elif args.guidance == "emission":
         guidance = pet_data["spect"]
-        assert (
-            guidance is not None
-        ), "Emission guidance selected but no SPECT data provided"
+        assert guidance is not None, "Emission guidance selected but no SPECT data provided"
     else:
         raise ValueError(f"Unknown guidance type: {args.guidance}")
-    assert type(guidance) is type(pet_data["template_image"]), \
-        f"Guidance and initial estimates must be same type." \
+    assert type(guidance) is type(pet_data["template_image"]), (
+        f"Guidance and initial estimates must be same type."
         f"Got {type(guidance)} and {type(pet_data['initial_image'])}"
+    )
 
     if DEBUG:
-        print(f"shape of guidance: {guidance.shape}, "
-              f"initial_estimates: {pet_data['initial_image'].shape}")
+        print(
+            f"shape of guidance: {guidance.shape}, "
+            f"initial_estimates: {pet_data['initial_image'].shape}"
+        )
 
     return pet_data, guidance
 
@@ -90,7 +86,6 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
     # Get acquisition model function
     def get_am():
         return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.pet_gauss_fwhm)
-    
 
     pet_dfs = [
         partitioner.data_partition(
@@ -111,10 +106,7 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
             pet_dfs[i][j].set_up(tmpl)
 
     # Get sensitivities for each bed position
-    pet_sens = [
-        [f.get_subset_sensitivity(0) for f in df]
-        for df in pet_dfs
-    ]
+    pet_sens = [[f.get_subset_sensitivity(0) for f in df] for df in pet_dfs]
     for i, s in enumerate(pet_sens):
         for j, ss in enumerate(s):
             pet_sens[i][j] = ss.maximum(0)
@@ -124,26 +116,27 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
     shift = CouchShiftOperator.get_couch_shift_from_sinogram(
         pet_data["bed_positions"]["_f2b1"]["acquisition_data"]
     )
-    print( f"Using shift of {shift}mm for bed position 2" )
-    zero_shift_op = CouchShiftOperator(
-        pet_data["template_image"], 0
-    )
+    print(f"Using shift of {shift}mm for bed position 2")
+    zero_shift_op = CouchShiftOperator(pet_data["template_image"], 0)
     unzero_shift_op = AdjointOperator(zero_shift_op)
-    
+
     # Combine corresponding subsets across bed positions
     sensitivities = [
         # scale by num_subsets
-        args.num_subsets * unzero_shift_op.adjoint(
+        args.num_subsets
+        * unzero_shift_op.adjoint(
             uncombine_op.adjoint(
                 EnhancedBlockDataContainer(
-                    *[unshift_op.adjoint(sens[subset_idx]) 
-                    for unshift_op, sens in zip(unshift_ops, pet_sens)]
+                    *[
+                        unshift_op.adjoint(sens[subset_idx])
+                        for unshift_op, sens in zip(unshift_ops, pet_sens)
+                    ]
                 )
             )
         )
         for subset_idx in range(args.num_subsets)
     ]
-        
+
     kernel = get_kernel_operator(
         args,
         zero_shift_op.direct(guidance),
@@ -167,15 +160,14 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
 
     # Combine objectives across bed positions
     f_list = [
-        OperatorCompositionFunction(
-            SumFunction(*[funs[j] for funs in pet_dfs]), kernel
-        ) for j in range(args.num_subsets)
+        OperatorCompositionFunction(SumFunction(*[funs[j] for funs in pet_dfs]), kernel)
+        for j in range(args.num_subsets)
     ]
 
     sampler = Sampler.sequential(args.num_subsets)
     f = -SGFunction(f_list, sampler)
     g = BlockIndicatorBox(lower=0)
-    
+
     if DEBUG:
         for i, s in enumerate(sensitivities):
             s.write(os.path.join(args.output_path, f"sens_before_kernel_{i}.hv"))
@@ -190,12 +182,10 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
         freeze_iter=args.freeze_iter,
         epsilon=pet_data["template_image"].max() * 1e-12,
     )
-    
+
     # Initialize alpha
     truncate = TruncationOperator(pet_data["template_image"])
-    init_alpha = zero_shift_op.direct(
-        pet_data["template_image"].get_uniform_copy(1)
-    )
+    init_alpha = zero_shift_op.direct(pet_data["template_image"].get_uniform_copy(1))
     init_alpha = truncate.direct(init_alpha)  # Apply truncation
 
     # Set up algorithm
@@ -227,40 +217,29 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
     interval = 1 if DEBUG else args.num_subsets
 
     callbacks = [
-        SaveImageCallback(
-            os.path.join(args.output_path, "alpha"),
-            interval=interval
-        ),
+        SaveImageCallback(os.path.join(args.output_path, "alpha"), interval=interval),
         SaveKernelisedImageCallback(
-            os.path.join(args.output_path, "x"),
-            interval=interval,
-            kernel_op=kernel
+            os.path.join(args.output_path, "x"), interval=interval, kernel_op=kernel
         ),
         PrintObjectiveCallback(interval=args.num_subsets),
-        SaveObjectiveCallback(
-            os.path.join(args.output_path, "objective"),
-            interval=interval
-        ),
-
+        SaveObjectiveCallback(os.path.join(args.output_path, "objective"), interval=interval),
     ]
 
-    if DEBUG: 
-        callbacks.extend([
-            SavePreconditionerCallback(
-                os.path.join(args.output_path, "preconditioner"),
-                interval=interval
-            ),
-            SaveGradientUpdateCallback(
-                os.path.join(args.output_path, "gradient"),
-                interval=interval
-            ),
-        ])
+    if DEBUG:
+        callbacks.extend(
+            [
+                SavePreconditionerCallback(
+                    os.path.join(args.output_path, "preconditioner"), interval=interval
+                ),
+                SaveGradientUpdateCallback(
+                    os.path.join(args.output_path, "gradient"), interval=interval
+                ),
+            ]
+        )
 
     logging.info("Running HKEM-ISTA reconstruction...")
     num_subiterations = args.num_epochs * args.num_subsets
-    algo.run(
-        num_subiterations, callbacks=callbacks, verbose=True
-    )
+    algo.run(num_subiterations, callbacks=callbacks, verbose=True)
 
     # Get final results
     output_alpha = algo.solution
@@ -299,7 +278,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    
     # Parse arguments and configuration
     cli = parse_cli()
     config = load_config(cli.config)
