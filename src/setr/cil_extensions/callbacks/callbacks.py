@@ -5,6 +5,8 @@ from cil.framework import BlockDataContainer
 from cil.optimisation.utilities import callbacks
 from sirf.STIR import ImageData
 
+from setr.utils.metrics import compute_all_metrics, compute_block_metrics
+
 
 class Callback(callbacks.Callback):
     """
@@ -151,3 +153,180 @@ class SubsetValueCallback(Callback):
             function(algo.solution) for function in func_list
         )
         self.subset_values.to_csv(f"{self.filename}.csv")
+
+
+class ComputeMetricsCallback(Callback):
+    """
+    CIL Callback that computes image quality metrics against a reference image.
+
+    Computes MSE, RMSE, NRMSE, MAE, NMAE at specified intervals and saves to CSV.
+    Supports both single images and BlockDataContainer (multi-modal).
+    Optionally applies a mask to restrict metrics to region of interest.
+
+    Args:
+        reference: Reference image (ImageData or BlockDataContainer)
+        filename: Output CSV filename (without extension)
+        interval: Compute metrics every N iterations
+        mask: Optional mask (ImageData, BlockDataContainer, or None)
+        normalization: Normalization method for NRMSE/NMAE ('range', 'max', 'mean', 'euclidean')
+        verbose: If True, log metrics to console
+
+    Example:
+        >>> reference = ImageData("ground_truth.hv")
+        >>> mask = create_mask_from_threshold(reference, threshold=0.1)
+        >>> callback = ComputeMetricsCallback(
+        ...     reference=reference,
+        ...     filename="output/metrics",
+        ...     interval=10,
+        ...     mask=mask,
+        ...     verbose=True
+        ... )
+        >>> algo.run(100, callbacks=[callback])
+    """
+
+    def __init__(
+        self,
+        reference,
+        filename,
+        interval,
+        mask=None,
+        normalization='range',
+        verbose=False,
+        **kwargs
+    ):
+        super().__init__(interval, **kwargs)
+        self.reference = reference
+        self.filename = filename
+        self.mask = mask
+        self.normalization = normalization
+        self.verbose = verbose
+        self.metrics_df = pd.DataFrame()
+
+        # Determine if we're working with BlockDataContainer
+        self.is_block = isinstance(reference, BlockDataContainer)
+
+    def __call__(self, algo):
+        if self.skip_iteration(algo):
+            return
+
+        iteration = algo.iteration
+
+        if self.is_block:
+            # Multi-modal metrics
+            metrics = compute_block_metrics(
+                algo.solution,
+                self.reference,
+                self.mask,
+                self.normalization
+            )
+
+            # Flatten nested dictionary for DataFrame
+            # Format: modality_0_mse, modality_0_rmse, modality_1_mse, etc.
+            flat_metrics = {}
+            for modality, mod_metrics in metrics.items():
+                for metric_name, value in mod_metrics.items():
+                    flat_metrics[f"{modality}_{metric_name}"] = value
+
+            # Add to DataFrame
+            for key, value in flat_metrics.items():
+                self.metrics_df.at[iteration, key] = value
+
+            if self.verbose:
+                logging.info(f"Iteration {iteration} metrics:")
+                for modality, mod_metrics in metrics.items():
+                    logging.info(
+                        f"  {modality}: "
+                        f"RMSE={mod_metrics['rmse']:.6e}, "
+                        f"NRMSE={mod_metrics['nrmse']:.6f}"
+                    )
+        else:
+            # Single image metrics
+            metrics = compute_all_metrics(
+                algo.solution,
+                self.reference,
+                self.mask,
+                self.normalization
+            )
+
+            # Add to DataFrame
+            for key, value in metrics.items():
+                self.metrics_df.at[iteration, key] = value
+
+            if self.verbose:
+                logging.info(
+                    f"Iteration {iteration} metrics: "
+                    f"RMSE={metrics['rmse']:.6e}, "
+                    f"NRMSE={metrics['nrmse']:.6f}"
+                )
+
+        # Save to CSV
+        self.metrics_df.to_csv(f"{self.filename}.csv", index_label='iteration')
+
+
+class PrintMetricsCallback(Callback):
+    """
+    CIL Callback that computes and prints image quality metrics to console only.
+
+    Lighter version of ComputeMetricsCallback that doesn't save to disk.
+    Useful for quick monitoring during reconstruction.
+
+    Args:
+        reference: Reference image (ImageData or BlockDataContainer)
+        interval: Compute metrics every N iterations
+        mask: Optional mask (ImageData, BlockDataContainer, or None)
+        normalization: Normalization method for NRMSE/NMAE
+        metrics: List of metrics to print (default: ['rmse', 'nrmse'])
+    """
+
+    def __init__(
+        self,
+        reference,
+        interval,
+        mask=None,
+        normalization='range',
+        metrics=None,
+        **kwargs
+    ):
+        super().__init__(interval, **kwargs)
+        self.reference = reference
+        self.mask = mask
+        self.normalization = normalization
+        self.metrics_to_print = metrics or ['rmse', 'nrmse']
+        self.is_block = isinstance(reference, BlockDataContainer)
+
+    def __call__(self, algo):
+        if self.skip_iteration(algo):
+            return
+
+        iteration = algo.iteration
+
+        if self.is_block:
+            metrics = compute_block_metrics(
+                algo.solution,
+                self.reference,
+                self.mask,
+                self.normalization
+            )
+
+            logging.info(f"Iteration {iteration} metrics:")
+            for modality, mod_metrics in metrics.items():
+                metric_str = ", ".join(
+                    f"{m.upper()}={mod_metrics[m]:.6e}"
+                    for m in self.metrics_to_print
+                    if m in mod_metrics
+                )
+                logging.info(f"  {modality}: {metric_str}")
+        else:
+            metrics = compute_all_metrics(
+                algo.solution,
+                self.reference,
+                self.mask,
+                self.normalization
+            )
+
+            metric_str = ", ".join(
+                f"{m.upper()}={metrics[m]:.6e}"
+                for m in self.metrics_to_print
+                if m in metrics
+            )
+            logging.info(f"Iteration {iteration} metrics: {metric_str}")
