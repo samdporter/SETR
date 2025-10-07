@@ -1,6 +1,6 @@
 #== Reconstruction settings
 num_subsets: [9, 12]
-num_epochs: 500
+num_epochs: 250
 initial_step_size: 0.1
 update_interval: 60
 relaxation_eta: 0.01
@@ -16,25 +16,27 @@ use_modality_specific_priors: false
 prior: "tv" # can be tv or rdp
 gamma_pet: 100.0
 gamma_spect: 10.0
-tv_stencil: "6" # can be 6, 18, or 26
+tv_stencil: "18" # can be 6, 18, or 26
+tv_bnd_cond: "Periodic"
 directional_tv: true
 tv_both_directions: false
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true
 gamma_tnv: 1.0
-alpha: 1.0
-beta: 1.0
-tnv_stencil: "26"
+alpha: 100.0
+beta: 100.0
+tnv_stencil: "18"
+tnv_bnd_cond: "Periodic"
 directional_tnv: true
-tnv_both_directions: false
+tnv_both_directions: true
 tail_singular_values: null
 stable: false
 
 #== Image processing
 pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
-spect_gauss_fwhm: [6.7, 6.7, 6.7] # FROM bremss data anyscan
-spect_res: [0.81, 0.03, false] # Analytical collimator resolution for SPECT
+spect_gauss_fwhm: [6.8, 6.8, 6.8] # FROM bremss data anyscan
+spect_res: [0.98, 0.029, false] # Analytical collimator resolution for SPECT
 
 #== Forward models
 no_gpu: false
