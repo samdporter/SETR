@@ -16,9 +16,9 @@ import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LogNorm
 from sirf.STIR import ImageData
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
@@ -89,7 +89,7 @@ def debug_slow_components(vtv: WeightedVectorialTotalVariation, data, output_dir
         prn = principal[..., m].detach().cpu().numpy()
         tot = slow_total[..., m].detach().cpu().numpy()
 
-        print(f"[debug] Slow diagnostics - modality {m+1}")
+        print(f"[debug] Slow diagnostics - modality {m + 1}")
         print("  alpha_total (Σ φ'(σ)/σ):", _quantiles(a_tot))
         print("  Σ S^2:", _quantiles(sens))
         print("  alpha_image = alpha_total * b^2 * Σ S^2:", _quantiles(a_img))
@@ -234,7 +234,7 @@ def test_preconditioner_methods(
     # Use canonical names for clarity in output/plots
     methods = [
         "svd_principal_alpha",
-        #"mm_jensen",
+        # "mm_jensen",
         "frobenius_surrogate_pd",
         "vector_tv_per_modality",
     ]
@@ -274,7 +274,7 @@ def test_preconditioner_methods(
             hessian=method,
             stencil="18",
             bnd_cond="Periodic",
-            both_directions=True
+            both_directions=True,
         )
 
         vtv_instances[method] = vtv
@@ -604,7 +604,9 @@ def main():
     print(results_df[["method", "hess_time", "inv_hess_time"]].to_string(index=False))
 
     # Speedup analysis
-    baseline_hess_time = results_df[results_df["method"] == "svd_principal_alpha"]["hess_time"].values[0]
+    baseline_hess_time = results_df[results_df["method"] == "svd_principal_alpha"][
+        "hess_time"
+    ].values[0]
     print("\nSpeedup vs 'svd_principal_alpha' baseline (Hessian diagonal):")
     for _, row in results_df.iterrows():
         speedup = baseline_hess_time / row["hess_time"]

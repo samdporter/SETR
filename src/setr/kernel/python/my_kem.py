@@ -1,5 +1,3 @@
-import itertools
-
 import numpy as np
 
 np.seterr(over="raise", invalid="raise")

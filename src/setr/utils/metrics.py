@@ -30,7 +30,7 @@ def compute_mse(image, reference, mask=None):
         raise ValueError(f"Image shapes do not match: {img_arr.shape} vs {ref_arr.shape}")
 
     diff = img_arr - ref_arr
-    squared_diff = diff ** 2
+    squared_diff = diff**2
 
     if mask is not None:
         mask_arr = get_array(mask) if isinstance(mask, ImageData) else np.asarray(mask)
@@ -67,7 +67,7 @@ def compute_rmse(image, reference, mask=None):
     return float(np.sqrt(mse))
 
 
-def compute_nrmse(image, reference, mask=None, normalization='range'):
+def compute_nrmse(image, reference, mask=None, normalization="range"):
     """
     Compute Normalized Root Mean Squared Error between image and reference.
 
@@ -93,13 +93,13 @@ def compute_nrmse(image, reference, mask=None, normalization='range'):
         mask_arr = mask_arr.astype(bool)
         ref_arr = ref_arr[mask_arr]
 
-    if normalization == 'range':
+    if normalization == "range":
         norm_factor = ref_arr.max() - ref_arr.min()
-    elif normalization == 'max':
+    elif normalization == "max":
         norm_factor = ref_arr.max()
-    elif normalization == 'mean':
+    elif normalization == "mean":
         norm_factor = ref_arr.mean()
-    elif normalization == 'euclidean':
+    elif normalization == "euclidean":
         norm_factor = np.linalg.norm(ref_arr)
     else:
         raise ValueError(f"Unknown normalization: {normalization}")
@@ -146,7 +146,7 @@ def compute_mae(image, reference, mask=None):
     return float(mae)
 
 
-def compute_nmae(image, reference, mask=None, normalization='range'):
+def compute_nmae(image, reference, mask=None, normalization="range"):
     """
     Compute Normalized Mean Absolute Error between image and reference.
 
@@ -168,13 +168,13 @@ def compute_nmae(image, reference, mask=None, normalization='range'):
         mask_arr = mask_arr.astype(bool)
         ref_arr = ref_arr[mask_arr]
 
-    if normalization == 'range':
+    if normalization == "range":
         norm_factor = ref_arr.max() - ref_arr.min()
-    elif normalization == 'max':
+    elif normalization == "max":
         norm_factor = ref_arr.max()
-    elif normalization == 'mean':
+    elif normalization == "mean":
         norm_factor = ref_arr.mean()
-    elif normalization == 'euclidean':
+    elif normalization == "euclidean":
         norm_factor = np.linalg.norm(ref_arr)
     else:
         raise ValueError(f"Unknown normalization: {normalization}")
@@ -182,7 +182,7 @@ def compute_nmae(image, reference, mask=None, normalization='range'):
     return np.nan if norm_factor == 0 else float(mae / norm_factor)
 
 
-def compute_all_metrics(image, reference, mask=None, normalization='range'):
+def compute_all_metrics(image, reference, mask=None, normalization="range"):
     """
     Compute all common metrics between image and reference.
 
@@ -196,15 +196,15 @@ def compute_all_metrics(image, reference, mask=None, normalization='range'):
         dict: Dictionary with keys 'mse', 'rmse', 'nrmse', 'mae', 'nmae'
     """
     return {
-        'mse': compute_mse(image, reference, mask),
-        'rmse': compute_rmse(image, reference, mask),
-        'nrmse': compute_nrmse(image, reference, mask, normalization),
-        'mae': compute_mae(image, reference, mask),
-        'nmae': compute_nmae(image, reference, mask, normalization),
+        "mse": compute_mse(image, reference, mask),
+        "rmse": compute_rmse(image, reference, mask),
+        "nrmse": compute_nrmse(image, reference, mask, normalization),
+        "mae": compute_mae(image, reference, mask),
+        "nmae": compute_nmae(image, reference, mask, normalization),
     }
 
 
-def compute_block_metrics(block_image, block_reference, mask=None, normalization='range'):
+def compute_block_metrics(block_image, block_reference, mask=None, normalization="range"):
     """
     Compute metrics for BlockDataContainer (multi-modal images).
 
@@ -236,17 +236,17 @@ def compute_block_metrics(block_image, block_reference, mask=None, normalization
         # Handle mask
         if mask is None:
             mask_i = None
-        elif hasattr(mask, 'containers'):  # BlockDataContainer
+        elif hasattr(mask, "containers"):  # BlockDataContainer
             mask_i = mask.containers[i]
         else:  # Single mask for all modalities
             mask_i = mask
 
-        metrics[f'modality_{i}'] = compute_all_metrics(img, ref, mask_i, normalization)
+        metrics[f"modality_{i}"] = compute_all_metrics(img, ref, mask_i, normalization)
 
     return metrics
 
 
-def create_mask_from_threshold(image, threshold=0.0, mode='greater'):
+def create_mask_from_threshold(image, threshold=0.0, mode="greater"):
     """
     Create binary mask from image based on threshold.
 
@@ -261,13 +261,13 @@ def create_mask_from_threshold(image, threshold=0.0, mode='greater'):
     is_imagedata = isinstance(image, ImageData)
     arr = get_array(image) if is_imagedata else np.asarray(image)
 
-    if mode == 'greater':
+    if mode == "greater":
         mask_arr = arr > threshold
-    elif mode == 'less':
+    elif mode == "less":
         mask_arr = arr < threshold
-    elif mode == 'greater_equal':
+    elif mode == "greater_equal":
         mask_arr = arr >= threshold
-    elif mode == 'less_equal':
+    elif mode == "less_equal":
         mask_arr = arr <= threshold
     else:
         raise ValueError(f"Unknown mode: {mode}")

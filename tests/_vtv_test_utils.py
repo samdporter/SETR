@@ -16,10 +16,10 @@ except Exception as exc:  # pragma: no cover - exercised only on missing deps
 torch = TORCH  # expose for convenient import by tests
 
 try:  # Optional dependency: VTV implementation
-    from setr.priors.vtv.vtv import WeightedVectorialTotalVariation
     from setr.priors.vtv.schatten_norm_gpu_slow import (
         GPUVectorialTotalVariation as VTVSlowBackend,
     )
+    from setr.priors.vtv.vtv import WeightedVectorialTotalVariation
 
     VTV_IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - exercised only on missing deps

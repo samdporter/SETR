@@ -48,7 +48,9 @@ from setr.utils import BlockDataContainerToArray
 from setr.utils.sirf import get_array
 
 
-def _edge_slices(shape: torch.Size, direction: tuple[int, int, int]) -> tuple[tuple[slice, ...], tuple[slice, ...]]:
+def _edge_slices(
+    shape: torch.Size, direction: tuple[int, int, int]
+) -> tuple[tuple[slice, ...], tuple[slice, ...]]:
     """Return source/sink slice tuples for a given direction (last dims are spatial)."""
 
     ndims = len(shape)
@@ -76,7 +78,9 @@ def _edge_slices(shape: torch.Size, direction: tuple[int, int, int]) -> tuple[tu
     return tuple(src), tuple(sink)
 
 
-def _scatter_sum_adjoint(edges: torch.Tensor, directions: list[tuple[int, int, int]]) -> torch.Tensor:
+def _scatter_sum_adjoint(
+    edges: torch.Tensor, directions: list[tuple[int, int, int]]
+) -> torch.Tensor:
     """Scatter Σ-edge quantities to voxel grid (both endpoints) without boundary duplication."""
 
     out = torch.zeros_like(edges[..., 0])
@@ -93,7 +97,9 @@ def _scatter_sum_adjoint(edges: torch.Tensor, directions: list[tuple[int, int, i
     return out
 
 
-def _scatter_diag(plus: torch.Tensor, minus: torch.Tensor, directions: list[tuple[int, int, int]]) -> torch.Tensor:
+def _scatter_diag(
+    plus: torch.Tensor, minus: torch.Tensor, directions: list[tuple[int, int, int]]
+) -> torch.Tensor:
     """Assemble diagonal contributions for Σ/Δ edges using per-endpoint weights."""
 
     diag = torch.zeros_like(plus[..., 0])
@@ -109,6 +115,7 @@ def _scatter_diag(plus: torch.Tensor, minus: torch.Tensor, directions: list[tupl
         else:
             diag[src_slice] = diag[src_slice] + edge_plus[src_slice]
     return diag
+
 
 # -------------------------------------------------------------------------
 # Device / dtype helpers
@@ -486,8 +493,7 @@ class WeightedRDP(Function):
         )
 
         diag_S = [
-            _scatter_sum_adjoint(t[..., m, :], self.sum_op.directions)
-            for m in range(t.shape[-2])
+            _scatter_sum_adjoint(t[..., m, :], self.sum_op.directions) for m in range(t.shape[-2])
         ]
         diag_S_t = torch.stack(diag_S, dim=-1)
         return diag_J + diag_S_t

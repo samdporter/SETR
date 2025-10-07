@@ -2,7 +2,7 @@
 
 ## Overview
 
-The scripts under `scripts/` and `functionality/preconditioners/` provide tooling to comprehensively test VTV preconditioning strategies:
+The scripts under `scripts/` and `functionality/preconditioners/` provide tooling to comprehensively test VTV preconditioning strategies. Automated unit tests covering the core diagonal approximations live in `tests/test_vtv_hessian_diag.py` and `tests/test_vtv_preconditioners.py`.
 
 1. **svd_principal_alpha** *(legacy `SLOW`)*: SVD principal rank-one terms + isotropic α (baseline)
 2. **mm_jensen** *(legacy `FAST`)*: MM/Jensen surrogate, SVD-free (default, good tradeoff)

@@ -413,7 +413,9 @@ class WeightedVectorialTotalVariation(Function):
             influence_image = influence_image.to(P_diag.device, dtype=P_diag.dtype)
 
             # Weight by φ''(σ_k) and accumulate squared influence
-            h_double_prime_k = hess_coeffs[..., k].unsqueeze(-1).to(P_diag.device)  # (nx, ny, nz, 1)
+            h_double_prime_k = (
+                hess_coeffs[..., k].unsqueeze(-1).to(P_diag.device)
+            )  # (nx, ny, nz, 1)
             P_diag += h_double_prime_k * (influence_image**2)
 
         # --- Add isotropic α-term: α = Σ_k φ'(σ_k)/σ_k ---
@@ -426,7 +428,9 @@ class WeightedVectorialTotalVariation(Function):
 
         if sigma_weights_half is not None:
             # α_total per voxel
-            alpha_total = (2.0 * torch.sum(sigma_weights_half, dim=-1)).to(P_diag.device)  # (nx, ny, nz)
+            alpha_total = (2.0 * torch.sum(sigma_weights_half, dim=-1)).to(
+                P_diag.device
+            )  # (nx, ny, nz)
 
             # Map α diagonally through sensitivity (no participation counts for consistency
             # with single-modality vector-norm mapping)
@@ -435,7 +439,9 @@ class WeightedVectorialTotalVariation(Function):
             S2 = S * S
             S_jm = torch.sum(S2, dim=-1)  # (nx, ny, nz, M)
 
-            w2 = (self.weights * self.weights).to(P_diag.device, dtype=P_diag.dtype)  # (nx, ny, nz, M)
+            w2 = (self.weights * self.weights).to(
+                P_diag.device, dtype=P_diag.dtype
+            )  # (nx, ny, nz, M)
             P_diag = P_diag + alpha_total.unsqueeze(-1) * w2 * S_jm
 
         # Floor at epsilon to prevent numerical issues (voxels with zero Hessian)

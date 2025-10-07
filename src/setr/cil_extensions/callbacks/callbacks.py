@@ -190,9 +190,9 @@ class ComputeMetricsCallback(Callback):
         filename,
         interval,
         mask=None,
-        normalization='range',
+        normalization="range",
         verbose=False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(interval, **kwargs)
         self.reference = reference
@@ -214,10 +214,7 @@ class ComputeMetricsCallback(Callback):
         if self.is_block:
             # Multi-modal metrics
             metrics = compute_block_metrics(
-                algo.solution,
-                self.reference,
-                self.mask,
-                self.normalization
+                algo.solution, self.reference, self.mask, self.normalization
             )
 
             # Flatten nested dictionary for DataFrame
@@ -242,10 +239,7 @@ class ComputeMetricsCallback(Callback):
         else:
             # Single image metrics
             metrics = compute_all_metrics(
-                algo.solution,
-                self.reference,
-                self.mask,
-                self.normalization
+                algo.solution, self.reference, self.mask, self.normalization
             )
 
             # Add to DataFrame
@@ -260,7 +254,7 @@ class ComputeMetricsCallback(Callback):
                 )
 
         # Save to CSV
-        self.metrics_df.to_csv(f"{self.filename}.csv", index_label='iteration')
+        self.metrics_df.to_csv(f"{self.filename}.csv", index_label="iteration")
 
 
 class PrintMetricsCallback(Callback):
@@ -279,19 +273,13 @@ class PrintMetricsCallback(Callback):
     """
 
     def __init__(
-        self,
-        reference,
-        interval,
-        mask=None,
-        normalization='range',
-        metrics=None,
-        **kwargs
+        self, reference, interval, mask=None, normalization="range", metrics=None, **kwargs
     ):
         super().__init__(interval, **kwargs)
         self.reference = reference
         self.mask = mask
         self.normalization = normalization
-        self.metrics_to_print = metrics or ['rmse', 'nrmse']
+        self.metrics_to_print = metrics or ["rmse", "nrmse"]
         self.is_block = isinstance(reference, BlockDataContainer)
 
     def __call__(self, algo):
@@ -302,10 +290,7 @@ class PrintMetricsCallback(Callback):
 
         if self.is_block:
             metrics = compute_block_metrics(
-                algo.solution,
-                self.reference,
-                self.mask,
-                self.normalization
+                algo.solution, self.reference, self.mask, self.normalization
             )
 
             logging.info(f"Iteration {iteration} metrics:")
@@ -318,15 +303,10 @@ class PrintMetricsCallback(Callback):
                 logging.info(f"  {modality}: {metric_str}")
         else:
             metrics = compute_all_metrics(
-                algo.solution,
-                self.reference,
-                self.mask,
-                self.normalization
+                algo.solution, self.reference, self.mask, self.normalization
             )
 
             metric_str = ", ".join(
-                f"{m.upper()}={metrics[m]:.6e}"
-                for m in self.metrics_to_print
-                if m in metrics
+                f"{m.upper()}={metrics[m]:.6e}" for m in self.metrics_to_print if m in metrics
             )
             logging.info(f"Iteration {iteration} metrics: {metric_str}")

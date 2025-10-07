@@ -1,5 +1,3 @@
-import pytest
-
 from tests._vtv_test_utils import (
     DEVICE,
     make_vtv_harness,

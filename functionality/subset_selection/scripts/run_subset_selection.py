@@ -8,11 +8,8 @@ Tests different combinations of:
 - Preconditioner types (BSREM vs VTV variants)
 """
 
-import argparse
 import logging
 import os
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -28,13 +25,14 @@ from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
 from sirf.STIR import ImageData
 
+from setr.cil_extensions.callbacks import ComputeMetricsCallback
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
-from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.cil_extensions.preconditioners import (
     BSREMPreconditioner,
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
 )
+from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,
@@ -42,8 +40,6 @@ from setr.scripts.common import (
     init_run_env,
     save_results,
 )
-from setr.utils.metrics import create_mask_from_threshold
-from setr.cil_extensions.callbacks import ComputeMetricsCallback
 from setr.scripts.dtnv_common import (
     apply_gradient_energy_scaling,
     get_algorithm,
@@ -57,6 +53,7 @@ from setr.scripts.dtnv_common import (
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
+from setr.utils.metrics import create_mask_from_threshold
 from setr.utils.sirf import get_array, get_filters
 
 
@@ -262,7 +259,9 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
 
     # VTV preconditioner variants - need prior preconditioners
     if priors_list is None or len(priors_list) == 0:
-        logging.warning(f"Requested precond_type={precond_type} but no priors available. Using BSREM.")
+        logging.warning(
+            f"Requested precond_type={precond_type} but no priors available. Using BSREM."
+        )
         return bsrem_precond
 
     # Determine hessian type based on precond_type
@@ -465,13 +464,11 @@ def main(args) -> None:
     )
 
     # Set up probabilities and SVRG function based on prior mode
-    data_probs, prior_prob = get_probabilities_for_mode(
-        subset_mode, prior_mode, len(all_funs)
-    )
+    data_probs, prior_prob = get_probabilities_for_mode(subset_mode, prior_mode, len(all_funs))
 
     if prior_mode == "always":
         # Prior in outer SumFunction
-        logging.info(f"Prior mode: always (evaluated every iteration)")
+        logging.info("Prior mode: always (evaluated every iteration)")
         f_obj = SVRGFunction(
             all_funs,
             sampler=Sampler.random_with_replacement(len(all_funs), prob=data_probs),
@@ -489,8 +486,9 @@ def main(args) -> None:
         all_funs_with_prior = all_funs + [prior]
         probs_with_prior = data_probs + [prior_prob]
 
-        logging.info(f"Total functions: {len(all_funs_with_prior)} "
-                    f"({len(all_funs)} data + 1 prior)")
+        logging.info(
+            f"Total functions: {len(all_funs_with_prior)} ({len(all_funs)} data + 1 prior)"
+        )
         logging.info(f"Prior probability: {prior_prob:.4f}")
         logging.info(f"Each data function probability: {data_probs[0]:.6f}")
 
@@ -532,12 +530,12 @@ def main(args) -> None:
                 mask_pet = create_mask_from_threshold(
                     reference_pet,
                     threshold=mask_threshold * float(reference_pet.max()),
-                    mode='greater'
+                    mode="greater",
                 )
                 mask_spect = create_mask_from_threshold(
                     reference_spect,
                     threshold=mask_threshold * float(reference_spect.max()),
-                    mode='greater'
+                    mode="greater",
                 )
                 mask = EnhancedBlockDataContainer(mask_pet, mask_spect)
 
@@ -545,8 +543,8 @@ def main(args) -> None:
                 mask_pet_arr = get_array(mask_pet)
                 mask_spect_arr = get_array(mask_spect)
                 logging.info(
-                    f"Mask coverage: PET {100*mask_pet_arr.sum()/mask_pet_arr.size:.1f}%, "
-                    f"SPECT {100*mask_spect_arr.sum()/mask_spect_arr.size:.1f}%"
+                    f"Mask coverage: PET {100 * mask_pet_arr.sum() / mask_pet_arr.size:.1f}%, "
+                    f"SPECT {100 * mask_spect_arr.sum() / mask_spect_arr.size:.1f}%"
                 )
 
             metrics_interval = getattr(args, "metrics_interval", None) or update_interval

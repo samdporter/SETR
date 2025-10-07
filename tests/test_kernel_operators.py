@@ -86,7 +86,9 @@ if NUMBA_AVAIL:
     backends.append("numba")
 
 if not backends:
-    pytest.skip("No backends available (need numpy sliding_window_view or numba)", allow_module_level=True)
+    pytest.skip(
+        "No backends available (need numpy sliding_window_view or numba)", allow_module_level=True
+    )
 
 
 # ============================================================================
@@ -119,7 +121,9 @@ def test_kernel_identity_on_uniform_image(small_geometry, backend):
 
 
 @pytest.mark.parametrize("backend", backends)
-def test_kernel_smoothing_effect(small_geometry, emission_image_spot, anatomical_image_simple, backend):
+def test_kernel_smoothing_effect(
+    small_geometry, emission_image_spot, anatomical_image_simple, backend
+):
     """Test that kernel smooths the emission image."""
     operator = get_kernel_operator(
         small_geometry,
@@ -284,7 +288,9 @@ def test_hybrid_mode_no_nans(small_geometry, anatomical_image_simple, emission_i
 
 
 @pytest.mark.parametrize("backend", backends)
-def test_hybrid_affects_result(small_geometry, anatomical_image_simple, emission_image_spot, backend):
+def test_hybrid_affects_result(
+    small_geometry, anatomical_image_simple, emission_image_spot, backend
+):
     """Test that hybrid mode produces different results than non-hybrid."""
     operator_pure = get_kernel_operator(
         small_geometry,
@@ -324,7 +330,9 @@ def test_hybrid_affects_result(small_geometry, anatomical_image_simple, emission
 
 
 @pytest.mark.parametrize("backend", backends)
-def test_mask_reduces_smoothing(small_geometry, anatomical_image_simple, emission_image_spot, backend):
+def test_mask_reduces_smoothing(
+    small_geometry, anatomical_image_simple, emission_image_spot, backend
+):
     """Test that masking reduces the number of neighbors and affects smoothing."""
     operator_full = get_kernel_operator(
         small_geometry,
@@ -361,7 +369,9 @@ def test_mask_reduces_smoothing(small_geometry, anatomical_image_simple, emissio
 
 
 @pytest.mark.parametrize("backend", backends)
-def test_distance_weighting_affects_result(small_geometry, anatomical_image_simple, emission_image_spot, backend):
+def test_distance_weighting_affects_result(
+    small_geometry, anatomical_image_simple, emission_image_spot, backend
+):
     """Test that distance weighting changes the kernel output."""
     operator_no_dist = get_kernel_operator(
         small_geometry,
@@ -398,7 +408,9 @@ def test_distance_weighting_affects_result(small_geometry, anatomical_image_simp
 
 
 @pytest.mark.parametrize("backend", backends)
-def test_normalization_preserves_scale(small_geometry, anatomical_image_simple, emission_image_uniform, backend):
+def test_normalization_preserves_scale(
+    small_geometry, anatomical_image_simple, emission_image_uniform, backend
+):
     """Test that normalization approximately preserves the scale of uniform images."""
     operator = get_kernel_operator(
         small_geometry,
@@ -468,7 +480,9 @@ def test_negative_values_handled(small_geometry, anatomical_image_simple, backen
 
 
 @pytest.mark.parametrize("backend", backends)
-def test_extreme_sigma_values(small_geometry, anatomical_image_simple, emission_image_spot, backend):
+def test_extreme_sigma_values(
+    small_geometry, anatomical_image_simple, emission_image_spot, backend
+):
     """Test behavior with extreme sigma values."""
     # Very small sigma (should be very local)
     operator_small = get_kernel_operator(
@@ -510,7 +524,9 @@ def test_extreme_sigma_values(small_geometry, anatomical_image_simple, emission_
 
 
 @pytest.mark.skipif(len(backends) < 2, reason="Need at least 2 backends to compare")
-def test_backends_produce_consistent_results(small_geometry, anatomical_image_simple, emission_image_spot):
+def test_backends_produce_consistent_results(
+    small_geometry, anatomical_image_simple, emission_image_spot
+):
     """Test that different backends produce consistent results."""
     params = {
         "num_neighbours": 5,
@@ -532,7 +548,9 @@ def test_backends_produce_consistent_results(small_geometry, anatomical_image_si
     for i in range(len(backend_list)):
         for j in range(i + 1, len(backend_list)):
             b1, b2 = backend_list[i], backend_list[j]
-            assert np.allclose(results[b1], results[b2], rtol=1e-5, atol=1e-8), f"{b1} vs {b2} mismatch"
+            assert np.allclose(results[b1], results[b2], rtol=1e-5, atol=1e-8), (
+                f"{b1} vs {b2} mismatch"
+            )
 
 
 @pytest.mark.skipif(len(backends) < 2, reason="Need at least 2 backends to compare")
@@ -560,7 +578,9 @@ def test_backends_hybrid_consistency(small_geometry, anatomical_image_simple, em
     for i in range(len(backend_list)):
         for j in range(i + 1, len(backend_list)):
             b1, b2 = backend_list[i], backend_list[j]
-            assert np.allclose(results[b1], results[b2], rtol=1e-5, atol=1e-8), f"{b1} vs {b2} hybrid mismatch"
+            assert np.allclose(results[b1], results[b2], rtol=1e-5, atol=1e-8), (
+                f"{b1} vs {b2} hybrid mismatch"
+            )
 
 
 # ============================================================================
@@ -593,7 +613,9 @@ def test_parameter_update_clears_mask(small_geometry, anatomical_image_simple, b
 
 
 @pytest.mark.parametrize("backend", backends)
-def test_mask_recalculation_flag(small_geometry, anatomical_image_simple, emission_image_spot, backend):
+def test_mask_recalculation_flag(
+    small_geometry, anatomical_image_simple, emission_image_spot, backend
+):
     """Test that recalc_mask flag forces mask recomputation."""
     operator = get_kernel_operator(
         small_geometry,

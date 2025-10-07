@@ -42,11 +42,7 @@ def create_volume(shape=(64, 64, 32)):
     volume += 120.0 * np.exp(-((r - 0.35) ** 2) / 0.02)
 
     # Add rectangular prism
-    prism = (
-        (np.abs(X) < 0.45)
-        & (np.abs(Y) < 0.25)
-        & (np.abs(Z) < 0.55)
-    )
+    prism = (np.abs(X) < 0.45) & (np.abs(Y) < 0.25) & (np.abs(Z) < 0.55)
     volume[prism] += 60.0
 
     # Hollow cylinder
@@ -120,7 +116,9 @@ def visualise(volume, grad, diag, hv, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Visualise the RDP Hessian components")
-    parser.add_argument("--shape", type=int, nargs=3, default=[64, 64, 32], help="Volume shape (nx ny nz)")
+    parser.add_argument(
+        "--shape", type=int, nargs=3, default=[64, 64, 32], help="Volume shape (nx ny nz)"
+    )
     parser.add_argument(
         "--voxel-size",
         type=float,
@@ -130,9 +128,15 @@ def main():
     )
     parser.add_argument("--gamma", type=float, default=0.1, help="RDP gamma parameter")
     parser.add_argument("--epsilon", type=float, default=1e-6, help="RDP epsilon stabiliser")
-    parser.add_argument("--stencil", type=str, default="6", choices=["6", "18", "26"], help="Neighbour stencil")
-    parser.add_argument("--both-directions", action="store_true", help="Use both directions in gradient stencils")
-    parser.add_argument("--output", type=Path, default=Path("results/rdp_hessian"), help="Output directory")
+    parser.add_argument(
+        "--stencil", type=str, default="6", choices=["6", "18", "26"], help="Neighbour stencil"
+    )
+    parser.add_argument(
+        "--both-directions", action="store_true", help="Use both directions in gradient stencils"
+    )
+    parser.add_argument(
+        "--output", type=Path, default=Path("results/rdp_hessian"), help="Output directory"
+    )
     parser.add_argument(
         "--device",
         type=str,
@@ -151,7 +155,9 @@ def main():
     volume_t = torch.as_tensor(volume_np, device=device)
 
     print("Setting up RDP prior...")
-    prior = prepare_prior(tuple(args.voxel_size), args.gamma, args.epsilon, args.stencil, args.both_directions)
+    prior = prepare_prior(
+        tuple(args.voxel_size), args.gamma, args.epsilon, args.stencil, args.both_directions
+    )
 
     print("Evaluating objective, gradient, and Hessian components...")
     val = prior._value_tensor(volume_t)

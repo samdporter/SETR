@@ -7,16 +7,13 @@ require_vtv()
 from setr.priors.vtv.common import fair_grad, fair_hessian_diag
 
 
-
 def _compute_diag(vtv, method, x_arr):
     if method == "svd_principal_alpha":
         return vtv._preconditioner_weights_core_slow(x_arr)
     if method == "mm_jensen":
         return vtv._preconditioner_weights_core_fast(x_arr, eta=1.0, epsilon=1e-12)
     if method == "frobenius_surrogate_pd":
-        return vtv._preconditioner_weights_core_fastest_positive(
-            x_arr, eta=1.0, epsilon=1e-12
-        )
+        return vtv._preconditioner_weights_core_fastest_positive(x_arr, eta=1.0, epsilon=1e-12)
     if method == "vector_tv_per_modality":
         return vtv._preconditioner_weights_core_fastest_exact(x_arr, epsilon=1e-12)
     raise ValueError(f"Unknown method: {method}")
@@ -48,9 +45,7 @@ def _expected_mm_jensen(vtv, J_field, S_field, weights):
     r = min(A.shape[-2], A.shape[-1])
     sigma_avg_sq = torch.sum(A * A, dim=(-2, -1)) / r
     sigma_avg = torch.sqrt(sigma_avg_sq + 1e-12)
-    omega = fair_grad(sigma_avg, torch.tensor(1.0, device=DEVICE)) / (
-        2.0 * sigma_avg + 1e-12
-    )
+    omega = fair_grad(sigma_avg, torch.tensor(1.0, device=DEVICE)) / (2.0 * sigma_avg + 1e-12)
 
     S = torch.as_tensor(S_field, device=DEVICE, dtype=A.dtype)
     participation = vtv._compute_directional_participation_counts(
@@ -112,9 +107,7 @@ def test_frobenius_surrogate_pd_matches_formula():
     x_arr = torch.zeros(1, 1, 1, 2, device=DEVICE)
 
     vtv = make_vtv_harness(J_field, S_field, weights, eps=1.0)
-    diag = vtv._preconditioner_weights_core_fastest_positive(
-        x_arr, eta=1.0, epsilon=1e-12
-    )
+    diag = vtv._preconditioner_weights_core_fastest_positive(x_arr, eta=1.0, epsilon=1e-12)
     expected = _expected_frobenius_surrogate_pd(vtv, J_field, S_field, weights)
 
     assert torch.allclose(diag, expected, rtol=1e-5, atol=1e-6)
