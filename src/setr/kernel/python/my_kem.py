@@ -88,7 +88,7 @@ class BaseKernelOperator(LinearOperator):
         n = self.parameters["num_neighbours"]
         K = n**3
         k = self.parameters["mask_k"] or K
-        arr = self.get_array(anatomical_image)
+        arr = get_array(self.anatomical_image)
         pad = n // 2
 
         arr_p = np.pad(arr, pad, mode="reflect")
@@ -148,75 +148,99 @@ class KernelOperator(BaseKernelOperator):
         distance_weighting,
         hybrid,
     ):
+        """Pure Python implementation using explicit loops (slow but correct)."""
         arr = get_array(image)
         x_arr = get_array(x)
         n = num_neighbours
-        pad = n // 2
-        K = n**3
+        half = n // 2
+        s0, s1, s2 = arr.shape
 
-        # build mask if requested
+        sig2_an = 2.0 * sigma_anat * sigma_anat
+        dist2_an = 2.0 * sigma_dist * sigma_dist
+        sig2_em = 2.0 * sigma_emission * sigma_emission
+
+        # Precompute distance weights
+        wd_an = np.ones((n, n, n), dtype=np.float64)
+        if distance_weighting:
+            for di in range(-half, half + 1):
+                for dj in range(-half, half + 1):
+                    for dk in range(-half, half + 1):
+                        d2 = di * di + dj * dj + dk * dk
+                        wd_an[di + half, dj + half, dk + half] = np.exp(-d2 / dist2_an)
+
+        # Precompute mask if needed
         if use_mask:
             if self.mask is None or recalc_mask:
                 self.mask = self.precompute_mask()
-            mask = self.mask  # shape (S0,S1,S2,K)
-
-        # reflect‐pad and neighbourhood views
-        arr_p = np.pad(arr, pad, mode="reflect")
-        x_p = np.pad(x_arr, pad, mode="reflect")
-        neigh = sliding_window_view(arr_p, (n, n, n))
-        x_neigh = sliding_window_view(x_p, (n, n, n))
-        S0, S1, S2, _, _, _ = neigh.shape
-
-        # anatomical spatial weighting
-        if distance_weighting:
-            coords = np.arange(-pad, pad + 1)
-            D2 = (
-                coords[:, None, None] ** 2 + coords[None, :, None] ** 2 + coords[None, None, :] ** 2
-            )
-            W_dist = np.exp(-D2 / (2 * sigma_dist**2))
+            mask = self.mask
         else:
-            W_dist = np.ones((n, n, n), dtype=np.float64)
+            mask = None
 
-        center_anat = arr[..., None, None, None]
-        W_int_anat = np.exp(-((neigh - center_anat) ** 2) / (2 * sigma_anat**2))
-        W = W_int_anat * W_dist
+        out = np.zeros_like(arr, dtype=np.float64)
 
-        # emission (α) weighting when hybrid=True
-        if hybrid:
-            if self.freeze_emission_kernel:
-                if self.frozen_emission_kernel is None:
-                    W_em = self._extracted_from_neighbourhood_kernel(x_arr, x_neigh, sigma_emission)
-                    self.frozen_emission_kernel = W_em
-                else:
-                    W_em = self.frozen_emission_kernel
-            else:
-                W_em = self._extracted_from_neighbourhood_kernel(x_arr, x_neigh, sigma_emission)
-            W *= W_em
+        for i in range(s0):
+            for j in range(s1):
+                for k in range(s2):
+                    ca = arr[i, j, k]
+                    cex = x_arr[i, j, k]
+                    sumv = 0.0
+                    wsum = 0.0
 
-        # apply mask
-        if use_mask:
-            W_flat = W.reshape(S0, S1, S2, K)
-            W_flat *= mask
-            W = W_flat.reshape(S0, S1, S2, n, n, n)
+                    if use_mask:
+                        idx = 0
 
-        # normalize kernel
-        if normalize_kernel:
-            denom = W.sum(axis=(3, 4, 5), keepdims=True)
-            W = W / (denom + 1e-12)
+                    for di in range(-half, half + 1):
+                        ii = i + di
+                        if ii < 0:
+                            ii = -ii - 1
+                        elif ii >= s0:
+                            ii = 2 * s0 - ii - 1
 
-        # convolution
-        res = (W * x_neigh).sum(axis=(3, 4, 5))
-        out = image.clone()
-        out.fill(res)
-        return out
+                        for dj in range(-half, half + 1):
+                            jj = j + dj
+                            if jj < 0:
+                                jj = -jj - 1
+                            elif jj >= s1:
+                                jj = 2 * s1 - jj - 1
 
-    # TODO Rename this here and in `neighbourhood_kernel`
-    def _extracted_from_neighbourhood_kernel(self, x_arr, x_neigh, sigma_emission):
-        center_em = x_arr[..., None, None, None]
-        return np.exp(-((x_neigh - center_em) ** 2) / (2 * sigma_emission**2))
+                            for dk in range(-half, half + 1):
+                                kk = k + dk
+                                if kk < 0:
+                                    kk = -kk - 1
+                                elif kk >= s2:
+                                    kk = 2 * s2 - kk - 1
+
+                                # Check mask
+                                if use_mask:
+                                    if not mask[i, j, k, idx]:
+                                        idx += 1
+                                        continue
+                                    idx += 1
+
+                                # Anatomical weight
+                                diff_an = arr[ii, jj, kk] - ca
+                                wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
+                                w = wi_an * wd_an[di + half, dj + half, dk + half]
+
+                                # Hybrid emission weight
+                                if hybrid:
+                                    diff_em = x_arr[ii, jj, kk] - cex
+                                    wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
+                                    w *= wi_em
+
+                                sumv += x_arr[ii, jj, kk] * w
+                                wsum += w
+
+                    if normalize_kernel and wsum > 1e-12:
+                        sumv /= wsum
+                    out[i, j, k] = sumv
+
+        result = image.clone()
+        result.fill(out)
+        return result
 
     def adjoint(self, x, out=None):
-        """Non-symmetric adjoint for Python backend using sliding windows"""
+        """Adjoint for Python backend using explicit loops (slow but correct)."""
         p = self.parameters
 
         # Only use non-symmetric adjoint when mask or hybrid is used
@@ -228,101 +252,86 @@ class KernelOperator(BaseKernelOperator):
             out.fill(get_array(res))
             return out
 
-        # Non-symmetric adjoint implementation with sliding windows
-        arr = self.get_array(anatomical_image)
+        # Non-symmetric adjoint implementation
+        arr = get_array(self.anatomical_image)
         x_arr = get_array(x)
         n = p["num_neighbours"]
-        pad = n // 2
-        K = n**3
-        S0, S1, S2 = arr.shape
+        half = n // 2
+        s0, s1, s2 = arr.shape
 
-        # Build mask if requested
+        sig2_an = 2.0 * p["sigma_anat"] * p["sigma_anat"]
+        dist2_an = 2.0 * p["sigma_dist"] * p["sigma_dist"]
+        sig2_em = 2.0 * p["sigma_emission"] * p["sigma_emission"]
+
+        # Precompute distance weights
+        wd_an = np.ones((n, n, n), dtype=np.float64)
+        if p["distance_weighting"]:
+            for di in range(-half, half + 1):
+                for dj in range(-half, half + 1):
+                    for dk in range(-half, half + 1):
+                        d2 = di * di + dj * dj + dk * dk
+                        wd_an[di + half, dj + half, dk + half] = np.exp(-d2 / dist2_an)
+
+        # Precompute mask if needed
         if p["use_mask"]:
             if self.mask is None or p["recalc_mask"]:
                 self.mask = self.precompute_mask()
-            mask = self.mask  # shape (S0,S1,S2,K)
-
-        # Prepare distance weights if needed
-        if p["distance_weighting"]:
-            coords = np.arange(-pad, pad + 1)
-            D2 = (
-                coords[:, None, None] ** 2 + coords[None, :, None] ** 2 + coords[None, None, :] ** 2
-            )
-            W_dist = np.exp(-D2 / (2 * p["sigma_dist"] ** 2))
+            mask = self.mask
         else:
-            W_dist = np.ones((n, n, n), dtype=np.float64)
+            mask = None
 
-        # Reflect-pad arrays for boundary handling
-        arr_p = np.pad(arr, pad, mode="reflect")
-        x_p = np.pad(x_arr, pad, mode="reflect")
+        result = np.zeros((s0, s1, s2), dtype=np.float64)
 
-        # Get neighborhood views
-        neigh = sliding_window_view(arr_p, (n, n, n))  # (S0,S1,S2,n,n,n)
-        x_neigh = sliding_window_view(x_p, (n, n, n))  # (S0,S1,S2,n,n,n)
+        for i in range(s0):
+            for j in range(s1):
+                for k in range(s2):
+                    cv = arr[i, j, k]
+                    val = x_arr[i, j, k]
 
-        # Compute all weights at once (similar to forward pass)
-        center_anat = arr[..., None, None, None]  # (S0,S1,S2,1,1,1)
-        W_int_anat = np.exp(-((neigh - center_anat) ** 2) / (2 * p["sigma_anat"] ** 2))
-        W = W_int_anat * W_dist  # (S0,S1,S2,n,n,n)
+                    if p["use_mask"]:
+                        idx = 0
 
-        # Apply emission weighting if hybrid
-        if p["hybrid"]:
-            center_em = x_arr[..., None, None, None]  # (S0,S1,S2,1,1,1)
-            W_int_em = np.exp(-((x_neigh - center_em) ** 2) / (2 * p["sigma_emission"] ** 2))
-            W *= W_int_em
+                    for di in range(-half, half + 1):
+                        ii = i + di
+                        if ii < 0:
+                            ii = -ii - 1
+                        elif ii >= s0:
+                            ii = 2 * s0 - ii - 1
 
-        # Apply mask if needed
-        if p["use_mask"]:
-            W_flat = W.reshape(S0, S1, S2, K)
-            W_flat *= mask
-            W = W_flat.reshape(S0, S1, S2, n, n, n)
+                        for dj in range(-half, half + 1):
+                            jj = j + dj
+                            if jj < 0:
+                                jj = -jj - 1
+                            elif jj >= s1:
+                                jj = 2 * s1 - jj - 1
 
-        # IMPORTANT: No normalization for adjoint
+                            for dk in range(-half, half + 1):
+                                kk = k + dk
+                                if kk < 0:
+                                    kk = -kk - 1
+                                elif kk >= s2:
+                                    kk = 2 * s2 - kk - 1
 
-        # Initialize output
-        result = np.zeros((S0, S1, S2), dtype=np.float64)
+                                # Check mask
+                                do_weight = True
+                                if p["use_mask"]:
+                                    do_weight = mask[i, j, k, idx]
+                                    idx += 1
 
-        # Vectorized scatter using advanced indexing
-        # For each neighbor offset, accumulate contributions
-        for di in range(-pad, pad + 1):
-            for dj in range(-pad, pad + 1):
-                for dk in range(-pad, pad + 1):
-                    # Weight index in the neighborhood
-                    wi, wj, wk = di + pad, dj + pad, dk + pad
+                                if do_weight:
+                                    # Anatomical weight
+                                    diff_an = arr[ii, jj, kk] - cv
+                                    wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
+                                    w = wi_an * wd_an[di + half, dj + half, dk + half]
 
-                    # Source indices (where values come from)
-                    src_i = np.arange(S0)[:, None, None]
-                    src_j = np.arange(S1)[None, :, None]
-                    src_k = np.arange(S2)[None, None, :]
+                                    # Hybrid emission weight
+                                    if p["hybrid"]:
+                                        diff_em = x_arr[ii, jj, kk] - x_arr[i, j, k]
+                                        wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
+                                        w *= wi_em
 
-                    # Target indices (where values go to) with reflection
-                    tgt_i = src_i + di
-                    tgt_j = src_j + dj
-                    tgt_k = src_k + dk
+                                    result[ii, jj, kk] += val * w
 
-                    # Handle boundary reflections
-                    # Reflect at boundaries (matching Numba's reflection logic)
-                    tgt_i = np.where(tgt_i < 0, -tgt_i - 1, tgt_i)
-                    tgt_i = np.where(tgt_i >= S0, 2 * S0 - tgt_i - 1, tgt_i)
-                    tgt_j = np.where(tgt_j < 0, -tgt_j - 1, tgt_j)
-                    tgt_j = np.where(tgt_j >= S1, 2 * S1 - tgt_j - 1, tgt_j)
-                    tgt_k = np.where(tgt_k < 0, -tgt_k - 1, tgt_k)
-                    tgt_k = np.where(tgt_k >= S2, 2 * S2 - tgt_k - 1, tgt_k)
-
-                    # Get the weights for this offset
-                    w_offset = W[:, :, :, wi, wj, wk]
-
-                    # Weighted values to scatter
-                    weighted = x_arr * w_offset
-
-                    # Accumulate using np.add.at (handles repeated indices correctly)
-                    np.add.at(
-                        result,
-                        (tgt_i.ravel(), tgt_j.ravel(), tgt_k.ravel()),
-                        weighted.ravel(),
-                    )
-
-        # Create output image
         img = x.clone()
         img.fill(result)
 
@@ -407,7 +416,7 @@ if NUMBA_AVAIL:
             return out
 
         def adjoint(self, x, out=None):
-            arr = self.get_array(anatomical_image)
+            arr = get_array(self.anatomical_image)
             x_arr = get_array(x)
             p = self.parameters
 
@@ -480,48 +489,49 @@ def _nb_kernel(
     out = np.empty_like(anat_arr, dtype=np.float64)
 
     for i in numba.prange(s0):
-        for j, k in itertools.product(range(s1), range(s2)):
-            ca = anat_arr[i, j, k]
-            cex = x_arr[i, j, k]
-            sumv = 0.0
-            wsum = 0.0
+        for j in range(s1):
+            for k in range(s2):
+                ca = anat_arr[i, j, k]
+                cex = x_arr[i, j, k]
+                sumv = 0.0
+                wsum = 0.0
 
-            for di in range(-half, half + 1):
-                ii = i + di
-                if ii < 0:
-                    ii = -ii - 1
-                elif ii >= s0:
-                    ii = 2 * s0 - ii - 1
-                for dj in range(-half, half + 1):
-                    jj = j + dj
-                    if jj < 0:
-                        jj = -jj - 1
-                    elif jj >= s1:
-                        jj = 2 * s1 - jj - 1
-                    for dk in range(-half, half + 1):
-                        kk = k + dk
-                        if kk < 0:
-                            kk = -kk - 1
-                        elif kk >= s2:
-                            kk = 2 * s2 - kk - 1
+                for di in range(-half, half + 1):
+                    ii = i + di
+                    if ii < 0:
+                        ii = -ii - 1
+                    elif ii >= s0:
+                        ii = 2 * s0 - ii - 1
+                    for dj in range(-half, half + 1):
+                        jj = j + dj
+                        if jj < 0:
+                            jj = -jj - 1
+                        elif jj >= s1:
+                            jj = 2 * s1 - jj - 1
+                        for dk in range(-half, half + 1):
+                            kk = k + dk
+                            if kk < 0:
+                                kk = -kk - 1
+                            elif kk >= s2:
+                                kk = 2 * s2 - kk - 1
 
-                        # anat weight
-                        diff_an = anat_arr[ii, jj, kk] - ca
-                        wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
-                        w = wi_an * wd_an[di + half, dj + half, dk + half]
+                            # anat weight
+                            diff_an = anat_arr[ii, jj, kk] - ca
+                            wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
+                            w = wi_an * wd_an[di + half, dj + half, dk + half]
 
-                        # hybrid emission
-                        if hybrid:
-                            diff_em = x_arr[ii, jj, kk] - cex
-                            wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
-                            w *= wi_em
+                            # hybrid emission
+                            if hybrid:
+                                diff_em = x_arr[ii, jj, kk] - cex
+                                wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
+                                w *= wi_em
 
-                        sumv += x_arr[ii, jj, kk] * w
-                        wsum += w
+                            sumv += x_arr[ii, jj, kk] * w
+                            wsum += w
 
-            if normalize and wsum > 1e-12:
-                sumv /= wsum
-            out[i, j, k] = sumv
+                if normalize and wsum > 1e-12:
+                    sumv /= wsum
+                out[i, j, k] = sumv
 
     return out
 
@@ -556,51 +566,52 @@ def _nb_kernel_mask(
     out = np.empty_like(anat_arr, dtype=np.float64)
 
     for i in numba.prange(s0):
-        for j, k in itertools.product(range(s1), range(s2)):
-            ca = anat_arr[i, j, k]
-            cex = x_arr[i, j, k]
-            sumv = 0.0
-            wsum = 0.0
-            idx = 0
+        for j in range(s1):
+            for k in range(s2):
+                ca = anat_arr[i, j, k]
+                cex = x_arr[i, j, k]
+                sumv = 0.0
+                wsum = 0.0
+                idx = 0
 
-            for di in range(-half, half + 1):
-                for dj in range(-half, half + 1):
-                    for dk in range(-half, half + 1):
-                        if mask[i, j, k, idx]:
-                            ii = i + di
-                            if ii < 0:
-                                ii = -ii - 1
-                            elif ii >= s0:
-                                ii = 2 * s0 - ii - 1
-                            jj = j + dj
-                            if jj < 0:
-                                jj = -jj - 1
-                            elif jj >= s1:
-                                jj = 2 * s1 - jj - 1
-                            kk = k + dk
-                            if kk < 0:
-                                kk = -kk - 1
-                            elif kk >= s2:
-                                kk = 2 * s2 - kk - 1
+                for di in range(-half, half + 1):
+                    for dj in range(-half, half + 1):
+                        for dk in range(-half, half + 1):
+                            if mask[i, j, k, idx]:
+                                ii = i + di
+                                if ii < 0:
+                                    ii = -ii - 1
+                                elif ii >= s0:
+                                    ii = 2 * s0 - ii - 1
+                                jj = j + dj
+                                if jj < 0:
+                                    jj = -jj - 1
+                                elif jj >= s1:
+                                    jj = 2 * s1 - jj - 1
+                                kk = k + dk
+                                if kk < 0:
+                                    kk = -kk - 1
+                                elif kk >= s2:
+                                    kk = 2 * s2 - kk - 1
 
-                            # anat weight
-                            diff_an = anat_arr[ii, jj, kk] - ca
-                            wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
-                            w = wi_an * wd_an[di + half, dj + half, dk + half]
+                                # anat weight
+                                diff_an = anat_arr[ii, jj, kk] - ca
+                                wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
+                                w = wi_an * wd_an[di + half, dj + half, dk + half]
 
-                            # hybrid emission
-                            if hybrid:
-                                diff_em = x_arr[ii, jj, kk] - cex
-                                wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
-                                w *= wi_em
+                                # hybrid emission
+                                if hybrid:
+                                    diff_em = x_arr[ii, jj, kk] - cex
+                                    wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
+                                    w *= wi_em
 
-                            sumv += x_arr[ii, jj, kk] * w
-                            wsum += w
-                        idx += 1
+                                sumv += x_arr[ii, jj, kk] * w
+                                wsum += w
+                            idx += 1
 
-            if normalize and wsum > 1e-12:
-                sumv /= wsum
-            out[i, j, k] = sumv
+                if normalize and wsum > 1e-12:
+                    sumv /= wsum
+                out[i, j, k] = sumv
 
     return out
 
@@ -635,41 +646,43 @@ def _nb_adjoint(
     out = np.zeros_like(anat_arr, dtype=np.float64)
 
     for i in numba.prange(s0):
-        for j, k in itertools.product(range(s1), range(s2)):
-            cv = anat_arr[i, j, k]
-            val = x_arr[i, j, k]
-            idx = 0
+        for j in range(s1):
+            for k in range(s2):
+                cv = anat_arr[i, j, k]
+                val = x_arr[i, j, k]
+                idx = 0
 
-            for di in range(-half, half + 1):
-                ii = i + di
-                if ii < 0:
-                    ii = -ii - 1
-                elif ii >= s0:
-                    ii = 2 * s0 - ii - 1
-                for dj in range(-half, half + 1):
-                    jj = j + dj
-                    if jj < 0:
-                        jj = -jj - 1
-                    elif jj >= s1:
-                        jj = 2 * s1 - jj - 1
-                    for dk in range(-half, half + 1):
-                        kk = k + dk
-                        if kk < 0:
-                            kk = -kk - 1
-                        elif kk >= s2:
-                            kk = 2 * s2 - kk - 1
+                for di in range(-half, half + 1):
+                    ii = i + di
+                    if ii < 0:
+                        ii = -ii - 1
+                    elif ii >= s0:
+                        ii = 2 * s0 - ii - 1
+                    for dj in range(-half, half + 1):
+                        jj = j + dj
+                        if jj < 0:
+                            jj = -jj - 1
+                        elif jj >= s1:
+                            jj = 2 * s1 - jj - 1
+                        for dk in range(-half, half + 1):
+                            kk = k + dk
+                            if kk < 0:
+                                kk = -kk - 1
+                            elif kk >= s2:
+                                kk = 2 * s2 - kk - 1
 
-                        if do_weight := (not use_mask) or mask[i, j, k, idx]:
-                            diff_an = anat_arr[ii, jj, kk] - cv
-                            wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
-                            w = wi_an * wd_an[di + half, dj + half, dk + half]
+                            do_weight = (not use_mask) or mask[i, j, k, idx]
+                            if do_weight:
+                                diff_an = anat_arr[ii, jj, kk] - cv
+                                wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
+                                w = wi_an * wd_an[di + half, dj + half, dk + half]
 
-                            if hybrid:
-                                diff_em = x_arr[ii, jj, kk] - x_arr[i, j, k]
-                                wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
-                                w *= wi_em
+                                if hybrid:
+                                    diff_em = x_arr[ii, jj, kk] - x_arr[i, j, k]
+                                    wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
+                                    w *= wi_em
 
-                            out[ii, jj, kk] += val * w
-                        idx += 1
+                                out[ii, jj, kk] += val * w
+                            idx += 1
 
     return out
