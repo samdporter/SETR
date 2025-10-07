@@ -9,6 +9,7 @@ Tests different combinations of:
 """
 
 import logging
+import math
 import os
 from types import SimpleNamespace
 
@@ -455,16 +456,24 @@ def main(args) -> None:
             attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
 
+    # Set up probabilities and SVRG function based on prior mode
+    data_probs, prior_prob = get_probabilities_for_mode(subset_mode, prior_mode, len(all_funs))
+
+    base_epoch_length = len(all_funs)
+    epoch_length = base_epoch_length
+
+    if prior_mode == "subset":
+        # Expected number of iterations required for each data subset to be
+        # visited once when the prior is sampled with probability prior_prob.
+        epoch_length = math.ceil(base_epoch_length / (1.0 - prior_prob))
+
     ui = getattr(args, "update_interval", None)
-    update_interval = len(all_funs) if ui is None else ui
+    update_interval = ui if ui is not None else epoch_length
 
     # Set up preconditioner
     precond = get_preconditioner(
         args, s_inv, all_funs, update_interval, priors_list, initial_estimates
     )
-
-    # Set up probabilities and SVRG function based on prior mode
-    data_probs, prior_prob = get_probabilities_for_mode(subset_mode, prior_mode, len(all_funs))
 
     if prior_mode == "always":
         # Prior in outer SumFunction
@@ -472,7 +481,7 @@ def main(args) -> None:
         f_obj = SVRGFunction(
             all_funs,
             sampler=Sampler.random_with_replacement(len(all_funs), prob=data_probs),
-            snapshot_update_interval=len(all_funs) * 2,
+            snapshot_update_interval=epoch_length * 2,
             store_gradients=True,
         )
         objective = -SumFunction(f_obj, prior) if prior else -f_obj
@@ -486,6 +495,9 @@ def main(args) -> None:
         all_funs_with_prior = all_funs + [prior]
         probs_with_prior = data_probs + [prior_prob]
 
+        # epoch_length already accounts for the additional iterations needed
+        # when the prior is sampled; reuse it for logging and snapshot cadence.
+
         logging.info(
             f"Total functions: {len(all_funs_with_prior)} ({len(all_funs)} data + 1 prior)"
         )
@@ -497,7 +509,7 @@ def main(args) -> None:
             sampler=Sampler.random_with_replacement(
                 len(all_funs_with_prior), prob=probs_with_prior
             ),
-            snapshot_update_interval=len(all_funs) * 2,
+            snapshot_update_interval=epoch_length * 2,
             store_gradients=True,
         )
         objective = -f_obj
@@ -566,7 +578,7 @@ def main(args) -> None:
             logging.warning("Continuing without metrics computation")
 
     # Run algorithm
-    subiterations = args.num_epochs * len(all_funs)
+    subiterations = args.num_epochs * epoch_length
     algo = get_algorithm(
         initial_estimates,
         objective,
