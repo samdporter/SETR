@@ -9,7 +9,7 @@ import time
 
 import torch
 
-from setr.core.gradients import Gradient, GradientOptimized, Jacobian
+from setr.core.gradients import GradientOptimized, Jacobian, LegacyGradient
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}\n")
@@ -110,21 +110,17 @@ for bnd_cond, stencil, both_dir in itertools.product(
     if both_dir:
         n_dirs *= 2
 
-    if bnd_cond == "Neumann" and n_dirs > 6:
-        # Skip Neumann with large stencils for now
-        continue
-
     config = f"{bnd_cond:8s} stencil={stencil:2s} both_dir={str(both_dir):5s}"
 
-    # Test Gradient
-    grad = Gradient(
+    # Test Legacy baseline
+    grad = LegacyGradient(
         voxel_sizes=(2.0, 2.0, 2.5),
         stencil=stencil,
         bnd_cond=bnd_cond,
         both_directions=both_dir,
         normalize=True,
     )
-    err_grad, status_grad = test_adjoint(grad, "Gradient")
+    err_grad, status_grad = test_adjoint(grad, "LegacyGradient")
 
     # Test GradientOptimized
     grad_opt = GradientOptimized(
@@ -141,7 +137,7 @@ for bnd_cond, stencil, both_dir in itertools.product(
     match_str = "✓" if match else "✗"
 
     print(
-        f"{config}  Grad:{status_grad}({err_grad:.1e})  Opt:{status_opt}({err_opt:.1e})  Match:{match_str}"
+        f"{config}  Legacy:{status_grad}({err_grad:.1e})  Opt:{status_opt}({err_opt:.1e})  Match:{match_str}"
     )
 
     if err_grad >= 1e-5 or err_opt >= 1e-5 or not match:
@@ -198,23 +194,23 @@ benchmark_configs = [
     ("Periodic", "18", False),
     ("Periodic", "26", False),
     ("Neumann", "6", False),
-    # ("Neumann", "18", False),
-    # ("Neumann", "26", False),
+    ("Neumann", "18", False),
+    ("Neumann", "26", False),
     ("Periodic", "6", True),
     ("Periodic", "18", True),
     ("Periodic", "26", True),
     ("Neumann", "6", True),
-    # ("Neumann", "18", True),
-    # ("Neumann", "26", True),
+    ("Neumann", "18", True),
+    ("Neumann", "26", True),
 ]
 
-print(f"{'Config':<30s}  {'Gradient':>12s}  {'Optimized':>12s}  {'Speedup':>8s}")
+print(f"{'Config':<30s}  {'Legacy':>12s}  {'Optimized':>12s}  {'Speedup':>8s}")
 print("-" * 80)
 
 for bnd_cond, stencil, both_dir in benchmark_configs:
     config = f"{bnd_cond} stencil={stencil}, both_dirs={both_dir}"
 
-    grad = Gradient(
+    grad = LegacyGradient(
         voxel_sizes=(2.0, 2.0, 2.5),
         stencil=stencil,
         bnd_cond=bnd_cond,
@@ -244,7 +240,7 @@ print("=" * 80)
 if all_pass:
     print("✓ All adjoint tests PASSED")
     print("\nRecommendations:")
-    print("  - Both Gradient and GradientOptimized are mathematically correct")
+    print("  - Both LegacyGradient and GradientOptimized are mathematically correct")
     print("  - Neumann boundaries are now fixed with proper adjoints")
     print("  - Use GradientOptimized for modest speedup with larger stencils (~10-20%)")
     print("  - Periodic and Neumann both work correctly")

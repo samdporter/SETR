@@ -47,6 +47,69 @@ from setr.core.gradients import DirectionalGradient, Gradient, Jacobian, Sum
 from setr.utils import BlockDataContainerToArray
 from setr.utils.sirf import get_array
 
+
+def _edge_slices(shape: torch.Size, direction: tuple[int, int, int]) -> tuple[tuple[slice, ...], tuple[slice, ...]]:
+    """Return source/sink slice tuples for a given direction (last dims are spatial)."""
+
+    ndims = len(shape)
+    spatial = len(direction)
+    offset = ndims - spatial
+
+    src = [slice(None)] * ndims
+    sink = [slice(None)] * ndims
+
+    for idx, delta_raw in enumerate(direction):
+        dim = offset + idx
+        size = shape[dim]
+        delta = int(delta_raw)
+
+        if delta > 0:
+            src[dim] = slice(0, size - delta)
+            sink[dim] = slice(delta, size)
+        elif delta < 0:
+            src[dim] = slice(-delta, size)
+            sink[dim] = slice(0, size + delta)
+        else:
+            src[dim] = slice(0, size)
+            sink[dim] = slice(0, size)
+
+    return tuple(src), tuple(sink)
+
+
+def _scatter_sum_adjoint(edges: torch.Tensor, directions: list[tuple[int, int, int]]) -> torch.Tensor:
+    """Scatter Σ-edge quantities to voxel grid (both endpoints) without boundary duplication."""
+
+    out = torch.zeros_like(edges[..., 0])
+    for ch, direction in enumerate(directions):
+        edge = edges[..., ch]
+        if edge.numel() == 0:
+            continue
+        src_slice, sink_slice = _edge_slices(edge.shape, direction)
+        out[src_slice] = out[src_slice] + edge[src_slice]
+        if any(direction):
+            out[sink_slice] = out[sink_slice] + edge[src_slice]
+        else:
+            out[src_slice] = out[src_slice] + edge[src_slice]
+    return out
+
+
+def _scatter_diag(plus: torch.Tensor, minus: torch.Tensor, directions: list[tuple[int, int, int]]) -> torch.Tensor:
+    """Assemble diagonal contributions for Σ/Δ edges using per-endpoint weights."""
+
+    diag = torch.zeros_like(plus[..., 0])
+    for ch, direction in enumerate(directions):
+        edge_plus = plus[..., ch]
+        edge_minus = minus[..., ch]
+        if edge_plus.numel() == 0:
+            continue
+        src_slice, sink_slice = _edge_slices(edge_plus.shape, direction)
+        diag[src_slice] = diag[src_slice] + edge_minus[src_slice]
+        if any(direction):
+            diag[sink_slice] = diag[sink_slice] + edge_plus[src_slice]
+        else:
+            diag[src_slice] = diag[src_slice] + edge_plus[src_slice]
+    return diag
+
 # -------------------------------------------------------------------------
 # Device / dtype helpers
 # -------------------------------------------------------------------------
@@ -170,7 +233,8 @@ class RelativeDifferencePrior(Function):
         dφ_dΔ, dφ_dΣ, _, _, _ = self._partials_phi(Δ_t, D_t, self.gamma)
         cG = self.edge_factor * dφ_dΔ
         cS = self.edge_factor * dφ_dΣ
-        return -(self.gradient_op.adjoint(cG) + self.sum_op.adjoint(cS))
+        sum_adj = _scatter_sum_adjoint(cS, self.gradient_op.directions)
+        return -(self.gradient_op.adjoint(cG) + sum_adj)
 
     def _hess_vec_tensor(self, x_t: torch.Tensor, v_t: torch.Tensor) -> torch.Tensor:
         Δ_t, _, D_t = self._edges(x_t)
@@ -182,20 +246,16 @@ class RelativeDifferencePrior(Function):
         φ_ss *= self.edge_factor
         y_edges = φ_dd * Gv + φ_ds * Sv
         z_edges = φ_ds * Gv + φ_ss * Sv
-        return -(self.gradient_op.adjoint(y_edges) + self.sum_op.adjoint(z_edges))
+        sum_adj = _scatter_sum_adjoint(z_edges, self.gradient_op.directions)
+        return -(self.gradient_op.adjoint(y_edges) + sum_adj)
 
     def _hess_diag_tensor(self, x_t: torch.Tensor) -> torch.Tensor:
         Δ_t, _, D_t = self._edges(x_t)
         _, _, φ_dd, φ_ds, φ_ss = self._partials_phi(Δ_t, D_t, self.gamma)
         # per-edge endpoint contributions (forward orientation)
-        plus = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)  # source j
-        minus = -self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)  # sink   k
-        # Scatter distinct src/sink values via combination of Dᵀ and Sᵀ:
-        # For arrays s,t on edges: Dᵀ s + Sᵀ t gives (src: s+t, sink: -s+t).
-        # Choose s=(plus-minus)/2, t=(plus+minus)/2 to realise (src: plus, sink: minus).
-        s = 0.5 * (plus - minus)
-        t = 0.5 * (plus + minus)
-        return self.gradient_op.adjoint(s) + self.sum_op.adjoint(t)
+        plus = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)  # contributes to sink
+        minus = -self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)  # contributes to source
+        return _scatter_diag(plus, minus, self.gradient_op.directions)
 
     # ============================ PUBLIC API ============================
     def __call__(self, x) -> float:
@@ -350,8 +410,9 @@ class WeightedRDP(Function):
         # E_t: (..., M, d)
         M = E_t.shape[-2]
         outs = []
-        outs.extend(self.sum_op.adjoint(E_t[..., m, :]) for m in range(M))
-        return torch.stack(outs, dim=-1)  # (..., M)
+        for m in range(M):
+            outs.append(_scatter_sum_adjoint(E_t[..., m, :], self.sum_op.directions))
+        return torch.stack(outs, dim=-1)
 
     # ========================== CORE TENSOR METHODS ==========================
     def _edges(self, X_t: torch.Tensor):
@@ -388,7 +449,7 @@ class WeightedRDP(Function):
         cS = self.edge_factor * dφ_dΣ  # (..., M, d)
         # adjoints:
         Jt = torch.as_tensor(self.jacobian.adjoint(cJ), device=_DEVICE, dtype=_DTYPE)  # (..., M)
-        St = self._sum_adjoint_multi(cS)  # (..., M)
+        St = self._sum_adjoint_multi(cS)
         return -(Jt + St)
 
     def _hess_vec_tensor(self, X_t: torch.Tensor, V_t: torch.Tensor) -> torch.Tensor:
@@ -417,16 +478,19 @@ class WeightedRDP(Function):
         plus = -self.edge_factor * (φ_dd + φ_ss + 2.0 * φ_ds)
         minus = -self.edge_factor * (φ_dd + φ_ss - 2.0 * φ_ds)
 
-        # Scatter distinct src/sink adds via combination of Jᵀ and Sᵀ:
-        s = 0.5 * (plus - minus)  # for Jᵀ (difference)
-        t = 0.5 * (plus + minus)  # for Sᵀ (sum)
+        s = 0.5 * (plus - minus)
+        t = 0.5 * (plus + minus)
 
-        # Jᵀ needs the same per-edge weighting factor w as in the gradient path
         diag_J = torch.as_tensor(
             self.jacobian.adjoint(w.unsqueeze(-1) * s), device=_DEVICE, dtype=_DTYPE
-        )  # (..., M)
-        diag_S = self._sum_adjoint_multi(t)  # (..., M)
-        return diag_J + diag_S
+        )
+
+        diag_S = [
+            _scatter_sum_adjoint(t[..., m, :], self.sum_op.directions)
+            for m in range(t.shape[-2])
+        ]
+        diag_S_t = torch.stack(diag_S, dim=-1)
+        return diag_J + diag_S_t
 
     # ============================ PUBLIC API ============================
     def __call__(self, x) -> float:

@@ -176,6 +176,41 @@ def create_synthetic_3d_data(shape=(64, 64, 32), voxel_size=(2.0, 2.0, 3.0)):
     }
 
 
+def visualize_inputs(test_data, output_dir: Path, cmap="magma"):
+    """Save a quick-look figure summarising synthetic input modalities."""
+
+    containers = test_data["data"].containers
+    n_modalities = len(containers)
+    views = ("Axial", "Coronal", "Sagittal")
+
+    fig, axes = plt.subplots(n_modalities, len(views), figsize=(4 * len(views), 4 * n_modalities))
+    axes = np.atleast_2d(axes)
+
+    for mod_idx, img in enumerate(containers):
+        arr = img.as_array()  # (z, y, x)
+        nz, ny, nx = arr.shape
+        slices = (
+            arr[nz // 2, :, :],
+            arr[:, ny // 2, :],
+            arr[:, :, nx // 2],
+        )
+
+        for view_idx, sl in enumerate(slices):
+            ax = axes[mod_idx, view_idx]
+            im = ax.imshow(sl, cmap=cmap, origin="lower")
+            ax.set_title(f"Modality {mod_idx + 1} - {views[view_idx]}", fontsize=10)
+            ax.axis("off")
+            plt.colorbar(im, ax=ax, fraction=0.046)
+
+    plt.suptitle("Synthetic Input Modalities", fontsize=14, y=0.98)
+    plt.tight_layout()
+
+    output_path = output_dir / "synthetic_inputs.png"
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Input visualization saved to: {output_path}")
+
+
 def test_preconditioner_methods(
     test_data,
     delta=1e-2,
@@ -539,6 +574,9 @@ def main():
         debug=args.debug_slow,
         debug_dir=output_dir,
     )
+
+    # Visualise the input modalities for reference
+    visualize_inputs(test_data, output_dir)
 
     # Save results
     results_file = output_dir / "results.csv"

@@ -172,54 +172,51 @@ class Jacobian:
 
 
 def _shift_neumann_symmetric(x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
+    """Shift using zero-flux (symmetric) Neumann boundaries.
+
+    Each axis is clamped independently, which mirrors the last valid sample to
+    the out-of-domain location. This works for axis-aligned and diagonal
+    stencil directions alike.
     """
-    Shift with Neumann (symmetric) boundary conditions for proper adjoint.
+    deltas = tuple(int(v) for v in sh)
+    assert all(abs(d) <= 1 for d in deltas), "Only ±1 shifts supported"
 
-    Uses symmetric extension: at right boundary x[N] = x[N-1], which makes
-    forward difference zero: (x[N] - x[N-1]) = (x[N-1] - x[N-1]) = 0
+    result = x
+    for dim, delta in enumerate(deltas):
+        if delta == 0:
+            continue
+        size = result.shape[dim]
+        if size == 0:
+            continue
+        idx = torch.arange(size, device=result.device, dtype=torch.long)
+        if delta > 0:
+            src = torch.clamp(idx + delta, max=size - 1)
+        else:
+            src = torch.clamp(idx + delta, min=0)
+        result = torch.index_select(result, dim, src)
+    return result
 
-    This is mathematically correct for zero-flux Neumann boundaries and has
-    a proper adjoint, unlike the old replicate-pad approach.
-    """
-    dx, dy, dz = map(int, sh)
 
-    # Only handle single-step shifts (stencils use ±1)
-    assert abs(dx) <= 1 and abs(dy) <= 1 and abs(dz) <= 1, "Only ±1 shifts supported"
+def _shift_neumann_adjoint(x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
+    """Adjoint of `_shift_neumann_symmetric` for zero-flux boundaries."""
+    deltas = tuple(int(v) for v in sh)
+    assert all(abs(d) <= 1 for d in deltas), "Only ±1 shifts supported"
 
-    # Build slices for shifted interior and boundaries
-    # For diagonal directions, we apply all shifts together, then handle boundaries
-    src_slices = []
-    dst_slices = []
-    boundary_info = []  # (dim_idx, boundary_slice) for each dimension with a shift
-
-    for dim_idx, delta in enumerate([dx, dy, dz]):
-        if delta == 1:
-            src_slices.append(slice(1, None))
-            dst_slices.append(slice(None, -1))
-            boundary_info.append((dim_idx, slice(-1, None)))
-        elif delta == -1:
-            src_slices.append(slice(None, -1))
-            dst_slices.append(slice(1, None))
-            boundary_info.append((dim_idx, slice(0, 1)))
-        else:  # delta == 0
-            src_slices.append(slice(None))
-            dst_slices.append(slice(None))
-
-    result = x.clone()
-
-    # Copy the shifted interior
-    result[dst_slices[0], dst_slices[1], dst_slices[2]] = x[
-        src_slices[0], src_slices[1], src_slices[2]
-    ]
-
-    # Handle boundaries: set boundary voxels to original values (symmetric extension)
-    for dim_idx, boundary_slice in boundary_info:
-        full_slice = [slice(None), slice(None), slice(None)]
-        full_slice[dim_idx] = boundary_slice
-        result[full_slice[0], full_slice[1], full_slice[2]] = x[
-            full_slice[0], full_slice[1], full_slice[2]
-        ]
-
+    result = x
+    for dim, delta in reversed(list(enumerate(deltas))):
+        if delta == 0:
+            continue
+        size = result.shape[dim]
+        if size == 0:
+            continue
+        idx = torch.arange(size, device=result.device, dtype=torch.long)
+        if delta > 0:
+            src = torch.clamp(idx + delta, max=size - 1)
+        else:
+            src = torch.clamp(idx + delta, min=0)
+        tmp = torch.zeros_like(result)
+        tmp.index_add_(dim, src, result)
+        result = tmp
     return result
 
 
@@ -243,7 +240,7 @@ def _stencil_halfspace(stencil: str):
     return dirs
 
 
-class Gradient:
+class _GradientLegacy:
     def __init__(
         self,
         voxel_sizes,
@@ -264,13 +261,6 @@ class Gradient:
             half + [(-dx, -dy, -dz) for dx, dy, dz in half] if both_directions else half
         )
 
-        # WARNING: Neumann boundaries only work correctly for stencil=6
-        if bnd_cond == "Neumann" and stencil != "6":
-            raise ValueError(
-                f"Neumann boundary conditions only work correctly with stencil=6 (axis-aligned). "
-                f"Got stencil={stencil}. Use Periodic boundaries or stencil='6'."
-            )
-
         steps = []
         for dx, dy, dz in self.directions:
             sx, sy, sz = abs(dx) * self.vx, abs(dy) * self.vy, abs(dz) * self.vz
@@ -286,6 +276,15 @@ class Gradient:
         else:
             raise ValueError("Unsupported boundary condition")
 
+    def _shift_adjoint(self, x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
+        if self.bnd_cond == "Periodic":
+            inv = (-sh[0], -sh[1], -sh[2])
+            return torch.roll(x, shifts=inv, dims=(0, 1, 2))
+        elif self.bnd_cond == "Neumann":
+            return _shift_neumann_adjoint(x, sh)
+        else:
+            raise ValueError("Unsupported boundary condition")
+
     def _diff_fwd(self, x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
         return self._shift(x, sh) - x
 
@@ -296,31 +295,8 @@ class Gradient:
     def direct(self, x):
         X = _to_tensor(x, like_dtype=torch.float32, device=device)
 
-        if self.bnd_cond == "Neumann":
-            # WARNING: Only works correctly for stencil=6 (axis-aligned directions)
-            # Diagonal directions (stencil 18/26) have known adjoint issues
-            n_dirs = len(self.directions)
-            Y = torch.zeros((*X.shape, n_dirs), dtype=X.dtype, device=X.device)
-
-            for i, (dx, dy, dz) in enumerate(self.directions):
-                if dx == 1:
-                    Y[:-1, :, :, i] = X[1:, :, :] - X[:-1, :, :]
-                elif dx == -1:
-                    Y[1:, :, :, i] = X[:-1, :, :] - X[1:, :, :]
-
-                if dy == 1:
-                    Y[:, :-1, :, i] = X[:, 1:, :] - X[:, :-1, :]
-                elif dy == -1:
-                    Y[:, 1:, :, i] = X[:, :-1, :] - X[:, 1:, :]
-
-                if dz == 1:
-                    Y[:, :, :-1, i] = X[:, :, 1:] - X[:, :, :-1]
-                elif dz == -1:
-                    Y[:, :, 1:, i] = X[:, :, :-1] - X[:, :, 1:]
-        else:
-            # Periodic boundaries: use shift-based approach
-            outs = [self._diff_fwd(X, sh) for sh in self.directions]
-            Y = torch.stack(outs, dim=-1)
+        outs = [self._diff_fwd(X, sh) for sh in self.directions]
+        Y = torch.stack(outs, dim=-1)
 
         if self.normalize:
             Y = Y / self._step.view(*(1,) * (Y.ndim - 1), -1)
@@ -335,32 +311,11 @@ class Gradient:
         out = torch.zeros_like(Y[..., 0])
 
         if self.bnd_cond == "Neumann":
-            # WARNING: Only works correctly for stencil=6 (axis-aligned directions)
-            for ch, (dx, dy, dz) in enumerate(self.directions):
+            for ch, sh in enumerate(self.directions):
                 y_ch = Y[..., ch]
-
-                if dx == 1:
-                    out[:-1] -= y_ch[:-1]
-                    out[1:] += y_ch[:-1]
-                elif dx == -1:
-                    out[1:] -= y_ch[1:]
-                    out[:-1] += y_ch[1:]
-
-                if dy == 1:
-                    out[:, :-1] -= y_ch[:, :-1]
-                    out[:, 1:] += y_ch[:, :-1]
-                elif dy == -1:
-                    out[:, 1:] -= y_ch[:, 1:]
-                    out[:, :-1] += y_ch[:, 1:]
-
-                if dz == 1:
-                    out[:, :, :-1] -= y_ch[:, :, :-1]
-                    out[:, :, 1:] += y_ch[:, :, :-1]
-                elif dz == -1:
-                    out[:, :, 1:] -= y_ch[:, :, 1:]
-                    out[:, :, :-1] += y_ch[:, :, 1:]
+                out = out + self._shift_adjoint(y_ch, sh)
+                out = out - y_ch
         else:
-            # Periodic boundaries: use shift-based approach
             for ch, sh in enumerate(self.directions):
                 out -= self._diff_bwd(Y[..., ch], sh)
 
@@ -409,6 +364,15 @@ class Sum:
         else:
             raise ValueError("Unsupported boundary condition")
 
+    def _shift_adjoint(self, x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
+        if self.bnd_cond == "Periodic":
+            inv = (-sh[0], -sh[1], -sh[2])
+            return torch.roll(x, shifts=inv, dims=(0, 1, 2))
+        elif self.bnd_cond == "Neumann":
+            return _shift_neumann_adjoint(x, sh)
+        else:
+            raise ValueError("Unsupported boundary condition")
+
     def direct(self, x):
         X = _to_tensor(x, like_dtype=torch.float32, device=device)
         outs = [X + self._shift(X, sh) for sh in self.directions]
@@ -421,7 +385,7 @@ class Sum:
         for ch, sh in enumerate(self.directions):
             edge = Y[..., ch]
             out = out + edge
-            out = out + self._shift(edge, (-sh[0], -sh[1], -sh[2]))  # ← use inverse shift
+            out = out + self._shift_adjoint(edge, sh)
         return _to_numpy(out) if self.numpy_out else out
 
     def calculate_norm(self):
@@ -517,13 +481,6 @@ class GradientOptimized:
             half + [(-dx, -dy, -dz) for dx, dy, dz in half] if both_directions else half
         )
 
-        # WARNING: Neumann boundaries only work correctly for stencil=6
-        if bnd_cond == "Neumann" and stencil != "6":
-            raise ValueError(
-                f"Neumann boundary conditions only work correctly with stencil=6 (axis-aligned). "
-                f"Got stencil={stencil}. Use Periodic boundaries or stencil='6'."
-            )
-
         steps = []
         for dx, dy, dz in self.directions:
             sx, sy, sz = abs(dx) * self.vx, abs(dy) * self.vy, abs(dz) * self.vz
@@ -536,6 +493,15 @@ class GradientOptimized:
             return torch.roll(x, shifts=sh, dims=(0, 1, 2))
         elif self.bnd_cond == "Neumann":
             return _shift_neumann_symmetric(x, sh)
+        else:
+            raise ValueError("Unsupported boundary condition")
+
+    def _shift_adjoint(self, x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
+        if self.bnd_cond == "Periodic":
+            inv = (-sh[0], -sh[1], -sh[2])
+            return torch.roll(x, shifts=inv, dims=(0, 1, 2))
+        elif self.bnd_cond == "Neumann":
+            return _shift_neumann_adjoint(x, sh)
         else:
             raise ValueError("Unsupported boundary condition")
 
@@ -553,27 +519,8 @@ class GradientOptimized:
         n_dirs = len(self.directions)
         Y = torch.zeros((*X.shape, n_dirs), dtype=X.dtype, device=X.device)
 
-        if self.bnd_cond == "Neumann":
-            # Special handling for Neumann boundaries (same as Gradient class)
-            for i, (dx, dy, dz) in enumerate(self.directions):
-                if dx == 1:
-                    Y[:-1, :, :, i] = X[1:, :, :] - X[:-1, :, :]
-                elif dx == -1:
-                    Y[1:, :, :, i] = X[:-1, :, :] - X[1:, :, :]
-
-                if dy == 1:
-                    Y[:, :-1, :, i] = X[:, 1:, :] - X[:, :-1, :]
-                elif dy == -1:
-                    Y[:, 1:, :, i] = X[:, :-1, :] - X[:, 1:, :]
-
-                if dz == 1:
-                    Y[:, :, :-1, i] = X[:, :, 1:] - X[:, :, :-1]
-                elif dz == -1:
-                    Y[:, :, 1:, i] = X[:, :, :-1] - X[:, :, 1:]
-        else:
-            # Periodic: use shift-based approach
-            for i, sh in enumerate(self.directions):
-                Y[..., i] = self._diff_fwd(X, sh)
+        for i, sh in enumerate(self.directions):
+            Y[..., i] = self._diff_fwd(X, sh)
 
         if self.normalize:
             Y = Y / self._step.view(*(1,) * (Y.ndim - 1), -1)
@@ -588,32 +535,11 @@ class GradientOptimized:
         out = torch.zeros_like(Y[..., 0])
 
         if self.bnd_cond == "Neumann":
-            # Adjoint with explicit boundary handling (same as Gradient class)
-            for ch, (dx, dy, dz) in enumerate(self.directions):
+            for ch, sh in enumerate(self.directions):
                 y_ch = Y[..., ch]
-
-                if dx == 1:
-                    out[:-1] -= y_ch[:-1]
-                    out[1:] += y_ch[:-1]
-                elif dx == -1:
-                    out[1:] -= y_ch[1:]
-                    out[:-1] += y_ch[1:]
-
-                if dy == 1:
-                    out[:, :-1] -= y_ch[:, :-1]
-                    out[:, 1:] += y_ch[:, :-1]
-                elif dy == -1:
-                    out[:, 1:] -= y_ch[:, 1:]
-                    out[:, :-1] += y_ch[:, 1:]
-
-                if dz == 1:
-                    out[:, :, :-1] -= y_ch[:, :, :-1]
-                    out[:, :, 1:] += y_ch[:, :, :-1]
-                elif dz == -1:
-                    out[:, :, 1:] -= y_ch[:, :, 1:]
-                    out[:, :, :-1] += y_ch[:, :, 1:]
+                out = out + self._shift_adjoint(y_ch, sh)
+                out = out - y_ch
         else:
-            # Periodic: use shift-based approach
             for ch, sh in enumerate(self.directions):
                 out -= self._diff_bwd(Y[..., ch], sh)
 
@@ -622,6 +548,51 @@ class GradientOptimized:
 
     def calculate_norm(self):
         return 2.0 * np.sqrt(len(self.directions)) / self._bank_scale
+
+
+class Gradient:
+    """Dispatcher that selects the appropriate gradient implementation."""
+
+    def __init__(
+        self,
+        voxel_sizes,
+        stencil: str = "6",
+        bnd_cond: str = "Neumann",
+        both_directions: bool = False,
+        normalize: bool = True,
+        numpy_out: bool = False,
+    ):
+        self.voxel_sizes = tuple(float(v) for v in voxel_sizes)
+        self.stencil = stencil
+        self.bnd_cond = bnd_cond
+        self.both_directions = both_directions
+        self.normalize = normalize
+        self.numpy_out = numpy_out
+
+        impl_cls = GradientOptimized if stencil != "6" else _GradientLegacy
+        self._impl = impl_cls(
+            voxel_sizes=self.voxel_sizes,
+            stencil=stencil,
+            bnd_cond=bnd_cond,
+            both_directions=both_directions,
+            normalize=normalize,
+            numpy_out=numpy_out,
+        )
+
+    def __getattr__(self, name):
+        return getattr(self._impl, name)
+
+    def direct(self, x):
+        return self._impl.direct(x)
+
+    def adjoint(self, x):
+        return self._impl.adjoint(x)
+
+    def calculate_norm(self):
+        return self._impl.calculate_norm()
+
+
+LegacyGradient = _GradientLegacy
 
 
 def check_adjoint(
