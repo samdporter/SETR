@@ -1,0 +1,26 @@
+# Convergence reference runs sweep configuration
+# 3 gamma values × 1 config = 3 runs
+
+sweep_name: "subset_selection_convergence"
+base_config: "base_config_anthro.yaml"
+script: "run_subset_selection.py"
+
+# SGE resource requirements - longer runtime for 10000 epochs
+sge:
+  runtime: "168:00:00"  # 7 days
+  memory: "32G"
+  cores: 1
+  queue: null
+  gpu: true
+
+# Parameter sweep - gamma only
+parameters:
+  gammas_file: "gammas.csv"
+
+# Fixed parameters for convergence reference
+fixed_params:
+  num_epochs: 10000
+  subset_mode: "separate"
+  prior_mode: "always"
+  precond_type: "vtv_svd_principal_alpha"
+  seed: 42

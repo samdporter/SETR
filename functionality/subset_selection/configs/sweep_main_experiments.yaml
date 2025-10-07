@@ -1,0 +1,26 @@
+# Main subset selection experiments sweep configuration
+# 2 (subset_mode) × 2 (prior_mode) × 3 (precond) × 3 (gamma) = 36 runs
+
+sweep_name: "subset_selection_main"
+base_config: "base_config_anthro.yaml"
+script: "run_subset_selection.py"
+
+# SGE resource requirements
+sge:
+  runtime: "24:00:00"
+  memory: "32G"
+  cores: 1
+  queue: null
+  gpu: true
+
+# Parameter sweep - all combinations
+parameters:
+  subset_modes_file: "subset_modes.csv"
+  prior_modes_file: "prior_modes.csv"
+  precond_types_file: "precond_types.csv"
+  gammas_file: "gammas.csv"
+
+# Fixed parameters for main experiments
+fixed_params:
+  num_epochs: 100
+  seed: 42
