@@ -7,7 +7,7 @@ script: "test_preconditioner_single.py"
 sge:
   runtime: "48:00:00"
   memory: "95G"
-  cores: 4
+  cores: 1
   queue: null  # Use default queue
   gpu: true
 

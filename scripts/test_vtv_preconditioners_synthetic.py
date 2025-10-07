@@ -4,7 +4,7 @@ Test script for VTV preconditioners on synthetic 3D geometric data.
 
 Tests all 4 canonical preconditioner methods:
 1. svd_principal_alpha - SVD principal + isotropic α (baseline)
-2. mm_jensen - MM surrogate with SVD-free computation
+2. mm_jensen - MM surrogate with SVD-free computation (ignored for now - too  friendly)
 3. frobenius_surrogate_pd - Frobenius norm + surrogate (positive-definite)
 4. vector_tv_per_modality - Per-modality vector TV (exact radial, may not be PD)
 
@@ -234,7 +234,7 @@ def test_preconditioner_methods(
     # Use canonical names for clarity in output/plots
     methods = [
         "svd_principal_alpha",
-        "mm_jensen",
+        #"mm_jensen",
         "frobenius_surrogate_pd",
         "vector_tv_per_modality",
     ]

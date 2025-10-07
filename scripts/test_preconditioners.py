@@ -559,7 +559,7 @@ def main():
             "bsrem",
             # canonical names
             "vtv_svd_principal_alpha",
-            "vtv_mm_jensen",
+            #"vtv_mm_jensen", # too friendly
             "vtv_frobenius_surrogate_pd",
             "vtv_vector_tv_per_modality",
         ],
