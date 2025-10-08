@@ -122,24 +122,6 @@ class TruncationOperator(LinearOperator):
     def adjoint(self, x, out=None):
         return self.direct(x, out)
 
-class FlipOperator(LinearOperator):
-    "Simple operator to flip along chosen axis"
-
-    def __init__(self, domain_geometr, axis):
-        super().__init__(domain_geometry=domain_geometry, range_geometry=domain_geometry)
-
-        self.axis = axis
-
-        def direct(x, out = None):
-            arr = np.flip(get_array(x), axis=self.axis)
-            if out is None:
-                out = x.clone()
-            out.fill(arr)
-            return out
-
-        def adjoint(x, out=None):
-            return self.direct(x, out=out)
-
 
 class DirectionalOperator(LinearOperator):
     def __init__(self, anatomical_gradient, gamma=1, eta=1e-6):
@@ -180,7 +162,7 @@ class DirectionalOperator(LinearOperator):
 
 
 class FlipOperator(LinearOperator):
-    def __init__(self, axis, image):
+    def __init__(self, image, axis):
         self.axis = axis
         super().__init__(domain_geometry=image, range_geometry=image)
 
