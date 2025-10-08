@@ -18,7 +18,6 @@ from cil.optimisation.functions import SumFunction, SVRGFunction
 from cil.optimisation.operators import (
     BlockOperator,
     CompositionOperator,
-    FlipOperator,
     IdentityOperator,
     ZeroOperator,
 )
@@ -33,6 +32,7 @@ from setr.cil_extensions.preconditioners import (
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
 )
+from setr.cil_extensions.operators import FlipOperator
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
     attach_prior_hessian,
@@ -402,7 +402,7 @@ def main(args) -> None:
 
     if args.flip:
         spect2pet = CompositionOperator(
-            spect2pet, FlipOperator(axis=(0, 2), image=spect_data["initial_image"])
+            spect2pet, FlipOperator(spect_data["initial_image"], axis=(0, 2))
         )
 
     bo = BlockOperator(

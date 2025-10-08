@@ -8,7 +8,7 @@ script: "run_subset_selection.py"
 # SGE resource requirements - longer runtime for 10000 epochs
 sge:
   runtime: "168:00:00"  # 7 days
-  memory: "32G"
+  memory: "60G"
   cores: 1
   queue: null
   gpu: true

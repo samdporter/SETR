@@ -7,7 +7,7 @@ set -euo pipefail
 
 # Auto-detect base directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-BASE_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+BASE_DIR="$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
 FUNC_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_DIR="$FUNC_DIR/configs"
 PARAM_DIR="$FUNC_DIR/parameters"
@@ -133,7 +133,7 @@ fi
 
 if [ -n "${GAMMAS_FILE:-}" ]; then
     if [ ! -f "$PARAM_DIR/$GAMMAS_FILE" ]; then
-        echo "Error: Gammas file not found: $PARAM_DIR/$GAMMAS_FILE"
+        echo "Error: Gammas file not found: $PARAM_DIR/$GAMMAS_FILE. Are you in SETR dir?"
         exit 1
     fi
     NUM_GAMMAS=$(tail -n +2 "$PARAM_DIR/$GAMMAS_FILE" | wc -l)
