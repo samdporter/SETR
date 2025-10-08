@@ -30,13 +30,13 @@ from setr.scripts.common import (
 )
 from setr.scripts.dtnv_common import (
     apply_gradient_energy_scaling,
+    build_variance_reduced_function,
     compute_kappa_squared_image_from_partitioned_objective,
     get_algorithm,
     get_block_objective,
     get_callbacks,
     get_preconditioners,
     get_prior,
-    build_variance_reduced_function,
     get_s_inv_from_subset_objs,
     gradient_energy_scale_sirf,
     normalise_kappa_squares,
@@ -252,7 +252,7 @@ def main(args) -> None:
     configure_logging()
 
     # Initialize run environment (creates dirs, sets storage scheme, redirects messages)
-    msg = init_run_env(args)
+    _ = init_run_env(args)
     save_args(args, "args.csv")
 
     # Prepare data
