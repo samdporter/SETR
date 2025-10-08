@@ -1,8 +1,7 @@
 import logging
 import os
-from types import MethodType
-from typing import Dict, List, Optional
 from pathlib import Path
+from typing import Dict, List, Optional
 
 import numpy as np
 from cil.framework import BlockDataContainer
@@ -144,7 +143,9 @@ def get_pet_data(path: str, suffix: str = "") -> dict:
 
 
 def get_pet_data_multiple_bed_pos(
-    path: str, suffixes: List[str], tof: bool = False,
+    path: str,
+    suffixes: List[str],
+    tof: bool = False,
     load_sinos: bool = True,
 ) -> Dict[str, object]:
     """
@@ -202,6 +203,31 @@ def get_pet_data_multiple_bed_pos(
     return pet_data
 
 
+def load_zoom_factors(spect_dir):
+    """
+    Load previously saved zoom factors from file.
+
+    Args:
+        spect_dir: Directory containing the zoom factors file
+
+    Returns:
+        tuple: Zoom factors (z, y, x)
+    """
+    zoom_file_path = os.path.join(spect_dir, "spect_to_pet_zoom_factors.txt")
+
+    if not os.path.exists(zoom_file_path):
+        raise FileNotFoundError(f"Zoom factors file not found: {zoom_file_path}")
+
+    with open(zoom_file_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line.startswith("#") and line:
+                zoom_values = line.split()
+                return (float(zoom_values[0]), float(zoom_values[1]), float(zoom_values[2]))
+
+    raise ValueError("No zoom factors found in file")
+
+
 def get_spect_data(path: str) -> dict:
     """
     Load SPECT data from the given path.
@@ -253,20 +279,46 @@ def get_spect_data(path: str) -> dict:
         spect_data["initial_image"] = spect_data["template_image"].get_uniform_copy(1)
 
     # Load displacement field for SPECT to PET registration
-    displacement_path = os.path.join(path, "spect2pet.nii")
-    try:
-        spect_data["displacement"] = NiftiImageData3DDisplacement(displacement_path)
-    except Exception as e_displacement:
-        logging.warning(
-            "No SPECT displacement field found (%s). Registration will not be available.",
-            str(e_displacement),
-        )
+    displacement_files = [
+        "spect2pet_zoom_nonrigid.nii",
+        "spect2pet_zoom_rigid.nii",
+        "spect2pet.nii",
+    ]
+
+    displacement_path = None
+    for filename in displacement_files:
+        full_path = os.path.join(path, filename)
+        if os.path.exists(full_path):
+            displacement_path = full_path
+            break
+
+    if displacement_path is None:
+        logging.warning("No SPECT displacement field found. Registration will not be available.")
         spect_data["displacement"] = None
+    else:
+        try:
+            spect_data["displacement"] = NiftiImageData3DDisplacement(displacement_path)
+        except Exception as e_displacement:
+            logging.warning(
+                "Failed to load SPECT displacement field from %s (%s). Registration will not be available.",
+                displacement_path,
+                str(e_displacement),
+            )
+            spect_data["displacement"] = None
+
+    try:
+        spect_data["zoom_factors"] = load_zoom_factors(path)
+    except Exception as e_zoom:
+        logging.warning(
+            "No SPECT zoom factors found (%s). Zooming will not be available.",
+            str(e_zoom),
+        )
+        spect_data["zoom_factors"] = (1.0, 1.0, 1.0)
 
     return spect_data
 
 
-def create_spect_uniform_image(sinogram, origin=None):
+def create_spect_uniform_image(sinogram, origin=None, dims=None):
     """
     Create a uniform image for SPECT data based on the sinogram dimensions.
     Adjusts the z-direction voxel size and image dimensions to create a template
@@ -286,11 +338,12 @@ def create_spect_uniform_image(sinogram, origin=None):
     voxel_size = list(image.voxel_sizes())
     voxel_size[0] *= 2  # Adjust z-direction voxel size.
 
-    # Compute new dimensions based on the uniform image.
-    dims = list(image.dimensions())
-    dims[0] = dims[0] // 2 + dims[0] % 2  # Halve the first dimension (with rounding)
-    dims[1] -= dims[1] % 2  # Ensure even number for second dimension
-    dims[2] = dims[1]  # Set third dimension equal to second dimension
+    if dims is None:
+        # Compute new dimensions based on the uniform image.
+        dims = list(image.dimensions())
+        dims[0] = dims[0] // 2 + dims[0] % 2  # Halve the first dimension (with rounding)
+        dims[1] -= dims[1] % 2  # Ensure even number for second dimension
+        dims[2] = dims[1]  # Set third dimension equal to second dimension
 
     if origin is None:
         origin = (0, 0, 0)
@@ -345,8 +398,6 @@ def normalise_kappa_squares(kappa_block, pct=95):
     return kappa_block
 
 
-
-
 def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_funs):
     """Returns a CIL SumFunction for the partitioned objective functions"""
 
@@ -359,12 +410,27 @@ def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_
     return pet_obj_funs, spect_obj_funs
 
 
-def get_block_objective(desired_image, other_image, obj_fun, order=0):
-    """Returns a block CIL objective function for the given SIRF objective function"""
+def get_block_objective(desired_image, other_image, obj_fun, scale=1, order=0):
+    """Returns a block CIL objective function for the given SIRF objective function.
+
+    Args:
+        desired_image: The image to apply the objective function to.
+        other_image: The other image in the block (receives zero operator).
+        obj_fun: The objective function to wrap.
+        scale: Scaling factor for the identity operator (default 1).
+        order: Position of desired_image in block (0 or 1).
+
+    Returns:
+        OperatorCompositionFunction: Block objective function.
+    """
+    from setr.cil_extensions.operators import ScalingOperator
 
     # Set up zero operators
     o2d_zero = ZeroOperator(other_image, desired_image)
-    d2d_id = IdentityOperator(desired_image)
+    if scale == 1:
+        d2d_id = IdentityOperator(desired_image)
+    else:
+        d2d_id = ScalingOperator(scale, desired_image)
 
     if order == 0:
         return OperatorCompositionFunction(obj_fun, BlockOperator(d2d_id, o2d_zero, shape=(1, 2)))
@@ -514,18 +580,18 @@ def get_subset_data(data, num_subsets, stagger="staggered"):
 def get_array(obj):
     """
     Get array from SIRF object, preferring asarray() over as_array() for performance.
-    
+
     Falls back to as_array() if asarray() is not available (older SIRF versions).
-    
+
     Args:
         obj: SIRF object with asarray() or as_array() method
-        
+
     Returns:
         numpy array or reference to underlying array
     """
-    if hasattr(obj, 'asarray'):
+    if hasattr(obj, "asarray"):
         return obj.asarray()
-    elif hasattr(obj, 'as_array'):
+    elif hasattr(obj, "as_array"):
         return obj.as_array()
     else:
         raise AttributeError(f"Object {type(obj)} has neither asarray() nor as_array() method")

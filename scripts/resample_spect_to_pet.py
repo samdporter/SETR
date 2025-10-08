@@ -8,12 +8,17 @@ import logging
 import os
 import string
 
+from cil.optimisation.operators import CompositionOperator
 from sirf.Reg import NiftiImageData3DDisplacement
 from sirf.STIR import ImageData
 
-from setr.cil_extensions.operators import NiftyResampleOperator
+from setr.cil_extensions.operators import (
+    EnlargementOperator,
+    NiftyResampleOperator,
+    ZoomOperator,
+)
+from setr.utils import get_pet_data, get_pet_data_multiple_bed_pos, get_spect_data
 from setr.utils.io import apply_overrides, load_config
-from setr.utils import get_pet_data_multiple_bed_pos, get_pet_data
 
 
 def parse_args():
@@ -41,12 +46,9 @@ def main():
 
     cfg = load_config(args.config)
     cfg = apply_overrides(cfg, args.override)
-    
+
     template = string.Template
-    cfg = {
-        k: template(v).safe_substitute(cfg) if isinstance(v, str) else v
-        for k, v in cfg.items()
-    }
+    cfg = {k: template(v).safe_substitute(cfg) if isinstance(v, str) else v for k, v in cfg.items()}
 
     # Expand environment variables in paths
     for key in [
@@ -60,14 +62,16 @@ def main():
 
     if cfg["use_2bpos"]:
         pet_data = get_pet_data_multiple_bed_pos(
-            cfg["pet_dir"], tof=True, suffixes=["_f1b1", "_f2b1"]
+            cfg["pet_dir"], tof=cfg["use_tof"], suffixes=["_f1b1", "_f2b1"]
         )
     else:
-        pet_data = get_pet_data(cfg["pet_dir"], tof=True)
+        pet_data = get_pet_data(cfg["pet_dir"], tof=cfg["use_tof"])
     pet_template = pet_data["template_image"]
     spect_recon_path = cfg["spect_reconstruction"]
     transform_path = cfg["transform_file"]
     output_path = cfg["output_file"]
+
+    spect_data = get_spect_data(cfg["spect_dir"])
 
     logging.info(f"Loading SPECT reconstruction: {spect_recon_path}")
     spect_recon = ImageData(spect_recon_path)
@@ -76,45 +80,31 @@ def main():
     transform = NiftiImageData3DDisplacement(transform_path)
 
     # Create resampler
-    resampler = NiftyResampleOperator(
-        reference=pet_template, floating=spect_recon, transform=transform
+    enlarger = EnlargementOperator(
+        enlarged_shape=(128, 256, 256),
+        enlargement_sino=spect_data["acquisition_data"],
+        original_floating=spect_recon,
     )
+    zoomer = ZoomOperator(
+        spect_data["zoom_factors"],
+        spect_recon,
+        pet_template.voxel_sizes(),
+    )
+    resampler = NiftyResampleOperator(
+        reference=pet_template,
+        floating=zoomer.direct(enlarger.direct(spect_recon)),
+        transform=transform,
+    )
+    composition = CompositionOperator(resampler, zoomer, enlarger)
 
     # Resample
     logging.info("Resampling SPECT to PET space...")
-    spect_recon2pet = resampler.direct(spect_recon)
-    
+    spect_recon2pet = composition.direct(spect_recon)
+
     # Save result
     logging.info(f"Saving resampled image: {output_path}")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     spect_recon2pet.write(output_path)
-
-    # Now we need to get the individual bed positions aligned correctly
-    if cfg["use_2bpos"]:
-        resampler_f1b1 = NiftyResampleOperator(
-            reference=pet_data["bed_positions"]["_f1b1"]["template_image"],
-            floating=spect_recon,
-            transform=NiftiImageData3DDisplacement(
-                transform_path.replace(".nii", "_f1b1.nii")
-            ),
-        )
-        resampler_f2b1 = NiftyResampleOperator(
-            reference=pet_data["bed_positions"]["_f2b1"]["template_image"],
-            floating=spect_recon,
-            transform=NiftiImageData3DDisplacement(
-                transform_path.replace(".nii", "_f2b1.nii")
-            ),
-        )
-        spect_recon2pet_f1b1 = resampler_f1b1.direct(spect_recon)
-        spect_recon2pet_f2b1 = resampler_f2b1.direct(spect_recon)
-        
-        # Save individual bed position images
-        output_path_f1b1 = output_path.replace(".hv", "_f1b1.hv")
-        output_path_f2b1 = output_path.replace(".hv", "_f2b1.hv")
-        logging.info(f"Saving resampled image for bed position 1: {output_path_f1b1}")
-        spect_recon2pet_f1b1.write(output_path_f1b1)
-        logging.info(f"Saving resampled image for bed position 2: {output_path_f2b1}")
-        spect_recon2pet_f2b1.write(output_path_f2b1)
 
     logging.info("Resampling completed successfully")
 

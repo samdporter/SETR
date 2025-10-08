@@ -20,7 +20,7 @@ from setr.scripts.common import configure_logging, init_run_env
 from setr.scripts.hkem_common import get_attn_and_normalise, get_kernel_hyperparams
 from setr.utils import get_pet_data, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_pet_am, get_spect_am, get_array
+from setr.utils.sirf import get_array, get_filters, get_pet_am, get_spect_am
 
 
 def prepare_data(args):
@@ -44,9 +44,7 @@ def prepare_data(args):
     gauss.apply(data["initial_image"])
     cyl.apply(data["initial_image"])
 
-    data["initial_image"].write(
-        os.path.join(args.output_path, "initial_image.hv")
-    )
+    data["initial_image"].write(os.path.join(args.output_path, "initial_image.hv"))
 
     # Check for NaNs in all data
     for key, value in data.items():

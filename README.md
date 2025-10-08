@@ -15,6 +15,12 @@ Tools for nuclear medicine image reconstruction combining PET/SPECT with CT anat
   - Step size rules
 - **SIRF data loading utilities**
 
+## Documentation
+
+Full project guides and references are located in the [docs/](docs/index.md)
+directory, including detailed notes on preconditioner testing and the
+weighted VTV Hessian derivations.
+
 ## Installation
 
 ```bash

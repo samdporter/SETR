@@ -1,6 +1,3 @@
-import logging
-
-
 def ista_update_step(self) -> None:
     r"""Perform a single ISTA update iteration.
 

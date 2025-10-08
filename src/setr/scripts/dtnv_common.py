@@ -6,15 +6,13 @@ Only contains functions that are IDENTICAL between run_dtnv_1bpos.py and run_dtn
 import argparse
 import logging
 import os
-from types import MethodType
 from typing import Any, List
 
 import numpy as np
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import (
-    KullbackLeibler, 
+    KullbackLeibler,
     OperatorCompositionFunction,
-    SumFunction,
 )
 from cil.optimisation.operators import (
     BlockOperator,
@@ -30,19 +28,19 @@ from setr.cil_extensions.callbacks import (
     SaveObjectiveCallback,
     SavePreconditionerCallback,
 )
+from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
+from setr.cil_extensions.functions import BlockIndicatorBox
+from setr.cil_extensions.operators import ScalingOperator
 from setr.cil_extensions.preconditioners import (
     BSREMPreconditioner,
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
 )
 from setr.priors import (
-    WeightedVectorialTotalVariation,
-    WeightedTotalVariation,
     WeightedRDP,
+    WeightedTotalVariation,
+    WeightedVectorialTotalVariation,
 )
-from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
-from setr.cil_extensions.functions import BlockIndicatorBox
-from setr.cil_extensions.operators import ScalingOperator
 from setr.utils.sirf import get_array
 
 ISTA.update = ista_update_step
@@ -62,6 +60,7 @@ def get_kappa_squareds(obj_funs_list, image_list, normalise=True):
     )
     return EnhancedBlockDataContainer(*kappa_squareds)
 
+
 def get_callbacks(args, update_interval: int) -> List[Any]:
     """Set up callbacks for DTNV algorithm monitoring."""
     callbacks = [
@@ -77,11 +76,12 @@ def get_callbacks(args, update_interval: int) -> List[Any]:
 
     if getattr(args, "save_preconditioners", False):
         callbacks.append(
-            SavePreconditionerCallback(os.path.join(args.output_path, "preconditioner"), update_interval)
+            SavePreconditionerCallback(
+                os.path.join(args.output_path, "preconditioner"), update_interval
+            )
         )
 
     return callbacks
-
 
 
 def get_algorithm(
@@ -132,7 +132,6 @@ def get_preconditioners(
     priors_list: Any,
     initial_estimates: EnhancedBlockDataContainer,
 ) -> Any:
-
     bsrem_precond = BSREMPreconditioner(
         s_inv,
         1,
@@ -150,7 +149,7 @@ def get_preconditioners(
             freeze_iter=np.inf,
             epsilon=0,
         )
-    for p in priors_list
+        for p in priors_list
     ]
 
     return LehmerMeanPreconditioner(
@@ -162,9 +161,8 @@ def get_preconditioners(
 
 
 def get_probabilities(args, num_subsets, update_interval, bpos=1):
-    
-    pet_probs   = [1/update_interval] * (num_subsets[0]*bpos)
-    spect_probs = [1/update_interval] * num_subsets[1]
+    pet_probs = [1 / update_interval] * (num_subsets[0] * bpos)
+    spect_probs = [1 / update_interval] * num_subsets[1]
 
     probs = pet_probs + spect_probs
     assert abs(sum(probs) - 1) < 1e-10, (
@@ -218,8 +216,6 @@ def normalise_kappa_squares(kappa_block, pct=95):
     return kappa_block
 
 
-
-
 def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_funs):
     """Returns a CIL SumFunction for the partitioned objective functions"""
 
@@ -235,7 +231,10 @@ def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_
 def set_up_kl_objectives(
     pet_data, spect_data, pet_datas, pet_norms, spect_datas, pet_ams, spect_ams
 ):
-    """Returns a CIL SumFunction using KL objective functions for the PET and SPECT data and acq models"""
+    """
+    Returns a CIL SumFunction using KL objective functions
+    for the PET and SPECT data and acq models
+    """
 
     for d, am in zip(pet_datas, pet_ams):
         am.set_up(d, pet_data["initial_image"])
@@ -285,7 +284,7 @@ def get_s_inv_from_objs(obj_funs, initial_estimates):
 
 def get_s_inv_from_am(ams, initial_estimates):
     # get subset_sensitivity BDC for preconditioner
-    s_inv = initial_estimates * 0
+    s_inv = initial_estimates.get_uniform_copy(0)
     for i, el in enumerate(s_inv.containers):
         for am in ams[i]:
             one = am.forward(initial_estimates[i]).get_uniform_copy(1)
@@ -340,8 +339,9 @@ def compute_inv_hessian_diagonals(bdc, obj_funs_list):
     return EnhancedBlockDataContainer(*outputs)
 
 
-def gradient_energy_scale_sirf(x_pet, x_spect, kappa_pet=None, kappa_spect=None,
-                                        beta=1.0, mask=None, eps=1e-12):
+def gradient_energy_scale_sirf(
+    x_pet, x_spect, kappa_pet=None, kappa_spect=None, beta=1.0, mask=None, eps=1e-12
+):
     """
     Compute alpha* that balances κ-weighted gradient energies for TNV:
         alpha* = < κ_pet ∇x_pet , beta κ_spect ∇x_spect > / || κ_pet ∇x_pet ||^2
@@ -366,6 +366,7 @@ def gradient_energy_scale_sirf(x_pet, x_spect, kappa_pet=None, kappa_spect=None,
         alpha* scale.
     """
     import numpy as np
+
     xr = get_array(x_pet)
     xs = get_array(x_spect)
 
@@ -404,15 +405,16 @@ def gradient_energy_scale_sirf(x_pet, x_spect, kappa_pet=None, kappa_spect=None,
 
 def apply_gradient_energy_scaling(args, scale):
     """Apply gradient energy scaling to all prior weightings consistently."""
-    
+
     # Scale TNV weightings
     args.alpha *= scale
     logging.info(f"Adjusted alpha to {args.alpha:.6g} using gradient-energy scaling")
-    
+
     # Scale modality-specific TV weightings if they exist
-    if hasattr(args, 'gamma_pet'):
+    if hasattr(args, "gamma_pet"):
         args.gamma_pet *= scale
         logging.info(f"Adjusted gamma_pet to {args.gamma_pet:.6g} using gradient-energy scaling")
+
 
 def get_prior(
     args,
@@ -426,7 +428,7 @@ def get_prior(
 
     Supports three types of priors that can be used independently or combined:
     - PET TV prior (weighted by gamma_pet)
-    - SPECT TV prior (weighted by gamma_spect)  
+    - SPECT TV prior (weighted by gamma_spect)
     - TNV vectorial prior (weighted by gamma_tnv, uses alpha/beta for kappa weighting)
 
     Each prior can have independent directional settings.
@@ -445,8 +447,8 @@ def get_prior(
     if getattr(args, "use_tnv_prior", True) and getattr(args, "gamma_tnv", 1.0) > 0:
         # Create kappa weights for TNV with alpha/beta scaling
         tnv_kappas = EnhancedBlockDataContainer(
-            initial_estimates[0].get_uniform_copy(args.alpha*args.gamma_tnv),
-            initial_estimates[1].get_uniform_copy(args.beta*args.gamma_tnv),
+            initial_estimates[0].get_uniform_copy(args.alpha * args.gamma_tnv),
+            initial_estimates[1].get_uniform_copy(args.beta * args.gamma_tnv),
         )
 
         # Apply base kappa weights
@@ -460,13 +462,14 @@ def get_prior(
             anatomical=umap if args.directional_tnv else None,
             stable=getattr(args, "stable", True),
             tail_singular_values=getattr(args, "tail_singular_values", None),
-            both_directions=getattr(args, "tnv_both_directions", False),
-            stencil=getattr(args, "tnv_stencil", '6'),
+            both_directions=getattr(args, "tnv_both_directions", True),
+            stencil=getattr(args, "tnv_stencil", "6"),
+            hessian=getattr(args, "hessian_type", "slow"),
+            bnd_cond=getattr(args, "tnv_bnd_cond", "Periodic"),
         )
         tnv_prior = OperatorCompositionFunction(vtv, bo)
 
         # Apply TNV weighting
-    
 
         priors.append(tnv_prior)
 
@@ -493,7 +496,7 @@ def get_prior(
                     tv_kappas,
                     epsilon=getattr(args, "delta"),
                     anatomical=umap if args.directional_tv else None,
-                    stencil=getattr(args, "tv_stencil", '6'),
+                    stencil=getattr(args, "tv_stencil", "6"),
                     both_directions=getattr(args, "tv_both_directions", False),
                 )
             else:
@@ -502,8 +505,9 @@ def get_prior(
                     tv_kappas,
                     delta=getattr(args, "delta"),
                     anatomical=umap if args.directional_tv else None,
-                    stencil=getattr(args, "tv_stencil", '6'),
+                    stencil=getattr(args, "tv_stencil", "6"),
                     both_directions=getattr(args, "tv_both_directions", False),
+                    bnd_cond=getattr(args, "tv_bnd_cond", "Periodic"),
                 )
 
             combined_tv_prior = OperatorCompositionFunction(combined_tv, bo)

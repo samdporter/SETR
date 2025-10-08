@@ -1,0 +1,46 @@
+delta: null
+num_subsets: [9, 12]
+no_prior: false
+num_epochs: 10
+use_kappa: true
+initial_step_size: 0.1
+relaxation_eta: 0.01
+both_directions: false
+use_scatter: true
+
+# TNV (vectorial) prior settings
+use_tnv_prior: true
+gamma_tnv: 50.0
+alpha: 1
+beta: 1
+stencil: "6"
+tnv_both_directions: false
+directional_tnv: false
+tail_singular_values: 1
+stable: true
+
+# Modality-specific TV prior settings
+use_modality_specific_priors: false
+prior: "tv" # can be tv or rdp
+gamma_pet: 50
+gamma_spect: 0.5
+delta_tv: null  # defaults to delta if not set
+directional_tv: true
+tv_stencil: "6"
+tv_both_directions: false
+
+pet_gauss_fwhm: [5.1,4.9,4.9] # DD paper #[5.1, 4.9, 4.9] # FROM Mediso Anyscan specifications at 10cm
+spect_gauss_fwhm: [6.7, 6.7, 6.7]
+spect_res: [0.81, 0.03, false] # Analytical collimator resolution for SPECT
+
+pet_data_path: "/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/PET"
+spect_data_path: "/home/storage/prepared_data/phantom_data/mac_nema_phantom_data/SPECT"
+output_path: "/home/sam/working/synergistic_recon/output/test"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+save_images: true
+seed: null
+no_gpu: false
+keep_all_views_in_cache: true
+profile: true
+flip: true

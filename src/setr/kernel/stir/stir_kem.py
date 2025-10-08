@@ -41,21 +41,34 @@ class KernelOperator(LinearOperator):
 
         super().__init__(domain_geometry=template_image, range_geometry=template_image)
 
-        self.current_alpha = None
+        self.current_alpha = template_image.clone()
+        self.alpha_set = False
         self.freeze_alpha = False
 
         del tmp_acq_model, tmp_obj_fun
 
+    def get_alpha(self, x):
+        if self.freeze_alpha:
+            return self.current_alpha
+        else:
+            return x
+
     def direct(self, x, out=None):
-        
-        if self.current_alpha is None or not self.freeze_alpha:
-            self.current_alpha = x.copy()
+        self.current_alpha.fill(self.get_alpha(x))
+        self.alpha_set = True
+
         if out is None:
             return self.recon.compute_kernelised_image(x, self.current_alpha)
+
         out.fill(self.recon.compute_kernelised_image(x, self.current_alpha))
         return out
 
     def adjoint(self, x, out=None):
+        if not self.alpha_set:
+            self.current_alpha.fill(self.get_alpha(x))
+            self.alpha_set = True
+        if out is None:
+            return self.recon.compute_kernelised_image(x, self.current_alpha)
 
-        return self.direct(x, out)  # Self-adjoint
-
+        out.fill(self.recon.compute_kernelised_image(x, self.current_alpha))
+        return out

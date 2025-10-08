@@ -1,4 +1,5 @@
 import logging
+
 import numpy as np
 from cil.framework import BlockDataContainer
 from cil.optimisation.functions import ScaledFunction
@@ -67,12 +68,7 @@ class BSREMPreconditioner(PreconditionerWithInterval):
     """Preconditioner for BSREM."""
 
     def __init__(
-        self,
-        s_inv,
-        update_interval=1,
-        freeze_iter=np.inf,
-        epsilon=None,
-        smooth=False,
+        self, s_inv, update_interval=1, freeze_iter=np.inf, epsilon=None, smooth=False, max_val=None
     ):
         super().__init__(update_interval, freeze_iter)
         self.s_inv = s_inv
@@ -84,9 +80,13 @@ class BSREMPreconditioner(PreconditionerWithInterval):
         if epsilon is None:
             epsilon = s_inv.max() * 1e-10
         self.epsilon = epsilon
+        self.max_val = max_val
 
     def compute_preconditioner(self, algorithm, out=None):
         x = algorithm.solution.copy()
+
+        if self.max_val is not None:
+            x = x.minimum(self.max_val)
 
         if isinstance(x, BlockDataContainer):
             for i, xi in enumerate(x.containers):
@@ -122,7 +122,6 @@ class ImageFunctionPreconditioner(PreconditionerWithInterval):
         self.max_value = max_value
 
     def compute_preconditioner(self, algorithm, out=None):
-        
         precond = self.function(algorithm.solution)
         precond = precond.maximum(self.epsilon)
         precond = precond.minimum(self.max_value)
@@ -178,7 +177,6 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         self.epsilon = epsilon
 
     def compute_preconditioner(self, algorithm, out=None):
-
         # Collect (and, if needed, clamp) inputs
         precond_values = [p.compute_preconditioner(algorithm) for p in self.preconds]
 
@@ -191,8 +189,8 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         base_num = x0
         base_den = x0.maximum(eps) if need_clamp_for_den else x0
 
-        num = base_num.power(p)          # Σ x^p
-        den = base_den.power(p - 1)      # Σ x^(p-1), safe if p<1
+        num = base_num.power(p)  # Σ x^p
+        den = base_den.power(p - 1)  # Σ x^(p-1), safe if p<1
 
         # Accumulate remaining terms
         for x in precond_values[1:]:
@@ -209,7 +207,6 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         return out
 
 
-
 class ArithmeticMeanPreconditioner(PreconditionerWithInterval):
     """Preconditioner that combines two preconditioners using a simple mean."""
 
@@ -218,13 +215,12 @@ class ArithmeticMeanPreconditioner(PreconditionerWithInterval):
         self.preconds = preconds
 
     def compute_preconditioner(self, algorithm, out=None):
-        
         # prepare output buffer
         acc = self.preconds[0].compute_preconditioner(algorithm)
 
         for p in self.preconds[1:]:
             acc += p.compute_preconditioner(algorithm)
-            
+
         if out is None:
             return acc / len(self.preconds)
 
@@ -345,6 +341,65 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
         return out
 
 
+class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
+    def __init__(
+        self,
+        sens_bdcs,  # list of BlockDataContainer(s1,s2), length=num_subsets
+        kernel,  # [K1, K2] kernel operators for each bed
+        uncombine_ops,  # [U1, U2] uncombine (adjoint) operators
+        num_subsets,
+        update_interval=1,
+        freeze_iter=np.inf,
+        epsilon=1e-6,
+    ):
+        super().__init__(num_subsets, update_interval, freeze_iter)
+        self.sens_bdcs = sens_bdcs
+        self.kernel = kernel
+        self.uncombine_ops = uncombine_ops
+        self.epsilon = epsilon
+        self.freeze_kernel_iter = freeze_iter
+
+    def apply(self, algorithm, gradient, out=None):
+        """
+        Apply the preconditioner, managing freezing and update intervals.
+        """
+
+        if algorithm.iteration % self.update_interval == 0 or self.precond is None:
+            self.precond = self.compute_preconditioner(algorithm).abs()
+
+        if out is None:
+            return gradient * self.precond
+
+        gradient.multiply(self.precond, out=out)
+        return out
+
+    def compute_preconditioner(self, algorithm, out=None):
+        # for the kernelised EM, we need to freeze the alpha after a certain number of iterations
+        # rather than freezing the whole preconditioner
+        if algorithm.iteration >= self.freeze_kernel_iter:
+            for k in self.kernel:
+                k.freeze_alpha = True
+
+        if isinstance(algorithm.f, ScaledFunction):
+            sg = algorithm.f.function
+        else:
+            sg = algorithm.f
+
+        k_s = self.kernel[0].adjoint(self.sens_bdc.containers[0])
+        total = self.uncombine_ops[0].adjoint(k_s)
+        for i in range(1, len(self.sens_bdc.containers)):
+            k_s = self.kernel[i].adjoint(self.sens_bdc.containers[i])
+            total += self.uncombine_ops[i].adjoint(k_s)
+        total += self.epsilon  # to avoid division by zero
+        total = total.abs()
+
+        if out is None:
+            return algorithm.solution / total
+
+        algorithm.solution.divide(total, out=out)
+        return out
+
+
 class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
     """
     Subset preconditioner for (hybrid) kernelised EM.
@@ -389,12 +444,17 @@ class SubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             sg = algorithm.f.function
         else:
             sg = algorithm.f
-        adj = self.kernel.adjoint(self.sensitivities[sg.data_passes_indices[-1][0]])
-        adj += self.epsilon
+        # if list is empty, return 0
+        try:
+            subset_idx = sg.data_passes_indices[-1][0]
+        except IndexError:  # can happen if the preconditioner is called before the first iteration
+            subset_idx = 0
+        adj = self.kernel.adjoint(self.sensitivities[subset_idx])
         adj = adj.abs()
+        adj += self.epsilon  # avoid division by zero
 
         if out is None:
-            return algorithm.solution / adj
+            return algorithm.solution.divide(adj)
 
         algorithm.solution.divide(adj, out=out)
         return out

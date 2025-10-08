@@ -4,43 +4,41 @@ import torch
 from cil.optimisation.functions import Function
 
 from .common import (
-    to_tensor,
+    charbonnier,
+    charbonnier_grad,
+    charbonnier_hessian_diag,
+    charbonnier_hessian_surrogate,  # w(σ) for Charbonnier
+    fair,
+    fair_grad,
+    fair_hessian_diag,
+    fair_hessian_surrogate,  # w(σ) for Fair
+    get_mask,
     l1_norm,
     l1_norm_prox,
     l2_norm,
     l2_norm_prox,
-    charbonnier,
-    charbonnier_grad,
-    charbonnier_hessian_surrogate,   # w(σ) for Charbonnier
-    fair,
-    fair_grad,
-    fair_hessian_surrogate,          # w(σ) for Fair
+    nothing,
+    nothing_hessian_diag,
     perona_malik,
     perona_malik_grad,
-    perona_malik_hessian_surrogate,  # w(σ) for Perona–Malik
-    nothing,
-    fair_hessian_diag,
-    charbonnier_hessian_diag,
     perona_malik_hessian_diag,
-    nothing_hessian_diag, 
-    get_mask, 
-    add_identity,
+    perona_malik_hessian_surrogate,  # w(σ) for Perona–Malik
+    to_tensor,
 )
-
 from .small_eig import (
-    eigenvalsh_2x2,
-    eigenvecsh_2x2,
-    eigenvalsh_3x3_cardano,
-    eigenvecsh_3x3_cardano,
     adaptive_gram_regularization,
+    eigenvalsh_2x2,
+    eigenvalsh_3x3_cardano,
+    eigenvecsh_2x2,
+    eigenvecsh_3x3_cardano,
 )
-
 from .svd_free_hessian import hessian_components_svd_free_small
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # --------- Helpers for tail masking and order selection ---------
+
 
 def choose_order(M):
     """
@@ -53,13 +51,14 @@ def choose_order(M):
 
 # --------- Core value/grad/prox maps (batched) ---------
 
+
 def norm(M, func, smoothing_func, order, eps, tail=None):
     """
     Enhanced norm computation with adaptive regularization.
     """
     # Get adaptively regularized Gram matrix
     H_reg, reg_scale, kappa = adaptive_gram_regularization(M, order)
-    
+
     # Extract eigenvalues
     n = H_reg.shape[-1]
     if n == 2:
@@ -68,18 +67,18 @@ def norm(M, func, smoothing_func, order, eps, tail=None):
         eig = eigenvalsh_3x3_cardano(H_reg)
     else:
         eig = torch.linalg.eigvalsh(H_reg)
-    
+
     # Compensate for regularization in singular values
     # Mathematical justification: σ²(A) + ε = λ(H̃)
     # Therefore: σ(A) = √(max(λ(H̃) - ε, 0))
     sigma_squared = torch.clamp(eig - reg_scale[..., None], min=0)
     sigma = torch.sqrt(sigma_squared)
-    
+
     # Apply smoothing and norm
     mask = get_mask(sigma, tail) if tail is not None else torch.ones_like(sigma)
     s_smoothed = smoothing_func(sigma * mask, eps)
     s_to_norm = s_smoothed + sigma * (1 - mask)
-    
+
     return func(s_to_norm)
 
 
@@ -90,7 +89,7 @@ def norm_func(M, func, tau, order=0, tail=None, blend_head: bool = True):
     """
     # Use adaptive regularization function from earlier
     H, epsilon_used, kappa = adaptive_gram_regularization(M, order)
-    
+
     n = H.shape[-1]
     if n == 2:
         S2_reg = eigenvalsh_2x2(H)
@@ -100,22 +99,22 @@ def norm_func(M, func, tau, order=0, tail=None, blend_head: bool = True):
         B = eigenvecsh_3x3_cardano(H, S2_reg)
     else:
         raise ValueError(f"Only 2×2 or 3×3 blocks supported, got {n}.")
-    
+
     # Mathematical correction: λ(H̃) = σ²(M) + ε
     S2_true = torch.clamp(S2_reg - epsilon_used[..., None], min=0)
     S = torch.sqrt(S2_true)
-    
+
     S_map = func(S, tau)
-    
+
     if tail is not None:
         mask = get_mask(S, tail)
-        S_final = S*(1 - mask) + S_map*mask if blend_head else S_map*mask
+        S_final = S * (1 - mask) + S_map * mask if blend_head else S_map * mask
     else:
         S_final = S_map
-    
+
     tiny = torch.finfo(S.dtype).eps
     scale = torch.where(S > 0, S_final / torch.clamp(S, min=tiny), torch.zeros_like(S))
-    
+
     D = (B * scale[..., None, :]) @ B.transpose(-1, -2)
     return D @ M if order == 1 else M @ D
 
@@ -124,12 +123,12 @@ def sigma_map(M, elem_func, tau, order=0, tail=None, masked_only=True):
     """
     Return elementwise mapping of singular values σ of M.
     Mathematical correction: Account for Gram matrix regularization.
-    
+
     Definition: σᵢ(M) = √(λᵢ(H̃) - ε) where H̃ = Gram(M) + εI
     """
     # Apply adaptive regularization using previously defined function
     H_reg, epsilon_used, kappa = adaptive_gram_regularization(M, order)
-    
+
     last = H_reg.shape[-1]
     if last == 2:
         S2_reg = eigenvalsh_2x2(H_reg)
@@ -137,15 +136,15 @@ def sigma_map(M, elem_func, tau, order=0, tail=None, masked_only=True):
         S2_reg = eigenvalsh_3x3_cardano(H_reg)
     else:
         raise ValueError(f"Only 2×2 or 3×3 supported, got {last}×{last}.")
-    
+
     # Mathematical correction: λ(H̃) = σ²(M) + ε
     # Therefore: σ²(M) = λ(H̃) - ε
     S2_true = torch.clamp(S2_reg - epsilon_used[..., None], min=0)
     S = torch.sqrt(S2_true)
-    
+
     mask = get_mask(S, tail) if tail is not None else torch.ones_like(S)
     mapped = elem_func(S, tau)
-    
+
     if tail is not None and masked_only:
         return mapped * mask
     elif tail is not None:
@@ -155,6 +154,7 @@ def sigma_map(M, elem_func, tau, order=0, tail=None, masked_only=True):
 
 
 # --------- Main class ---------
+
 
 class GPUVectorialTotalVariation(Function):
     """
@@ -271,14 +271,17 @@ class GPUVectorialTotalVariation(Function):
         # SVD-free small blocks
         if r in (2, 3):
             coeffs, rank_one = hessian_components_svd_free_small(
-                x, tail=self.tail, smoothing_function=self.smoothing_function,
+                x,
+                tail=self.tail,
+                smoothing_function=self.smoothing_function,
                 order=1 if Mdim <= Ddim else 0,
             )
             # smoothing epsilon (self.eps) is only needed inside hessian_diag;
             # in the helper we passed 0.0; if you want it used, swap the call to
             # route self.eps there (or keep as-is if your diag funcs read it differently).
-            return torch.nan_to_num(coeffs, nan=0.0, posinf=0.0, neginf=0.0), \
-                torch.nan_to_num(rank_one, nan=0.0, posinf=0.0, neginf=0.0)
+            return torch.nan_to_num(coeffs, nan=0.0, posinf=0.0, neginf=0.0), torch.nan_to_num(
+                rank_one, nan=0.0, posinf=0.0, neginf=0.0
+            )
 
         # Fallback for larger r
         U, S, Vh = torch.linalg.svd(x, full_matrices=False)
@@ -297,5 +300,6 @@ class GPUVectorialTotalVariation(Function):
 
         U_perm = U.permute(*range(U.ndim - 2), -1, -2)
         rank_one = U_perm.unsqueeze(-1) @ Vh.unsqueeze(-2)
-        return torch.nan_to_num(coeffs, nan=0.0, posinf=0.0, neginf=0.0), \
-            torch.nan_to_num(rank_one, nan=0.0, posinf=0.0, neginf=0.0)
+        return torch.nan_to_num(coeffs, nan=0.0, posinf=0.0, neginf=0.0), torch.nan_to_num(
+            rank_one, nan=0.0, posinf=0.0, neginf=0.0
+        )

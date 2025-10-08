@@ -6,7 +6,6 @@ import cProfile
 import logging
 import os
 import pstats
-from typing import Any, List
 
 import numpy as np
 from cil.optimisation.functions import OperatorCompositionFunction, SumFunction, SVRGFunction
@@ -20,11 +19,6 @@ from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
-from setr.cil_extensions.preconditioners import (
-    BSREMPreconditioner,
-    ImageFunctionPreconditioner,
-    LehmerMeanPreconditioner,
-)
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
     attach_prior_hessian,
@@ -36,17 +30,17 @@ from setr.scripts.common import (
     save_results,
 )
 from setr.scripts.dtnv_common import (
+    apply_gradient_energy_scaling,
     compute_kappa_squared_image_from_partitioned_objective,
     get_algorithm,
     get_block_objective,
     get_callbacks,
-    get_probabilities,
-    get_s_inv_from_subset_objs,
-    normalise_kappa_squares,
-    gradient_energy_scale_sirf,
     get_preconditioners,
     get_prior,
-    apply_gradient_energy_scaling,
+    get_probabilities,
+    get_s_inv_from_subset_objs,
+    gradient_energy_scale_sirf,
+    normalise_kappa_squares,
 )
 from setr.utils import (
     get_pet_am,
@@ -55,7 +49,8 @@ from setr.utils import (
     get_spect_data,
 )
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_filters, get_array
+from setr.utils.sirf import get_array, get_filters
+
 
 def prepare_data(args):
     """
@@ -85,12 +80,8 @@ def prepare_data(args):
     gauss.apply(pet_data["initial_image"])
     cyl.apply(pet_data["initial_image"])
 
-    pet_data["initial_image"].write(
-        os.path.join(args.output_path, 'initial_image_0.hv')
-    )
-    spect_data["initial_image"].write(
-        os.path.join(args.output_path, 'initial_image_1.hv')
-    )
+    pet_data["initial_image"].write(os.path.join(args.output_path, "initial_image_0.hv"))
+    spect_data["initial_image"].write(os.path.join(args.output_path, "initial_image_1.hv"))
 
     # Set delta (smoothing parameter) if not provided
     if args.delta is None:
@@ -273,7 +264,7 @@ def main(args) -> None:
 
     # Set up resampling operators
     spect2pet = get_resampling_operators(pet_data, spect_data)
-    
+
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
@@ -310,12 +301,13 @@ def main(args) -> None:
         spect2pet,
         shape=(2, 2),
     )
-    
+
     # cross-modal scaling (XXth pct)
     kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
     combined = bo.direct(initial_estimates)
     scale = gradient_energy_scale_sirf(
-        combined[0], combined[1], 
+        combined[0],
+        combined[1],
         mask=None,
         kappa_pet=kappas.containers[0] if kappas else None,
         kappa_spect=kappas.containers[1] if kappas else None,
@@ -339,9 +331,7 @@ def main(args) -> None:
         priors_list = []
     else:
         # Set up the prior.
-        priors_list = get_prior(
-            args, umap, combined, bo, kappas
-        )        
+        priors_list = get_prior(args, umap, combined, bo, kappas)
         for i, p in enumerate(priors_list):
             attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
@@ -350,7 +340,9 @@ def main(args) -> None:
     update_interval = len(all_funs) if ui is None else ui
 
     # Set up preconditioners
-    precond = get_preconditioners(args, s_inv, all_funs, update_interval, priors_list, initial_estimates)
+    precond = get_preconditioners(
+        args, s_inv, all_funs, update_interval, priors_list, initial_estimates
+    )
 
     probs = get_probabilities(args, args.num_subsets, len(all_funs), bpos=2)
 
@@ -361,7 +353,7 @@ def main(args) -> None:
             prob=probs,
         ),
         snapshot_update_interval=len(all_funs) * 2,
-        store_gradients=True
+        store_gradients=True,
     )
 
     # Set up step size
@@ -376,10 +368,13 @@ def main(args) -> None:
     # Run algorithm using shared function
     subiterations = args.num_epochs * len(all_funs)
     algo = get_algorithm(
-        initial_estimates, 
+        initial_estimates,
         -SumFunction(f_obj, prior) if prior else -f_obj,
-        precond, step_size, 
-        update_interval, subiterations, callbacks
+        precond,
+        step_size,
+        update_interval,
+        subiterations,
+        callbacks,
     )
 
     # Save results using shared function

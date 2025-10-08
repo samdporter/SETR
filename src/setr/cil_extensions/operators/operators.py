@@ -6,7 +6,8 @@ from cil.framework import BlockDataContainer, BlockGeometry
 from cil.optimisation.operators import LinearOperator
 from sirf.Reg import NiftyResample
 from sirf.STIR import ImageData, TruncateToCylinderProcessor
-from setr.utils.sirf import get_array
+
+from setr.utils.sirf import create_spect_uniform_image, get_array
 
 
 class AdjointOperator(LinearOperator):
@@ -121,6 +122,24 @@ class TruncationOperator(LinearOperator):
     def adjoint(self, x, out=None):
         return self.direct(x, out)
 
+class FlipOperator(LinearOperator):
+    "Simple operator to flip along chosen axis"
+
+    def __init__(self, domain_geometr, axis):
+        super().__init__(domain_geometry=domain_geometry, range_geometry=domain_geometry)
+
+        self.axis = axis
+
+        def direct(x, out = None):
+            arr = np.flip(get_array(x), axis=self.axis)
+            if out is None:
+                out = x.clone()
+            out.fill(arr)
+            return out
+
+        def adjoint(x, out=None):
+            return self.direct(x, out=out)
+
 
 class DirectionalOperator(LinearOperator):
     def __init__(self, anatomical_gradient, gamma=1, eta=1e-6):
@@ -160,107 +179,213 @@ class DirectionalOperator(LinearOperator):
         return self.tmp
 
 
-class NiftyResampleOperator(LinearOperator):
+class FlipOperator(LinearOperator):
+    def __init__(self, axis, image):
+        self.axis = axis
+        super().__init__(domain_geometry=image, range_geometry=image)
+
+    def direct(self, x, out=None):
+        if out is None:
+            out = x.copy()
+        out_arr = get_array(out)
+        out_arr = np.flip(out_arr, axis=self.axis)
+        out.fill(out_arr)
+        return out
+
+    def adjoint(self, x, out=None):
+        return self.direct(x, out)
+
+
+def crop_central(volume: np.ndarray, size=(128, 128, 128)) -> np.ndarray:
     """
-    Resampling operator that handles both zooming and registration transformations.
+    Extract the central subvolume of given size from a 3D array,
+    padding with zeros if the volume is smaller in any dimension.
+
+    Parameters
+    ----------
+    volume : np.ndarray
+        Input 3D array.
+    size : tuple of three ints, optional
+        Desired output shape (depth, height, width). Default is (128, 128, 128).
+
+    Returns
+    -------
+    np.ndarray
+        Central subvolume of shape `size`, zero-padded as needed.
     """
-    
-    def __init__(self, reference, floating, transform, zoom_factors=None):
-        """
-        Initialize the resampling operator.
-        
-        Args:
-            reference: Reference ImageData
-            floating: Floating ImageData  
-            transform: Registration transformation
-            zoom_factors: Optional tuple of zoom factors (z, y, x) to apply before registration
-        """
-        self.reference = reference.get_uniform_copy(0)
-        self.floating = floating.get_uniform_copy(0)
-        self.transform = transform
+    dz, dy, dx = volume.shape
+    sz, sy, sx = size
+    # compute centre indices
+    cz, cy, cx = dz // 2, dy // 2, dx // 2
+    # compute start indices (can be negative)
+    start_z, start_y, start_x = cz - sz // 2, cy - sy // 2, cx - sx // 2
+    end_z, end_y, end_x = start_z + sz, start_y + sy, start_x + sx
+
+    # allocate output
+    out = np.zeros((sz, sy, sx), dtype=volume.dtype)
+
+    # clamp input region
+    in_z0, in_z1 = max(0, start_z), min(dz, end_z)
+    in_y0, in_y1 = max(0, start_y), min(dy, end_y)
+    in_x0, in_x1 = max(0, start_x), min(dx, end_x)
+
+    # corresponding output region
+    out_z0 = in_z0 - start_z
+    out_y0 = in_y0 - start_y
+    out_x0 = in_x0 - start_x
+    out_z1 = out_z0 + (in_z1 - in_z0)
+    out_y1 = out_y0 + (in_y1 - in_y0)
+    out_x1 = out_x0 + (in_x1 - in_x0)
+
+    out[out_z0:out_z1, out_y0:out_y1, out_x0:out_x1] = volume[in_z0:in_z1, in_y0:in_y1, in_x0:in_x1]
+    return out
+
+
+class EnlargementOperator(LinearOperator):
+    """Operator for enlarging images with zero-padding."""
+
+    def __init__(self, enlarged_shape, enlargement_sino, original_floating):
+        self.enlarged_shape = enlarged_shape
+        self.enlargement_sino = enlargement_sino
+        self.original_floating = original_floating
+
+        # Create the range geometry (enlarged image)
+        self.enlarged_image = create_spect_uniform_image(
+            self.enlargement_sino,
+            dims=self.enlarged_shape,
+        )
+
+        # Initialize the LinearOperator with proper geometries
+        super().__init__(domain_geometry=self.original_floating, range_geometry=self.enlarged_image)
+
+    def direct(self, x, out=None):
+        """Enlarge input by padding with zeros."""
+        # logging.info(f"Enlarging image from {self.original_floating.shape} to {self.enlarged_shape}")
+        self.enlarged_image.fill(crop_central(get_array(x), size=self.enlarged_shape))
+        return self._project_and_fill(self.enlarged_image, out)
+
+    def adjoint(self, x, out=None):
+        """Crop back to original size."""
+        # logging.info(f"Cropping image from {self.enlarged_shape} to {self.original_floating.shape}")
+        x_array = get_array(x)
+        cropped_array = crop_central(x_array, size=self.original_floating.shape)
+        result = self.original_floating.copy()
+        result.fill(cropped_array)
+        return self._project_and_fill(result, out)
+
+    def _project_and_fill(self, res, out):
+        if out is not None:
+            out.fill(res)
+            return out
+        return res
+
+
+class ZoomOperator(LinearOperator):
+    """Operator for zooming images."""
+
+    def __init__(self, zoom_factors, input_geometry, target_voxel_sizes=None):
         self.zoom_factors = zoom_factors
-        
+        self.inv_zoom_factors = tuple(1.0 / z for z in self.zoom_factors)
+        self.input_geometry = input_geometry
+
+        # Create the range geometry (zoomed image)
+        self.zoomed_geometry = input_geometry.zoom_image(
+            self.zoom_factors, scaling="preserve_projections"
+        )
+
+        # Initialize the LinearOperator with proper geometries
+        super().__init__(domain_geometry=self.input_geometry, range_geometry=self.zoomed_geometry)
+
+        # Calculate scaling factor for proper adjoint
+        if target_voxel_sizes is not None:
+            # If user specified target voxel sizes, check if they match
+            input_voxel_sizes = input_geometry.voxel_sizes()
+            zoomed_voxel_sizes = tuple(input_voxel_sizes[i] / zoom_factors[i] for i in range(3))
+
+            voxel_match = all(
+                abs(zoomed_voxel_sizes[i] - target_voxel_sizes[i]) < 1e-6 for i in range(3)
+            )
+            if voxel_match:
+                self.scale = 1.0  # No scaling needed!
+                print("Zoom factors chosen to match target voxel sizes exactly - scale = 1.0")
+            else:
+                # Scale based on voxel volume difference
+                input_voxel_volume = (
+                    input_voxel_sizes[0] * input_voxel_sizes[1] * input_voxel_sizes[2]
+                )
+                target_voxel_volume = (
+                    target_voxel_sizes[0] * target_voxel_sizes[1] * target_voxel_sizes[2]
+                )
+                self.scale = target_voxel_volume / input_voxel_volume
+        else:
+            # Standard zoom scaling based on volume change
+            zoom_volume_factor = zoom_factors[0] * zoom_factors[1] * zoom_factors[2]
+            self.scale = 1.0 / zoom_volume_factor
+
+    def direct(self, x, out=None):
+        """Apply zoom transformation."""
+        # logging.info(f"Zoom factors: {self.zoom_factors}, scale: {self.scale}")
+        result = x.zoom_image(self.zoom_factors, scaling="preserve_projections")
+        return self._project_and_fill(result, out)
+
+    def adjoint(self, x, out=None):
+        """Apply inverse zoom transformation."""
+        # logging.info(f"Inverse zoom factors: {self.zoom_factors}, scale: {self.scale}")
+        result = x.zoom_image(self.inv_zoom_factors, scaling="preserve_projections") * self.scale
+        return self._project_and_fill(result, out)
+
+    def _project_and_fill(self, res, out):
+        if out is not None:
+            out.fill(res)
+            return out
+        return res
+
+
+class NiftyResampleOperator(LinearOperator):
+    """Pure registration operator without zoom complications."""
+
+    def __init__(self, reference, floating, transform, assume_matched_voxels=False):
+        self.reference = reference.get_uniform_copy(0)
+        self.floating = floating
+        self.transform = transform
+        self.assume_matched_voxels = assume_matched_voxels
+
+        # Initialize the LinearOperator with proper geometries
+        super().__init__(domain_geometry=self.floating, range_geometry=self.reference)
+
         self.resampler = NiftyResample()
         self.resampler.set_reference_image(self.reference)
         self.resampler.set_floating_image(self.floating)
         self.resampler.set_interpolation_type_to_linear()
         self.resampler.set_padding_value(0)
         self.resampler.add_transformation(self.transform)
-        
-        # Calculate scaling factor for proper adjoint
-        vx_ref = self.reference.voxel_sizes()
-        vx_flt = self.floating.voxel_sizes()
-        self.scale = (vx_ref[0] * vx_ref[1] * vx_ref[2]) / (vx_flt[0] * vx_flt[1] * vx_flt[2])
-        
-        if self.zoom_factors:
-            # Adjust scale for zoom
-            zoom_volume_factor = self.zoom_factors[0] * self.zoom_factors[1] * self.zoom_factors[2]
-            self.scale /= zoom_volume_factor
-    
+
+        if assume_matched_voxels:
+            # If voxels are already matched, no scaling needed
+            self.scale = 1.0
+            print("Assuming voxel sizes are matched - using scale = 1.0")
+        else:
+            # Calculate scaling factor for different voxel sizes
+            vx_ref = self.reference.voxel_sizes()
+            vx_flt = self.floating.voxel_sizes()
+            self.scale = (vx_ref[0] * vx_ref[1] * vx_ref[2]) / (vx_flt[0] * vx_flt[1] * vx_flt[2])
+            print(f"Voxel size scaling factor: {self.scale}")
+
     def direct(self, x, out=None):
-        """Forward transformation: floating -> reference space."""
-        input_image = x
-        
-        # Apply zoom if specified
-        if self.zoom_factors:
-            input_image = x.zoom_image(self.zoom_factors, scaling='preserve_projections')
-            # Update resampler with zoomed image
-            self.resampler.set_floating_image(input_image)
-        
-        # Apply registration transformation
-        res = self.resampler.forward(input_image)
-        return self._project_and_fill(res, out)
-    
+        """Forward registration transformation."""
+        result = self.resampler.forward(x)
+        return self._project_and_fill(result, out)
+
     def adjoint(self, x, out=None):
-        """Adjoint transformation: reference -> floating space."""
-        # Apply registration transformation (backward)
-        res = self.resampler.backward(x) * self.scale
-        
-        # Apply inverse zoom if specified
-        if self.zoom_factors:
-            inv_zoom_factors = tuple(1.0 / z for z in self.zoom_factors)
-            res = res.zoom_image(inv_zoom_factors, scaling='preserve_projections')
-        
-        return self._project_and_fill(res, out)
-    
+        """Adjoint registration transformation."""
+        result = self.resampler.backward(x) * self.scale
+        return self._project_and_fill(result, out)
+
     def _project_and_fill(self, res, out):
-        """Helper method to handle output."""
-        # res = res.maximum(0)  # Ensure non-negativity if needed
         if out is not None:
             out.fill(res)
             return out
         return res
-    
-    def domain_geometry(self):
-        return self.floating
-    
-    def range_geometry(self):
-        return self.reference
-
-
-def load_zoom_factors(spect_dir):
-    """
-    Load previously saved zoom factors from file.
-    
-    Args:
-        spect_dir: Directory containing the zoom factors file
-        
-    Returns:
-        tuple: Zoom factors (z, y, x)
-    """
-    zoom_file_path = os.path.join(spect_dir, "spect_to_pet_zoom_factors.txt")
-    
-    if not os.path.exists(zoom_file_path):
-        raise FileNotFoundError(f"Zoom factors file not found: {zoom_file_path}")
-    
-    with open(zoom_file_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line.startswith('#') and line:
-                zoom_values = line.split()
-                return (float(zoom_values[0]), float(zoom_values[1]), float(zoom_values[2]))
-    
-    raise ValueError("No zoom factors found in file")
 
 
 class CouchShiftOperator(LinearOperator):
@@ -288,7 +413,7 @@ class CouchShiftOperator(LinearOperator):
             The amount by which to shift the couch position along the z-axis (in mm).
         """
         self.shift = shift
-        self.path=path
+        self.path = path
         # need to create range geometry by shifting the image
         range_geometry = self.initialise_shift(image)
         super().__init__(domain_geometry=image, range_geometry=range_geometry)
@@ -358,9 +483,7 @@ class CouchShiftOperator(LinearOperator):
         except Exception as e:
             raise RuntimeError(f"Failed to modify the file {file_path}: {e}")
 
-        image = ImageData(file_path)
-
-        return image
+        return ImageData(file_path)
 
     @staticmethod
     def get_couch_shift_from_header(header_filepath):

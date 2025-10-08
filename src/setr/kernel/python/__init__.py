@@ -5,6 +5,8 @@ Pure-Python and Numba-based kernel operators.
 """
 
 from .my_kem import (
+    NUMBA_AVAIL,
+    SLIDING_WINDOW_AVAIL,
     BaseKernelOperator,
     KernelOperator,
     NumbaKernelOperator,
@@ -16,4 +18,6 @@ __all__ = [
     "BaseKernelOperator",
     "KernelOperator",
     "NumbaKernelOperator",
+    "NUMBA_AVAIL",
+    "SLIDING_WINDOW_AVAIL",
 ]

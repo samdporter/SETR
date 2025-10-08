@@ -6,6 +6,8 @@ from .operators import (
     AdjointOperator,
     CouchShiftOperator,
     DirectionalOperator,
+    EnlargementOperator,
+    FlipOperator,
     ImageCombineOperator,
     ImageResampleOperator,
     ImageSummationOperator,
@@ -14,6 +16,7 @@ from .operators import (
     ScalingOperator,
     TruncationOperator,
     ZeroEndSlicesOperator,
+    ZoomOperator,
 )
 
 __all__ = [
@@ -24,8 +27,11 @@ __all__ = [
     "TruncationOperator",
     "DirectionalOperator",
     "NiftyResampleOperator",
+    "ZoomOperator",
+    "EnlargementOperator",
     "CouchShiftOperator",
     "ImageCombineOperator",
     "ImageResampleOperator",
+    "FlipOperator",
     "ImageSummationOperator",
 ]

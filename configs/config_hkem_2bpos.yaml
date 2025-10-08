@@ -7,14 +7,14 @@ method: "ista"   # Only ISTA supported for multi-bed reconstruction
 use_scatter: true
 
 # Data paths
-pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
-output_path: "/home/sam/working/synergistic_recon/results/hkem_pet_2bpos"
+pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt4/PET"
+output_path: "/home/sam/working/synergistic_recon/results/sirt4/tof/hkem_pet_2bpos"
 working_path: "/home/sam/working/synergistic_recon/tmp"
 
 # Algorithm parameters
 num_subsets: 9
-num_epochs: 30
-initial_step_size: 0.1
+num_epochs: 15
+step_size: 1
 
 # Kernel operator parameters
 num_neighbours: 5
@@ -23,14 +23,7 @@ sigma_anatomical: 3              # Anatomical similarity parameter
 sigma_emission: 1                # Emission similarity parameter
 sigma_distance_anatomical: 5     # Distance weighting parameter for anatomical features
 sigma_distance_emission: 5       # Distance weighting parameter for emission features
-normalize_features: false          # Normalize features before kernel computation
-normalize_kernel: false            # Normalize kernel before application
-use_mask: false                    # Use k-nearest neighbor masking
-mask_k: null                       # Number of neighbors for masking (null = use all)
-recalc_mask: false                 # Recalculate mask at each iteration
-distance_weighting: false          # Apply distance-based weighting to kernel
-hybrid: true                       # Enable hybrid anatomical+emission kernel
-kernel_backend: "auto"             # Options: "auto", "numba", "python"
+hybrid: true                     # Enable hybrid anatomical+emission kernel
 only_2D: false  # Use 2D kernels only (true = only_2D in old code)
 guidance: "emission"
 
@@ -42,5 +35,5 @@ pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
 
 # System parameters
 no_gpu: false
-use_tof: false
+use_tof: true
 seed: null

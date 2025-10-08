@@ -1,14 +1,20 @@
 # svd_free_hessian.py
 import torch
-from .small_eig import (
-    eigenvalsh_2x2, eigenvecsh_2x2,
-    eigenvalsh_3x3_cardano, eigenvecsh_3x3_cardano,
-)
+
 from .common import (
+    charbonnier_hessian_diag,
+    fair_hessian_diag,
     get_mask,
-    fair_hessian_diag, charbonnier_hessian_diag,
-    perona_malik_hessian_diag, nothing_hessian_diag,
+    nothing_hessian_diag,
+    perona_malik_hessian_diag,
 )
+from .small_eig import (
+    eigenvalsh_2x2,
+    eigenvalsh_3x3_cardano,
+    eigenvecsh_2x2,
+    eigenvecsh_3x3_cardano,
+)
+
 
 # ---------- tiny utilities (shared with your “stable” gate) ----------
 def _trace_normalize(H):
@@ -19,35 +25,36 @@ def _trace_normalize(H):
     Hn = H / alpha.unsqueeze(-1).unsqueeze(-1)
     return Hn, alpha
 
+
 def _kappa_proxy_3x3(H):
-    trH  = torch.diagonal(H, -2, -1).sum(-1)
+    trH = torch.diagonal(H, -2, -1).sum(-1)
     trH2 = (H * H).sum(dim=(-2, -1))
-    s2   = 0.5 * (trH * trH - trH2)
+    s2 = 0.5 * (trH * trH - trH2)
     detH = torch.linalg.det(H)
     tiny = torch.finfo(H.dtype).tiny
     proxy = (trH / 3.0) * (s2 / torch.clamp(detH, min=tiny))
-    return torch.nan_to_num(proxy, nan=float('inf'), posinf=float('inf'), neginf=float('inf'))
+    return torch.nan_to_num(proxy, nan=float("inf"), posinf=float("inf"), neginf=float("inf"))
 
 
 def _log_kappa_proxy_3x3(H):
     """
-    Log proxy for SPD-ish 3x3 (scale invariant): 
+    Log proxy for SPD-ish 3x3 (scale invariant):
     log_proxy = log(tr/3) + log(s2) - log(det)
     All terms clamped to keep them finite in float32.
     """
-    trH  = torch.diagonal(H, -2, -1).sum(-1)                      # (...,)
+    trH = torch.diagonal(H, -2, -1).sum(-1)  # (...,)
     # Frobenius^2 == tr(H^2) for symmetric H
-    trH2 = (H * H).sum(dim=(-2, -1))                               # (...,)
+    trH2 = (H * H).sum(dim=(-2, -1))  # (...,)
     tiny = torch.finfo(H.dtype).tiny
 
-    s2   = 0.5 * (trH*trH - trH2)
-    s2   = torch.clamp(s2, min=tiny)                               # keep positive & finite
-    detH = torch.clamp(torch.linalg.det(H), min=tiny)              # avoid log(0)
+    s2 = 0.5 * (trH * trH - trH2)
+    s2 = torch.clamp(s2, min=tiny)  # keep positive & finite
+    detH = torch.clamp(torch.linalg.det(H), min=tiny)  # avoid log(0)
 
     log_tr_over_3 = torch.log(torch.clamp(trH / 3.0, min=tiny))
-    log_s2        = torch.log(s2)
-    log_det       = torch.log(detH)
-    log_proxy     = log_tr_over_3 + log_s2 - log_det               # (...,)
+    log_s2 = torch.log(s2)
+    log_det = torch.log(detH)
+    log_proxy = log_tr_over_3 + log_s2 - log_det  # (...,)
 
     # sanitize NaN -> big positive number so it naturally fails the gate but stays finite
     log_proxy = torch.nan_to_num(log_proxy, nan=1e30)
@@ -57,6 +64,7 @@ def _log_kappa_proxy_3x3(H):
 def _dtype_cond_threshold(dtype):
     return 1e7 if dtype == torch.float32 else 1e12
 
+
 def _pick_hess_diag(smoothing_function):
     if smoothing_function == "fair":
         return fair_hessian_diag
@@ -65,6 +73,7 @@ def _pick_hess_diag(smoothing_function):
     if smoothing_function == "perona_malik":
         return perona_malik_hessian_diag
     return nothing_hessian_diag
+
 
 # ---------- core projector construction from one-side Gram eigenvectors ----------
 def _rank_one_fields_from_gram(M, order, B, S):
@@ -79,18 +88,19 @@ def _rank_one_fields_from_gram(M, order, B, S):
     *lead, Mdim, Ddim = M.shape
     r = S.shape[-1]
     tiny = torch.finfo(S.dtype).eps
-    Sinv = 1.0 / torch.clamp(S, min=tiny)                    # (..., r)
+    Sinv = 1.0 / torch.clamp(S, min=tiny)  # (..., r)
 
     if order == 1:
         # U = B  (..., M, r)
-        U_perm = B.permute(*range(B.ndim - 2), -1, -2)       # (..., r, M)
-        P = U_perm.unsqueeze(-1) @ U_perm.unsqueeze(-2)      # (..., r, M, M)
+        U_perm = B.permute(*range(B.ndim - 2), -1, -2)  # (..., r, M)
+        P = U_perm.unsqueeze(-1) @ U_perm.unsqueeze(-2)  # (..., r, M, M)
         return (P @ M.unsqueeze(-3)) * Sinv[..., :, None, None]
     else:
         # V = B  (..., D, r)
-        V_perm = B.permute(*range(B.ndim - 2), -1, -2)       # (..., r, D)
-        Q = V_perm.unsqueeze(-1) @ V_perm.unsqueeze(-2)      # (..., r, D, D)
+        V_perm = B.permute(*range(B.ndim - 2), -1, -2)  # (..., r, D)
+        Q = V_perm.unsqueeze(-1) @ V_perm.unsqueeze(-2)  # (..., r, D, D)
         return (M.unsqueeze(-3) @ Q) * Sinv[..., :, None, None]
+
 
 # ---------- small-block eig path (2×2/3×3) ----------
 def _gram_eig_small_blocks(M, order):
@@ -105,16 +115,17 @@ def _gram_eig_small_blocks(M, order):
     r = H.shape[-1]
 
     if r == 2:
-        L = eigenvalsh_2x2(H)                                 # ascending
+        L = eigenvalsh_2x2(H)  # ascending
         B = eigenvecsh_2x2(H, L)
     elif r == 3:
-        L = eigenvalsh_3x3_cardano(H)                         # ascending
+        L = eigenvalsh_3x3_cardano(H)  # ascending
         B = eigenvecsh_3x3_cardano(H, L)
     else:
         raise ValueError(f"_gram_eig_small_blocks: r={r} not supported")
 
     S = torch.sqrt(torch.clamp(L, min=0.0))
     return S, B
+
 
 # ---------- public helpers used by both classes ----------
 def hessian_components_svd_free_small(x, tail, smoothing_function, order=None):
@@ -130,15 +141,18 @@ def hessian_components_svd_free_small(x, tail, smoothing_function, order=None):
     if order is None:
         order = 1 if Mdim <= Ddim else 0
 
-    S, B = _gram_eig_small_blocks(x, order)                   # ascending S
+    S, B = _gram_eig_small_blocks(x, order)  # ascending S
     hess_diag = _pick_hess_diag(smoothing_function)
-    coeffs = hess_diag(S, torch.tensor(0.0, dtype=x.dtype, device=x.device))  # tau/eps handled by caller
+    coeffs = hess_diag(
+        S, torch.tensor(0.0, dtype=x.dtype, device=x.device)
+    )  # tau/eps handled by caller
 
     if tail is not None:
         coeffs = coeffs * get_mask(S, tail)
 
     rank_one = _rank_one_fields_from_gram(x, order, B, S)
     return coeffs, rank_one
+
 
 def hessian_components_hybrid_small(
     x, tail, smoothing_function, eps_tensor, condition_threshold=None, order=None
@@ -170,7 +184,7 @@ def hessian_components_hybrid_small(
         H = (x @ x.transpose(-1, -2)) if order == 1 else (x.transpose(-1, -2) @ x)
         H = 0.5 * (H + H.transpose(-1, -2))
 
-        Hn, alpha = _trace_normalize(H)                       # scale-invariant gate
+        Hn, alpha = _trace_normalize(H)  # scale-invariant gate
         thr = _dtype_cond_threshold(x.dtype) if condition_threshold is None else condition_threshold
         proxy = _kappa_proxy_3x3(Hn)
         ok = (proxy < thr) & torch.isfinite(proxy)
@@ -181,7 +195,7 @@ def hessian_components_hybrid_small(
 
         if ok.all():
             # all analytic
-            L = eigenvalsh_3x3_cardano(Hn)                    # (...,3), ascending
+            L = eigenvalsh_3x3_cardano(Hn)  # (...,3), ascending
             B = eigenvecsh_3x3_cardano(Hn, L)
             S = torch.sqrt(torch.clamp(L * alpha.unsqueeze(-1), min=0.0))
             c = hess_diag(S, eps_tensor)

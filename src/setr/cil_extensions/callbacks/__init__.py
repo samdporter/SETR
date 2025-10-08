@@ -4,6 +4,8 @@ setr.cil_extensions.callbacks
 
 from .callbacks import (
     Callback,
+    ComputeMetricsCallback,
+    PrintMetricsCallback,
     PrintObjectiveCallback,
     SaveGradientUpdateCallback,
     SaveImageCallback,
@@ -22,4 +24,6 @@ __all__ = [
     "SaveObjectiveCallback",
     "SavePreconditionerCallback",
     "SubsetValueCallback",
+    "ComputeMetricsCallback",
+    "PrintMetricsCallback",
 ]

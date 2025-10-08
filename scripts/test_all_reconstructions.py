@@ -205,7 +205,7 @@ def run_test(settings: Settings, tc: TestCase) -> TestResult:
     try:
         # Use Popen for real-time output capture with unbuffered output
         env = os.environ.copy()
-        env['PYTHONUNBUFFERED'] = '1'  # Force unbuffered output
+        env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output
 
         process = subprocess.Popen(
             cmd,
@@ -214,7 +214,7 @@ def run_test(settings: Settings, tc: TestCase) -> TestResult:
             text=True,
             bufsize=1,  # Line buffered
             universal_newlines=True,
-            env=env
+            env=env,
         )
 
         # Real-time output capture with timeout
@@ -255,8 +255,8 @@ def run_test(settings: Settings, tc: TestCase) -> TestResult:
             duration = time.time() - start
             # Create a fake TimeoutExpired with collected output
             fake_timeout = subprocess.TimeoutExpired(cmd, settings.timeout_s)
-            fake_timeout.stdout = ''.join(stdout_lines)
-            fake_timeout.stderr = ''.join(stderr_lines)
+            fake_timeout.stdout = "".join(stdout_lines)
+            fake_timeout.stderr = "".join(stderr_lines)
             write_timeout_log(out_dir, tc.name, cmd, duration, fake_timeout)
             logging.error("⏰ TIMEOUT: %s exceeded %d seconds", tc.name, settings.timeout_s)
             ok = False
@@ -272,10 +272,7 @@ def run_test(settings: Settings, tc: TestCase) -> TestResult:
 
             # Create a fake CompletedProcess for compatibility
             fake_proc = subprocess.CompletedProcess(
-                cmd, 
-                process.returncode, 
-                ''.join(stdout_lines),
-                ''.join(stderr_lines)
+                cmd, process.returncode, "".join(stdout_lines), "".join(stderr_lines)
             )
             write_test_log(out_dir, tc.name, cmd, duration, fake_proc)
 
@@ -283,7 +280,7 @@ def run_test(settings: Settings, tc: TestCase) -> TestResult:
                 logging.info("✅ SUCCESS: %s (%.2fs)", tc.name, duration)
                 ok = True
             else:
-                snippet = (''.join(stderr_lines))[:200]
+                snippet = ("".join(stderr_lines))[:200]
                 logging.error("❌ FAILED: %s (rc=%s) | %s", tc.name, process.returncode, snippet)
                 ok = False
 

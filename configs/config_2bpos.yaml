@@ -24,8 +24,8 @@ tv_both_directions: false
 # TNV (vectorial) prior settings
 use_tnv_prior: true
 gamma_tnv: 1.0
-alpha: 100.0
-beta: 100.0
+alpha: 500.0
+beta: 500.0
 tnv_stencil: "18"
 tnv_bnd_cond: "Periodic"
 directional_tnv: true
@@ -46,10 +46,10 @@ use_tof: false
 #== Data paths
 pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/PET"
 spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/SPECT"
-output_path: "/home/sporter/synergistic_Y90/output/test"
-working_path: "/home/sporter/synergistic_recon/tmp"
+output_path: "/home/sporter/synergistic_Y90/SETR/output/test"
+working_path: "/home/sporter/synergistic_Y90/SETR/output/test"
 
 #== Miscellaneous
 save_images: true
 seed: null
-profile: false
+profile: true

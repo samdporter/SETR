@@ -33,12 +33,6 @@ def get_kernel_hyperparams(args):
         "sigma_emission": args.sigma_emission,
         "sigma_distance_anatomical": args.sigma_distance_anatomical,
         "sigma_distance_emission": args.sigma_distance_emission,
-        "normalize_features": args.normalize_features,
-        "normalize_kernel": args.normalize_kernel,
-        "use_mask": args.use_mask,
-        "mask_k": args.mask_k,
-        "recalc_mask": args.recalc_mask,
-        "distance_weighting": args.distance_weighting,
         "hybrid": args.hybrid,
         "only_2D": args.only_2D,  # Use 2D kernels only
     }
