@@ -8,23 +8,19 @@ import pstats
 from types import SimpleNamespace
 
 import numpy as np
-from cil.optimisation.functions import (
-    SumFunction,
-    SVRGFunction,
-)
+from cil.optimisation.functions import SumFunction
 from cil.optimisation.operators import (
     BlockOperator,
     CompositionOperator,
-    FlipOperator,
     IdentityOperator,
     ZeroOperator,
 )
-from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
 from sirf.STIR import ImageData
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
+from setr.cil_extensions.operators import FlipOperator
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,
@@ -40,7 +36,7 @@ from setr.scripts.dtnv_common import (
     get_kappa_squareds,
     get_preconditioners,
     get_prior,
-    get_probabilities,
+    build_variance_reduced_function,
     get_s_inv_from_objs,
     gradient_energy_scale_sirf,
     normalise_kappa_squares,
@@ -285,17 +281,35 @@ def main(args) -> None:
         args, s_inv, all_funs, update_interval, priors_list, initial_estimates
     )
 
-    probs = get_probabilities(args, num_subsets, len(all_funs))
+    epoch_length = len(all_funs)
 
-    f_obj = SVRGFunction(
-        all_funs,
-        sampler=Sampler.random_with_replacement(
-            len(all_funs),
-            prob=probs,
-        ),
-        snapshot_update_interval=len(all_funs) * 2,
-        store_gradients=True,
+    f_obj, probs, prior_prob, prior_in_sampler = build_variance_reduced_function(
+        args, all_funs, prior, num_subsets, epoch_length, bpos=1
     )
+
+    variance_reduction = getattr(args, "variance_reduction", "svrg")
+    logging.info(
+        "Variance reduction: %s | stochastic functions: %d",
+        variance_reduction,
+        getattr(f_obj, "num_functions", len(all_funs) + int(prior_in_sampler)),
+    )
+
+    if prior_in_sampler and prior_prob is not None:
+        target_updates = getattr(args, "prior_updates_per_epoch", None)
+        target_str = f"{float(target_updates):.3f}" if target_updates not in (None, False) else "n/a"
+        expected_updates = (
+            prior_prob * epoch_length / (1.0 - prior_prob) if prior_prob < 1 else float("inf")
+        )
+        logging.info(
+            "Prior sampled with probability %.6f (target=%s updates/epoch, expected≈%.3f).",
+            prior_prob,
+            target_str,
+            expected_updates,
+        )
+    elif prior is not None:
+        logging.info("Prior evaluated deterministically each iteration.")
+
+    objective = -f_obj if prior_in_sampler or prior is None else -SumFunction(f_obj, prior)
 
     # Set up step size
     step_size = LinearDecayStepSizeRule(
@@ -307,10 +321,10 @@ def main(args) -> None:
     callbacks = get_callbacks(args, update_interval)
 
     # Run algorithm using shared function
-    subiterations = args.num_epochs * len(all_funs)
+    subiterations = args.num_epochs * epoch_length
     algo = get_algorithm(
         initial_estimates,
-        -SumFunction(f_obj, prior) if prior else -f_obj,
+        objective,
         precond,
         step_size,
         update_interval,

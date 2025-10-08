@@ -11,6 +11,8 @@ from typing import Any, List
 import numpy as np
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import (
+    SAGAFunction,
+    SVRGFunction,
     KullbackLeibler,
     OperatorCompositionFunction,
 )
@@ -19,6 +21,7 @@ from cil.optimisation.operators import (
     IdentityOperator,
     ZeroOperator,
 )
+from cil.optimisation.utilities import Sampler
 
 from setr.cil_extensions.algorithms import ista_update_step
 from setr.cil_extensions.callbacks import (
@@ -170,6 +173,96 @@ def get_probabilities(args, num_subsets, update_interval, bpos=1):
         f"Pet: {sum(pet_probs)}, Spect: {sum(spect_probs)}"
     )
     return probs
+
+
+def build_variance_reduced_function(
+    args: argparse.Namespace,
+    all_funs: List[Any],
+    prior: Any,
+    num_subsets: List[int],
+    epoch_length: int,
+    bpos: int = 1,
+):
+    """
+    Construct a variance-reduced stochastic function (SVRG or SAGA) with optional prior sampling.
+
+    Args:
+        args: Configuration namespace.
+        all_funs: List of data fidelity functions.
+        prior: Prior function (already signed as required by the caller). Use ``None`` to disable.
+        num_subsets: [n_pet, n_spect] subset counts.
+        epoch_length: Number of data-function evaluations per epoch (typically len(all_funs)).
+        bpos: Bed positions multiplier for PET subsets.
+
+    Returns:
+        f_obj: Instantiated variance-reduced function.
+        probs: Sampling probabilities passed to the sampler.
+        prior_prob: Sampling probability allocated to the prior (``None`` if not sampled).
+        prior_in_sampler: ``True`` when the prior participates in stochastic updates.
+    """
+
+    data_probs = get_probabilities(args, num_subsets, epoch_length, bpos=bpos)
+
+    prior_updates = getattr(args, "prior_updates_per_epoch", None)
+    prior_in_sampler = prior is not None and prior_updates not in (None, False)
+    prior_prob = None
+
+    if prior_in_sampler:
+        try:
+            prior_updates = float(prior_updates)
+        except (TypeError, ValueError):
+            logging.warning(
+                "Ignoring prior_updates_per_epoch=%s (non-numeric); falling back to prior outside sampler.",
+                prior_updates,
+            )
+            prior_in_sampler = False
+        else:
+            if prior_updates <= 0:
+                logging.info(
+                    "prior_updates_per_epoch <= 0; keeping prior outside stochastic sampler."
+                )
+                prior_in_sampler = False
+
+    stochastic_functions = list(all_funs)
+    if prior_in_sampler:
+        prior_prob = prior_updates / (epoch_length + prior_updates)
+        data_scale = 1.0 - prior_prob
+        data_probs = [p * data_scale for p in data_probs]
+        probs = data_probs + [prior_prob]
+        stochastic_functions.append(prior)
+    else:
+        probs = data_probs
+
+    sampler = Sampler.random_with_replacement(len(stochastic_functions), prob=probs)
+    variance_reduction = getattr(args, "variance_reduction", "svrg")
+    variance_reduction = str(variance_reduction).lower()
+
+    if variance_reduction == "svrg":
+        snapshot_factor = getattr(args, "snapshot_interval_factor", None)
+        if snapshot_factor is None:
+            snapshot_interval = epoch_length * 2
+        else:
+            try:
+                snapshot_interval = max(1, int(round(epoch_length * float(snapshot_factor))))
+            except (TypeError, ValueError):
+                logging.warning(
+                    "Invalid snapshot_interval_factor=%s; defaulting to 2 * epoch_length.",
+                    snapshot_factor,
+                )
+                snapshot_interval = epoch_length * 2
+
+        f_obj = SVRGFunction(
+            stochastic_functions,
+            sampler=sampler,
+            snapshot_update_interval=snapshot_interval,
+            store_gradients=True,
+        )
+    elif variance_reduction == "saga":
+        f_obj = SAGAFunction(stochastic_functions, sampler=sampler)
+    else:
+        raise ValueError("variance_reduction must be 'svrg' or 'saga'")
+
+    return f_obj, probs, prior_prob, prior_in_sampler
 
 
 def compute_kappa_squared_image_from_partitioned_objective(obj_funs, init_img):

@@ -14,7 +14,7 @@ import os
 from types import SimpleNamespace
 
 import numpy as np
-from cil.optimisation.functions import SumFunction, SVRGFunction
+from cil.optimisation.functions import SAGAFunction, SumFunction, SVRGFunction
 from cil.optimisation.operators import (
     BlockOperator,
     CompositionOperator,
@@ -296,7 +296,7 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
     )
 
 
-def get_probabilities_for_mode(subset_mode, prior_mode, num_data_funs):
+def get_probabilities_for_mode(subset_mode, prior_mode, num_data_funs, target_prior_updates=None):
     """
     Calculate sampling probabilities based on subset and prior modes.
 
@@ -304,6 +304,7 @@ def get_probabilities_for_mode(subset_mode, prior_mode, num_data_funs):
         subset_mode: "separate" or "paired"
         prior_mode: "always" or "subset"
         num_data_funs: Number of data fidelity functions
+        target_prior_updates: Desired prior updates per epoch (optional)
 
     Returns:
         probs: List of probabilities (None if prior_mode="always")
@@ -314,18 +315,33 @@ def get_probabilities_for_mode(subset_mode, prior_mode, num_data_funs):
         probs = [1.0 / num_data_funs] * num_data_funs
         prior_prob = None
     elif prior_mode == "subset":
-        if subset_mode == "paired":
-            # 18 pairs + 1 prior, ratio 1:2
-            # prob(prior) = 1/2, prob(each pair) = 1/2 / 18 = 1/36
-            prior_prob = 0.5
-            prob_each = 0.5 / num_data_funs
-        elif subset_mode == "separate":
-            # 18 PET + 18 SPECT + 1 prior, ratio 1:3
-            # prob(prior) = 1/3, prob(each data) = 2/3 / 36 = 1/54
-            prior_prob = 1.0 / 3.0
+        prob_each = None
+        if target_prior_updates not in (None, False):
+            try:
+                target_prior_updates = float(target_prior_updates)
+            except (TypeError, ValueError):
+                logging.warning(
+                    "Invalid prior_updates_per_epoch=%s. Falling back to default prior probability.",
+                    target_prior_updates,
+                )
+                target_prior_updates = None
+
+        if target_prior_updates is not None and target_prior_updates > 0:
+            prior_prob = target_prior_updates / (num_data_funs + target_prior_updates)
             prob_each = (1.0 - prior_prob) / num_data_funs
         else:
-            raise ValueError(f"Unknown subset_mode: {subset_mode}")
+            if subset_mode == "paired":
+                # 18 pairs + 1 prior, ratio 1:2
+                # prob(prior) = 1/2, prob(each pair) = 1/2 / 18 = 1/36
+                prior_prob = 0.5
+                prob_each = 0.5 / num_data_funs
+            elif subset_mode == "separate":
+                # 18 PET + 18 SPECT + 1 prior, ratio 1:3
+                # prob(prior) = 1/3, prob(each data) = 2/3 / 36 = 1/54
+                prior_prob = 1.0 / 3.0
+                prob_each = (1.0 - prior_prob) / num_data_funs
+            else:
+                raise ValueError(f"Unknown subset_mode: {subset_mode}")
 
         probs = [prob_each] * num_data_funs
     else:
@@ -456,8 +472,20 @@ def main(args) -> None:
             attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
 
-    # Set up probabilities and SVRG function based on prior mode
-    data_probs, prior_prob = get_probabilities_for_mode(subset_mode, prior_mode, len(all_funs))
+    # Set up probabilities and stochastic objective based on prior mode
+    raw_target_prior_updates = getattr(args, "prior_updates_per_epoch", None)
+    target_prior_updates = None
+    if raw_target_prior_updates not in (None, False):
+        try:
+            target_prior_updates = float(raw_target_prior_updates)
+        except (TypeError, ValueError):
+            logging.warning(
+                "Invalid prior_updates_per_epoch=%s. Falling back to default prior probability.",
+                raw_target_prior_updates,
+            )
+    data_probs, prior_prob = get_probabilities_for_mode(
+        subset_mode, prior_mode, len(all_funs), target_prior_updates
+    )
 
     base_epoch_length = len(all_funs)
     epoch_length = base_epoch_length
@@ -470,6 +498,41 @@ def main(args) -> None:
     ui = getattr(args, "update_interval", None)
     update_interval = ui if ui is not None else epoch_length
 
+    variance_reduction = getattr(args, "variance_reduction", "svrg")
+    variance_reduction = str(variance_reduction).lower()
+    snapshot_factor = getattr(args, "snapshot_interval_factor", None)
+
+    def _create_sampler(num_functions, probs):
+        return Sampler.random_with_replacement(num_functions, prob=probs)
+
+    def _create_vr_function(functions, probs):
+        sampler = _create_sampler(len(functions), probs)
+        if variance_reduction == "svrg":
+            if snapshot_factor is None:
+                snapshot_interval = epoch_length * 2
+            else:
+                try:
+                    snapshot_interval = max(
+                        1, int(round(epoch_length * float(snapshot_factor)))
+                    )
+                except (TypeError, ValueError):
+                    logging.warning(
+                        "Invalid snapshot_interval_factor=%s; defaulting to 2 * epoch_length.",
+                        snapshot_factor,
+                    )
+                    snapshot_interval = epoch_length * 2
+
+            return SVRGFunction(
+                functions,
+                sampler=sampler,
+                snapshot_update_interval=snapshot_interval,
+                store_gradients=True,
+            )
+        elif variance_reduction == "saga":
+            return SAGAFunction(functions, sampler=sampler)
+        else:
+            raise ValueError("variance_reduction must be 'svrg' or 'saga'")
+
     # Set up preconditioner
     precond = get_preconditioner(
         args, s_inv, all_funs, update_interval, priors_list, initial_estimates
@@ -477,17 +540,19 @@ def main(args) -> None:
 
     if prior_mode == "always":
         # Prior in outer SumFunction
-        logging.info("Prior mode: always (evaluated every iteration)")
-        f_obj = SVRGFunction(
-            all_funs,
-            sampler=Sampler.random_with_replacement(len(all_funs), prob=data_probs),
-            snapshot_update_interval=epoch_length * 2,
-            store_gradients=True,
+        logging.info(
+            "Prior mode: always (evaluated every iteration) | variance reduction: %s",
+            variance_reduction,
         )
+        f_obj = _create_vr_function(all_funs, data_probs)
         objective = -SumFunction(f_obj, prior) if prior else -f_obj
     elif prior_mode == "subset":
         # Prior as a separate subset
-        logging.info(f"Prior mode: subset (prob={prior_prob:.4f})")
+        logging.info(
+            "Prior mode: subset (prob=%.6f) | variance reduction: %s",
+            prior_prob,
+            variance_reduction,
+        )
         if prior is None:
             raise ValueError("Cannot use prior_mode='subset' with no_prior=True")
 
@@ -503,14 +568,21 @@ def main(args) -> None:
         )
         logging.info(f"Prior probability: {prior_prob:.4f}")
         logging.info(f"Each data function probability: {data_probs[0]:.6f}")
+        if target_prior_updates not in (None, False) and prior_prob is not None:
+            logging.info(
+                "Target prior updates per epoch: %.3f | Expected ≈ %.3f (based on sampler).",
+                float(target_prior_updates),
+                prior_prob * epoch_length,
+            )
+        else:
+            logging.info(
+                "Expected prior updates per epoch (based on sampler): %.3f.",
+                prior_prob * epoch_length,
+            )
 
-        f_obj = SVRGFunction(
+        f_obj = _create_vr_function(
             all_funs_with_prior,
-            sampler=Sampler.random_with_replacement(
-                len(all_funs_with_prior), prob=probs_with_prior
-            ),
-            snapshot_update_interval=epoch_length * 2,
-            store_gradients=True,
+            probs_with_prior,
         )
         objective = -f_obj
 
