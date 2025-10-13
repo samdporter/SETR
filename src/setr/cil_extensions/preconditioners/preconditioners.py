@@ -78,7 +78,7 @@ class BSREMPreconditioner(PreconditionerWithInterval):
         else:
             self.gaussian = None
         if epsilon is None:
-            epsilon = s_inv.max() * 1e-10
+            self.epsilon = 0
         self.epsilon = epsilon
         self.max_val = max_val
 
@@ -96,11 +96,13 @@ class BSREMPreconditioner(PreconditionerWithInterval):
         elif self.gaussian is not None:
             self.gaussian.apply(x)
 
+        # BSREM preconditioner: x / sensitivity
+        # Where s_inv = 0 (outside FOV), preconditioner = 0
+        # epsilon parameter is ignored - kept for backwards compatibility
         if out is None:
-            return (x + self.epsilon) * self.s_inv
-        x.add(self.epsilon, out=out)
-        self.s_inv.multiply(out, out=out)
-        return out
+            return x * self.s_inv + self.epsilon
+        x.multiply(self.s_inv, out=out)
+        return out + self.epsilon
 
 
 class ImageFunctionPreconditioner(PreconditionerWithInterval):
@@ -167,13 +169,20 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         self,
         preconds,
         p=1e-1,  # Lehmer order: p=0→harmonic, p=1→arithmetic, p>1→toward max
-        epsilon=0,
+        epsilon=1e-12,  # CRITICAL: Must be > 0 when p < 1 to prevent 0^(p-1) = infinity
         update_interval=np.inf,
         freeze_iter=np.inf,
     ):
         super().__init__(update_interval, freeze_iter)
         self.preconds = preconds
         self.p = p
+        # Enforce minimum epsilon when p < 1 to prevent mathematical singularities
+        if p < 1 and epsilon == 0:
+            epsilon = 1e-12
+            logging.warning(
+                f"LehmerMeanPreconditioner: epsilon=0 with p={p} < 1 causes 0^(p-1) = inf. "
+                f"Setting epsilon={epsilon} to prevent singularities."
+            )
         self.epsilon = epsilon
 
     def compute_preconditioner(self, algorithm, out=None):

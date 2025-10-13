@@ -22,7 +22,7 @@ from matplotlib.colors import LogNorm
 from sirf.STIR import ImageData
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
-from setr.priors.vtv import WeightedVectorialTotalVariation
+from setr.priors.vtv import WeightedVectorialTotalVariation, WeightedTotalVariation
 
 
 def _quantiles(x, qs=(0.0, 1.0, 50.0, 90.0, 99.0, 100.0)):
@@ -97,13 +97,14 @@ def debug_slow_components(vtv: WeightedVectorialTotalVariation, data, output_dir
         print("  slow_total (alpha + principal):", _quantiles(tot))
 
 
-def create_synthetic_3d_data(shape=(64, 64, 32), voxel_size=(2.0, 2.0, 3.0)):
+def create_synthetic_3d_data(shape=(64, 64, 32), voxel_size=(2.0, 2.0, 3.0), asymmetric=False):
     """
     Create synthetic 3D multi-modality test data with geometric features.
 
     Args:
         shape: (nx, ny, nz) spatial dimensions
         voxel_size: (dx, dy, dz) voxel spacing in mm
+        asymmetric: If True, create asymmetric features; if False, symmetric
 
     Returns:
         dict with 'geometry', 'data', 'weights' keys
@@ -116,28 +117,59 @@ def create_synthetic_3d_data(shape=(64, 64, 32), voxel_size=(2.0, 2.0, 3.0)):
     z = np.linspace(-1, 1, nz)
     X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
 
-    # Modality 1: Nested spheres
-    r1 = np.sqrt(X**2 + Y**2 + Z**2)
-    modality1 = np.zeros_like(r1)
-    modality1[r1 < 0.3] = 100.0  # Inner sphere
-    modality1[(r1 >= 0.4) & (r1 < 0.6)] = 150.0  # Middle shell
-    modality1[(r1 >= 0.7) & (r1 < 0.9)] = 80.0  # Outer shell
+    if asymmetric:
+        # ASYMMETRIC features - offset from center
+        # Modality 1: Off-center nested ellipsoids
+        x_offset, y_offset, z_offset = 0.3, -0.2, 0.15
+        r1 = np.sqrt(((X - x_offset) / 1.2)**2 + ((Y - y_offset) / 0.8)**2 + ((Z - z_offset) / 1.0)**2)
+        modality1 = np.zeros_like(r1)
+        modality1[r1 < 0.25] = 100.0  # Inner ellipsoid
+        modality1[(r1 >= 0.35) & (r1 < 0.55)] = 150.0  # Middle shell
+        modality1[(r1 >= 0.65) & (r1 < 0.85)] = 80.0  # Outer shell
 
-    # Modality 2: Box + cylinder
-    modality2 = np.zeros_like(r1)
+        # Modality 2: Tilted box + diagonal cylinder
+        modality2 = np.zeros_like(r1)
 
-    # Box in center
-    box_mask = (np.abs(X) < 0.4) & (np.abs(Y) < 0.4) & (np.abs(Z) < 0.3)
-    modality2[box_mask] = 120.0
+        # Tilted box (rotated 30 degrees)
+        angle = np.pi / 6  # 30 degrees
+        X_rot = X * np.cos(angle) - Y * np.sin(angle) - 0.2
+        Y_rot = X * np.sin(angle) + Y * np.cos(angle) + 0.15
+        box_mask = (np.abs(X_rot) < 0.35) & (np.abs(Y_rot) < 0.45) & (np.abs(Z - 0.1) < 0.25)
+        modality2[box_mask] = 120.0
 
-    # Cylinder along z-axis
-    r_xy = np.sqrt(X**2 + Y**2)
-    cyl_mask = (r_xy < 0.25) & (np.abs(Z) < 0.7)
-    modality2[cyl_mask] = 90.0
+        # Diagonal cylinder
+        r_diag = np.sqrt((X + 0.2)**2 + (Y - 0.3)**2)
+        cyl_mask = (r_diag < 0.2) & (np.abs(Z + 0.15) < 0.6)
+        modality2[cyl_mask] = 90.0
 
-    # Add smooth gradients
-    modality1 += 20.0 * (1.0 + X)
-    modality2 += 15.0 * (1.0 + Y)
+        # Add asymmetric smooth gradients
+        modality1 += 20.0 * (1.0 + X + 0.5 * Y)
+        modality2 += 15.0 * (1.0 + Y - 0.3 * X)
+
+    else:
+        # SYMMETRIC features - centered (original)
+        # Modality 1: Nested spheres
+        r1 = np.sqrt(X**2 + Y**2 + Z**2)
+        modality1 = np.zeros_like(r1)
+        modality1[r1 < 0.3] = 100.0  # Inner sphere
+        modality1[(r1 >= 0.4) & (r1 < 0.6)] = 150.0  # Middle shell
+        modality1[(r1 >= 0.7) & (r1 < 0.9)] = 80.0  # Outer shell
+
+        # Modality 2: Box + cylinder
+        modality2 = np.zeros_like(r1)
+
+        # Box in center
+        box_mask = (np.abs(X) < 0.4) & (np.abs(Y) < 0.4) & (np.abs(Z) < 0.3)
+        modality2[box_mask] = 120.0
+
+        # Cylinder along z-axis
+        r_xy = np.sqrt(X**2 + Y**2)
+        cyl_mask = (r_xy < 0.25) & (np.abs(Z) < 0.7)
+        modality2[cyl_mask] = 90.0
+
+        # Add smooth gradients
+        modality1 += 20.0 * (1.0 + X)
+        modality2 += 15.0 * (1.0 + Y)
 
     # Create SIRF ImageData templates
     template = ImageData()
@@ -197,7 +229,7 @@ def visualize_inputs(test_data, output_dir: Path, cmap="magma"):
 
         for view_idx, sl in enumerate(slices):
             ax = axes[mod_idx, view_idx]
-            im = ax.imshow(sl, cmap=cmap, origin="lower")
+            im = ax.imshow(sl, cmap=cmap, origin="upper")
             ax.set_title(f"Modality {mod_idx + 1} - {views[view_idx]}", fontsize=10)
             ax.axis("off")
             plt.colorbar(im, ax=ax, fraction=0.046)
@@ -273,7 +305,7 @@ def test_preconditioner_methods(
             norm="nuclear",
             hessian=method,
             stencil="18",
-            bnd_cond="Periodic",
+            bnd_cond="Neumann",
             both_directions=True,
         )
 
@@ -477,6 +509,262 @@ def visualize_preconditioners_logscale(test_data, hessian_outputs, output_dir):
     plt.close()
 
 
+def compare_tv_variants(test_data, delta, smoothing, output_dir):
+    """Compare nuclear VTV, frobenius VTV, and separate TV (WeightedTotalVariation)."""
+
+    tv_variants = {
+        "Nuclear VTV": {
+            "class": WeightedVectorialTotalVariation,
+            "kwargs": {"norm": "nuclear"},
+        },
+        "Frobenius VTV": {
+            "class": WeightedVectorialTotalVariation,
+            "kwargs": {"norm": "frobenius"},
+        },
+        "Separate TV": {
+            "class": WeightedTotalVariation,
+            "kwargs": {"norm": "l2"},
+        },
+    }
+
+    results = {}
+
+    for name, config in tv_variants.items():
+        print(f"\n{'='*70}")
+        print(f"Testing: {name}")
+        print('='*70)
+
+        # Create fresh copies
+        geometry = EnhancedBlockDataContainer(
+            test_data["geometry"].containers[0].clone(),
+            test_data["geometry"].containers[1].clone()
+        )
+        weights = EnhancedBlockDataContainer(
+            test_data["weights"].containers[0].clone(),
+            test_data["weights"].containers[1].clone()
+        )
+
+        # Create TV instance
+        tv_class = config["class"]
+        tv_kwargs = config["kwargs"]
+
+        tv = tv_class(
+            geometry=geometry,
+            weights=weights,
+            delta=delta,
+            smoothing=smoothing,
+            stencil="18",
+            bnd_cond="Neumann",
+            both_directions=True,
+            **tv_kwargs
+        )
+
+        # Compute objective and gradient
+        t0 = time.time()
+        obj_value = tv(test_data["data"])
+        obj_time = time.time() - t0
+
+        t0 = time.time()
+        gradient = tv.gradient(test_data["data"])
+        grad_time = time.time() - t0
+
+        grad_norm = np.linalg.norm([np.linalg.norm(g.as_array()) for g in gradient.containers])
+
+        print(f"  Objective: {obj_value:.6f} (time: {obj_time:.4f}s)")
+        print(f"  Gradient norm: {grad_norm:.6f} (time: {grad_time:.4f}s)")
+
+        results[name] = {
+            "objective": obj_value,
+            "gradient": gradient,
+            "gradient_norm": grad_norm,
+            "obj_time": obj_time,
+            "grad_time": grad_time,
+        }
+
+    return results
+
+
+def visualize_tv_variant_gradients(test_data, tv_results, output_dir):
+    """Visualize gradients from nuclear VTV, frobenius VTV, and separate TV."""
+
+    variants = list(tv_results.keys())
+    n_variants = len(variants)
+
+    # Linear scale gradients
+    fig, axes = plt.subplots(2, n_variants, figsize=(5 * n_variants, 10))
+    if n_variants == 1:
+        axes = axes.reshape(-1, 1)
+
+    for i, variant in enumerate(variants):
+        grad = tv_results[variant]["gradient"]
+
+        for mod_idx in range(2):
+            data = grad.containers[mod_idx].as_array()
+            mid_slice = data.shape[0] // 2
+            vminmax=np.max(np.abs(data[mid_slice, :, :]))
+            im = axes[mod_idx, i].imshow(
+                data[mid_slice, :, :], cmap="seismic",
+                vmin=-vminmax,vmax=vminmax
+            )
+            axes[mod_idx, i].set_title(f"{variant}\n(Modality {mod_idx+1})", fontsize=10)
+            axes[mod_idx, i].axis("off")
+            plt.colorbar(im, ax=axes[mod_idx, i], fraction=0.046)
+
+    plt.suptitle("TV Variant Gradient Comparison", fontsize=14, y=0.98)
+    plt.tight_layout()
+
+    output_file = output_dir / "tv_variant_gradients.png"
+    plt.savefig(output_file, dpi=150, bbox_inches="tight")
+    print(f"\nTV variant gradient comparison saved to: {output_file}")
+    plt.close()
+
+    # Log scale gradients
+    fig, axes = plt.subplots(2, n_variants, figsize=(5 * n_variants, 10))
+    if n_variants == 1:
+        axes = axes.reshape(-1, 1)
+
+    for mod_idx, mod_name in enumerate(["Modality 1", "Modality 2"]):
+        slices = []
+        for variant in variants:
+            grad = tv_results[variant]["gradient"]
+            data = grad.containers[mod_idx].as_array()
+            mid_slice = data.shape[0] // 2
+            slices.append(np.abs(data[mid_slice, :, :]))
+
+        all_vals = np.concatenate([s.ravel() for s in slices])
+        pos = all_vals[all_vals > 0]
+        if pos.size == 0:
+            vmin_log, vmax_log = 1e-12, 1.0
+        else:
+            vmin_log = max(1e-12, np.percentile(pos, 1.0))
+            vmax_log = np.percentile(pos, 99.5)
+            if not np.isfinite(vmax_log) or vmax_log <= vmin_log:
+                vmax_log = vmin_log * 10.0
+
+        norm_log = LogNorm(vmin=vmin_log, vmax=vmax_log)
+
+        for i, variant in enumerate(variants):
+            sl = slices[i]
+            sl_disp = np.maximum(sl, vmin_log)
+            im = axes[mod_idx, i].imshow(sl_disp, cmap="viridis", norm=norm_log)
+            axes[mod_idx, i].set_title(f"{variant}\n({mod_name})", fontsize=10)
+            axes[mod_idx, i].axis("off")
+            plt.colorbar(im, ax=axes[mod_idx, i], fraction=0.046)
+
+    plt.suptitle("TV Variant Gradient Comparison (Log Scale)", fontsize=14, y=0.98)
+    plt.tight_layout()
+
+    output_file = output_dir / "tv_variant_gradients_log.png"
+    plt.savefig(output_file, dpi=150, bbox_inches="tight")
+    print(f"TV variant gradient comparison (log) saved to: {output_file}")
+    plt.close()
+
+    # Objective and gradient norm comparison
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    objectives = [tv_results[v]["objective"] for v in variants]
+    grad_norms = [tv_results[v]["gradient_norm"] for v in variants]
+
+    axes[0].bar(variants, objectives)
+    axes[0].set_ylabel("Objective Value")
+    axes[0].set_title("Objective Value Comparison")
+    axes[0].tick_params(axis="x", rotation=15)
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].bar(variants, grad_norms)
+    axes[1].set_ylabel("Gradient Norm")
+    axes[1].set_title("Gradient Norm Comparison")
+    axes[1].tick_params(axis="x", rotation=15)
+    axes[1].grid(True, alpha=0.3)
+
+    plt.suptitle("TV Variant Comparison", fontsize=14)
+    plt.tight_layout()
+
+    output_file = output_dir / "tv_variant_metrics.png"
+    plt.savefig(output_file, dpi=150, bbox_inches="tight")
+    print(f"TV variant metrics saved to: {output_file}")
+    plt.close()
+
+
+def visualize_tv_variant_voxelwise(test_data, tv_results, output_dir):
+    """Voxel-by-voxel comparison of data values across TV variants."""
+
+    variants = list(tv_results.keys())
+
+    # Compare input data (values, not gradients)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
+
+    for mod_idx in range(2):
+        # Get data arrays
+        data_arrays = {}
+        for variant in variants:
+            # Get the input data (same for all)
+            data_arrays[variant] = test_data["data"].containers[mod_idx].as_array().ravel()
+
+        # Gradient arrays
+        grad_arrays = {}
+        for variant in variants:
+            grad_arrays[variant] = tv_results[variant]["gradient"].containers[mod_idx].as_array().ravel()
+
+        # Plot 1: Compare gradients between first two variants
+        if len(variants) >= 2:
+            v1, v2 = variants[0], variants[1]
+            g1, g2 = grad_arrays[v1], grad_arrays[v2]
+
+            # Subsample
+            if len(g1) > 10000:
+                indices = np.random.choice(len(g1), 10000, replace=False)
+                x_plot, y_plot = g1[indices], g2[indices]
+                alpha = 0.1
+            else:
+                x_plot, y_plot = g1, g2
+                alpha = 0.3
+
+            ax = axes[mod_idx, 0]
+            ax.scatter(x_plot, y_plot, alpha=alpha, s=1)
+            all_vals = np.concatenate([x_plot, y_plot])
+            min_val, max_val = np.min(all_vals), np.max(all_vals)
+            ax.plot([min_val, max_val], [min_val, max_val], "r--", lw=2, label="y=x")
+            ax.set_xlabel(f"{v1} gradient")
+            ax.set_ylabel(f"{v2} gradient")
+            ax.set_title(f"Modality {mod_idx+1}: {v1} vs {v2}", fontsize=10)
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+        # Plot 2: Compare gradients between variant 1 and 3
+        if len(variants) >= 3:
+            v1, v3 = variants[0], variants[2]
+            g1, g3 = grad_arrays[v1], grad_arrays[v3]
+
+            # Subsample
+            if len(g1) > 10000:
+                indices = np.random.choice(len(g1), 10000, replace=False)
+                x_plot, y_plot = g1[indices], g3[indices]
+                alpha = 0.1
+            else:
+                x_plot, y_plot = g1, g3
+                alpha = 0.3
+
+            ax = axes[mod_idx, 1]
+            ax.scatter(x_plot, y_plot, alpha=alpha, s=1)
+            all_vals = np.concatenate([x_plot, y_plot])
+            min_val, max_val = np.min(all_vals), np.max(all_vals)
+            ax.plot([min_val, max_val], [min_val, max_val], "r--", lw=2, label="y=x")
+            ax.set_xlabel(f"{v1} gradient")
+            ax.set_ylabel(f"{v3} gradient")
+            ax.set_title(f"Modality {mod_idx+1}: {v1} vs {v3}", fontsize=10)
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+    plt.suptitle("Voxel-by-Voxel Gradient Comparison", fontsize=14, y=0.995)
+    plt.tight_layout()
+
+    output_file = output_dir / "tv_variant_voxelwise.png"
+    plt.savefig(output_file, dpi=150, bbox_inches="tight")
+    print(f"TV variant voxelwise comparison saved to: {output_file}")
+    plt.close()
+
+
 def create_timing_plot(results_df, output_dir):
     """Create bar plot comparing computation times."""
 
@@ -548,6 +836,16 @@ def main():
         action="store_true",
         help="Print diagnostics for the svd_principal_alpha components",
     )
+    parser.add_argument(
+        "--compare-tv-variants",
+        action="store_true",
+        help="Compare nuclear VTV, frobenius VTV, and separate TV (WeightedTotalVariation)",
+    )
+    parser.add_argument(
+        "--asymmetric",
+        action="store_true",
+        help="Use asymmetric test data (off-center, tilted features)",
+    )
 
     args = parser.parse_args()
 
@@ -561,62 +859,141 @@ def main():
 
     # Create synthetic data
     print("\nCreating synthetic 3D geometric data...")
-    test_data = create_synthetic_3d_data(shape=tuple(args.shape), voxel_size=tuple(args.voxel_size))
+    data_type = "asymmetric" if args.asymmetric else "symmetric"
+    print(f"  Data type: {data_type}")
+    test_data = create_synthetic_3d_data(
+        shape=tuple(args.shape),
+        voxel_size=tuple(args.voxel_size),
+        asymmetric=args.asymmetric
+    )
     print(f"  Created {len(test_data['data'].containers)} modalities")
     print(f"  Shape: {test_data['shape']}")
     print(f"  Voxel size: {test_data['voxel_size']} mm")
 
-    # Test preconditioners
-    results_df, hessian_outputs, inv_hessian_outputs = test_preconditioner_methods(
-        test_data,
-        delta=args.delta,
-        smoothing=args.smoothing,
-        debug=args.debug_slow,
-        debug_dir=output_dir,
-    )
-
     # Visualise the input modalities for reference
     visualize_inputs(test_data, output_dir)
 
-    # Save results
-    results_file = output_dir / "results.csv"
-    results_df.to_csv(results_file, index=False)
-    print(f"\n\nResults saved to: {results_file}")
+    if args.compare_tv_variants:
+        # Compare TV variants: nuclear VTV, frobenius VTV, and separate TV
+        print("\n" + "=" * 70)
+        print("COMPARING TV VARIANTS - SYMMETRIC DATA")
+        print("=" * 70)
 
-    # Print summary
-    print("\n" + "=" * 70)
-    print("SUMMARY")
-    print("=" * 70)
-    print("\nObjective values (should be identical):")
-    print(results_df[["method", "objective"]].to_string(index=False))
+        tv_results_sym = compare_tv_variants(test_data, args.delta, args.smoothing, output_dir)
 
-    print("\nGradient norms (should be identical):")
-    print(results_df[["method", "gradient_norm"]].to_string(index=False))
+        # Print summary
+        print("\n" + "=" * 70)
+        print("TV VARIANT COMPARISON SUMMARY (SYMMETRIC)")
+        print("=" * 70)
+        for variant, result in tv_results_sym.items():
+            print(f"\n{variant}:")
+            print(f"  Objective: {result['objective']:.6f}")
+            print(f"  Gradient norm: {result['gradient_norm']:.6f}")
 
-    print("\nHessian diagonal statistics:")
-    print(
-        results_df[["method", "hess_mean", "hess_min", "hess_max", "positive_definite"]].to_string(
-            index=False
+        # Create visualizations for symmetric data
+        print("\nCreating TV variant comparison visualizations (symmetric)...")
+        sym_dir = output_dir / "symmetric"
+        sym_dir.mkdir(parents=True, exist_ok=True)
+        visualize_tv_variant_gradients(test_data, tv_results_sym, sym_dir)
+        visualize_tv_variant_voxelwise(test_data, tv_results_sym, sym_dir)
+
+        # Now test with ASYMMETRIC data
+        print("\n" + "=" * 70)
+        print("COMPARING TV VARIANTS - ASYMMETRIC DATA")
+        print("=" * 70)
+
+        test_data_asym = create_synthetic_3d_data(
+            shape=tuple(args.shape),
+            voxel_size=tuple(args.voxel_size),
+            asymmetric=True
         )
-    )
+        print(f"  Created asymmetric data with {len(test_data_asym['data'].containers)} modalities")
 
-    print("\nComputation times:")
-    print(results_df[["method", "hess_time", "inv_hess_time"]].to_string(index=False))
+        # Visualize asymmetric inputs
+        asym_dir = output_dir / "asymmetric"
+        asym_dir.mkdir(parents=True, exist_ok=True)
+        visualize_inputs(test_data_asym, asym_dir)
 
-    # Speedup analysis
-    baseline_hess_time = results_df[results_df["method"] == "svd_principal_alpha"][
-        "hess_time"
-    ].values[0]
-    print("\nSpeedup vs 'svd_principal_alpha' baseline (Hessian diagonal):")
-    for _, row in results_df.iterrows():
-        speedup = baseline_hess_time / row["hess_time"]
-        print(f"  {row['method']:20s}: {speedup:.2f}x")
+        tv_results_asym = compare_tv_variants(test_data_asym, args.delta, args.smoothing, asym_dir)
 
-    # Create visualizations
-    print("\nCreating visualizations...")
-    visualize_preconditioners(test_data, hessian_outputs, output_dir)
-    visualize_preconditioners_logscale(test_data, hessian_outputs, output_dir)
-    create_timing_plot(results_df, output_dir)
+        # Print summary
+        print("\n" + "=" * 70)
+        print("TV VARIANT COMPARISON SUMMARY (ASYMMETRIC)")
+        print("=" * 70)
+        for variant, result in tv_results_asym.items():
+            print(f"\n{variant}:")
+            print(f"  Objective: {result['objective']:.6f}")
+            print(f"  Gradient norm: {result['gradient_norm']:.6f}")
+
+        # Create visualizations for asymmetric data
+        print("\nCreating TV variant comparison visualizations (asymmetric)...")
+        visualize_tv_variant_gradients(test_data_asym, tv_results_asym, asym_dir)
+        visualize_tv_variant_voxelwise(test_data_asym, tv_results_asym, asym_dir)
+
+    else:
+        # Test preconditioners on both symmetric and asymmetric data
+        data_configs = [
+            {"name": "symmetric", "asymmetric": False},
+            {"name": "asymmetric", "asymmetric": True},
+        ]
+
+        for config in data_configs:
+            print("\n" + "=" * 70)
+            print(f"TESTING PRECONDITIONERS - {config['name'].upper()} DATA")
+            print("=" * 70)
+
+            # Create data for this configuration
+            current_test_data = create_synthetic_3d_data(
+                shape=tuple(args.shape),
+                voxel_size=tuple(args.voxel_size),
+                asymmetric=config["asymmetric"],
+            )
+
+            # Create subdirectory for this data type
+            precond_dir = output_dir / config["name"]
+            precond_dir.mkdir(parents=True, exist_ok=True)
+
+            # Visualize inputs for this data type
+            visualize_inputs(current_test_data, precond_dir)
+
+            results_df, hessian_outputs, _ = test_preconditioner_methods(
+                current_test_data,
+                delta=args.delta,
+                smoothing=args.smoothing,
+                debug=args.debug_slow,
+                debug_dir=precond_dir,
+            )
+
+            # Save results
+            results_file = precond_dir / "results.csv"
+            results_df.to_csv(results_file, index=False)
+            print(f"\n\nResults for {config['name']} data saved to: {results_file}")
+
+            # Print summary
+            print("\n" + "=" * 70)
+            print(f"SUMMARY ({config['name'].upper()} DATA)")
+            print("=" * 70)
+            print("\nObjective values (should be identical):")
+            print(results_df[["method", "objective"]].to_string(index=False))
+            print("\nGradient norms (should be identical):")
+            print(results_df[["method", "gradient_norm"]].to_string(index=False))
+            print("\nHessian diagonal statistics:")
+            print(results_df[["method", "hess_mean", "hess_min", "hess_max", "positive_definite"]].to_string(index=False))
+            print("\nComputation times:")
+            print(results_df[["method", "hess_time", "inv_hess_time"]].to_string(index=False))
+
+            # Speedup analysis
+            baseline_hess_time = results_df[results_df["method"] == "svd_principal_alpha"]["hess_time"].values[0]
+            print("\nSpeedup vs 'svd_principal_alpha' baseline (Hessian diagonal):")
+            for _, row in results_df.iterrows():
+                speedup = baseline_hess_time / row["hess_time"]
+                print(f"  {row['method']:20s}: {speedup:.2f}x")
+
+            # Create visualizations
+            print("\nCreating visualizations...")
+            visualize_preconditioners(current_test_data, hessian_outputs, precond_dir)
+            visualize_preconditioners_logscale(current_test_data, hessian_outputs, precond_dir)
+            create_timing_plot(results_df, precond_dir)
 
     print("\n" + "=" * 70)
     print("Testing complete!")

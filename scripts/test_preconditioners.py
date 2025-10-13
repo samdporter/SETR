@@ -389,12 +389,21 @@ def create_preconditioner(
 
     # For VTV preconditioners, add prior preconditioners
     # The hessian type (fast/slow) is already set in the priors
+    # CRITICAL: Cap inverse Hessian to prevent huge preconditioner at FOV edges
+    # Cap at the scale of the BSREM preconditioner to keep both on same scale
+    max_precond_value = 10.0 * max(
+        con.max() * s_inv_con.max()
+        for con, s_inv_con in zip(
+            setup_data["initial_estimates"].containers, s_inv.containers
+        )
+    )
     prior_precond = [
         ImageFunctionPreconditioner(
             p.inv_hessian_diag,  # Uses the wrapped version from attach_prior_hessian
             1,
             freeze_iter=np.inf,
             epsilon=0,
+            max_value=max_precond_value,
         )
         for p in priors_list
     ]
