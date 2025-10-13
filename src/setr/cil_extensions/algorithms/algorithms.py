@@ -3,7 +3,7 @@ def ista_update_step(self) -> None:
 
     .. math:: x_{k+1} = \mathrm{prox}_{\alpha g}(x_{k} - \alpha\nabla f(x_{k}))
     """
-    self.f.gradient(self.x_old, out=self.gradient_update)
+    self.gradient_update = self.f.gradient(self.x_old, out=self.gradient_update)
     try:
         step_size = self.step_size_rule.get_step_size(self)
     except NameError:
@@ -20,4 +20,7 @@ def ista_update_step(self) -> None:
         )
     else:
         self.x_old.sapyb(1.0, self.gradient_update, -step_size, out=self.x_old)
+    M = self.x.max()
+    self.x_old = self.x_old.maximum(-M)
+    self.x_old = self.x_old.minimum(M)
     self.g.proximal(self.x_old, step_size, out=self.x)
