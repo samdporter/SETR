@@ -55,13 +55,6 @@ class GPUVectorialTotalVariation(Function):
 
     def direct(self, x):
         # --- Select appropriate functions ---
-        if self.norm == "nuclear":
-            norm_func = l1_norm
-        elif self.norm == "frobenius":
-            norm_func = l2_norm
-        else:
-            raise ValueError("Norm not defined")
-
         if self.smoothing_function == "fair":
             smoothing_func = fair
         elif self.smoothing_function == "charbonnier":
@@ -72,13 +65,28 @@ class GPUVectorialTotalVariation(Function):
             smoothing_func = nothing
 
         S = torch.linalg.svdvals(x)
-        if self.tail is not None:
-            mask = get_mask(S, self.tail)  # 1 on the smallest `tail` σ
-            s_smoothed = smoothing_func(S * mask, self.eps)
-            s_to_norm = s_smoothed + S * (1 - mask)  # <-- pass head through
+
+        if self.norm == "nuclear":
+            # Nuclear norm: sum_i h(sigma_i)
+            if self.tail is not None:
+                mask = get_mask(S, self.tail)
+                s_smoothed = smoothing_func(S * mask, self.eps)
+                s_to_sum = s_smoothed + S * (1 - mask)
+            else:
+                s_to_sum = smoothing_func(S, self.eps)
+            out = torch.sum(s_to_sum, dim=-1)
+
+        elif self.norm == "frobenius":
+            # Frobenius norm: h(||sigma||_2) = h(sqrt(sum_i sigma_i^2))
+            frobenius_norm = torch.sqrt(torch.sum(S**2, dim=-1))
+            if self.tail is not None:
+                # For tailing with Frobenius, we need to handle this differently
+                # Apply smoothing to the Frobenius norm itself
+                out = smoothing_func(frobenius_norm, self.eps)
+            else:
+                out = smoothing_func(frobenius_norm, self.eps)
         else:
-            s_to_norm = smoothing_func(S, self.eps)  # (or just S if smoothing=None)
-        out = norm_func(s_to_norm)
+            raise ValueError("Norm not defined")
 
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -133,15 +141,41 @@ class GPUVectorialTotalVariation(Function):
 
         U, S, Vh = torch.linalg.svd(x, full_matrices=False)
 
-        # Apply gradient function h'(s)
-        S_grad_values = grad_func(S, self.eps)
+        if self.norm == "nuclear":
+            # Nuclear norm: gradient of sum_i h(sigma_i)
+            # Gradient: U diag(h'(sigma_i)) V^T
+            S_grad_values = grad_func(S, self.eps)
 
-        # If tailing, the gradient for non-tailed values is 0
-        mask = torch.ones_like(S) if self.tail is None else get_mask(S, self.tail)
-        S_grad_values = S_grad_values * mask
+            # If tailing, the gradient for non-tailed values is 0
+            mask = torch.ones_like(S) if self.tail is None else get_mask(S, self.tail)
+            S_grad_values = S_grad_values * mask
 
-        # Reconstruct the gradient matrix: U diag(h'(s)) V^T
-        out = torch.matmul(U, Vh * S_grad_values[..., None])
+            # Reconstruct the gradient matrix: U diag(h'(s)) V^T
+            out = torch.matmul(U, Vh * S_grad_values[..., None])
+
+        elif self.norm == "frobenius":
+            # Frobenius norm: gradient of h(||sigma||_2)
+            # Chain rule: h'(||sigma||_2) * grad(||sigma||_2)
+            #           = h'(||sigma||_2) * sigma / ||sigma||_2
+            frobenius_norm = torch.sqrt(torch.sum(S**2, dim=-1, keepdim=True))
+            # Avoid division by zero
+            frobenius_norm = torch.maximum(frobenius_norm, torch.tensor(1e-10, device=S.device))
+
+            # h'(||sigma||_2) - scalar for each voxel
+            h_prime = grad_func(frobenius_norm.squeeze(-1), self.eps)
+
+            # grad(||sigma||_2) w.r.t sigma = sigma / ||sigma||_2
+            grad_frob_norm = S / frobenius_norm
+
+            # Chain rule: h'(||sigma||_2) * sigma / ||sigma||_2
+            S_grad_values = h_prime.unsqueeze(-1) * grad_frob_norm
+
+            # Reconstruct the gradient matrix
+            out = torch.matmul(U, Vh * S_grad_values[..., None])
+
+        else:
+            raise ValueError("Norm not defined")
+
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
     def hessian_surrogate(self, x):

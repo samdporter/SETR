@@ -240,7 +240,7 @@ class WeightedVectorialTotalVariation(Function):
         x_arr = self.bdc2a.direct(x)
         H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)
         Hinv = torch.reciprocal(H)
-        Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=1.0 / epsilon, neginf=0.0)
+        Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=0.0, neginf=0.0)
         return self.bdc2a.adjoint(Hinv, out=out)
 
     def _preconditioner_weights_core_fastest_positive(
@@ -463,7 +463,7 @@ class WeightedVectorialTotalVariation(Function):
         x_arr = self.bdc2a.direct(x)
         H = self._preconditioner_weights_core_fastest_positive(x_arr, eta, epsilon)
         Hinv = torch.reciprocal(H)
-        Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=1.0 / epsilon, neginf=0.0)
+        Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=0.0, neginf=0.0)
         return self.bdc2a.adjoint(Hinv, out=out)
 
     def _hessian_diag_fastest_exact(self, x, epsilon: float = 1e-8, out=None):
@@ -476,8 +476,8 @@ class WeightedVectorialTotalVariation(Function):
         """Returns inverse diagonal Hessian (Frobenius, exact φ'')."""
         x_arr = self.bdc2a.direct(x)
         H = self._preconditioner_weights_core_fastest_exact(x_arr, epsilon)
-        Hinv = torch.reciprocal(H + epsilon)
-        Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=1.0 / epsilon, neginf=0.0)
+        Hinv = torch.reciprocal(H)
+        Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=0.0, neginf=0.0)
         return self.bdc2a.adjoint(Hinv, out=out)
 
     def _hessian_diag_slow(self, x, out=None):
@@ -486,10 +486,10 @@ class WeightedVectorialTotalVariation(Function):
         diag_arr = self._preconditioner_weights_core_slow(x_arr)
         return self.bdc2a.adjoint(diag_arr, out=out)
 
-    def _inv_hessian_diag_slow(self, x, out=None, epsilon=1e-9):
+    def _inv_hessian_diag_slow(self, x, out=None):
         """Inverse of exact diagonal Hessian via full SVD."""
         diag_arr = self._preconditioner_weights_core_slow(self.bdc2a.direct(x))
-        inv_arr = torch.reciprocal(diag_arr + epsilon)
+        inv_arr = torch.reciprocal(diag_arr)
         torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0, out=inv_arr)
         return self.bdc2a.adjoint(inv_arr, out=out)
 
@@ -523,7 +523,7 @@ class WeightedVectorialTotalVariation(Function):
                 f"Options: 'svd_principal_alpha', 'mm_jensen', 'frobenius_surrogate_pd', 'vector_tv_per_modality'"
             )
 
-    def inv_hessian_diag(self, x, out=None, eta: float = 0.7, epsilon: float = 1e-8):
+    def inv_hessian_diag(self, x, out=None, eta: float = 0.7):
         """
         Compute inverse diagonal Hessian approximation.
 
@@ -540,13 +540,13 @@ class WeightedVectorialTotalVariation(Function):
             - "vector_tv_per_modality": Per‑modality vector‑norm exact radial
         """
         if self.hessian == "svd_principal_alpha":
-            return self._inv_hessian_diag_slow(x, out=out, epsilon=epsilon)
+            return self._inv_hessian_diag_slow(x, out=out)
         elif self.hessian == "mm_jensen":
-            return self._inv_hessian_diag_fast(x, eta=eta, epsilon=epsilon, out=out)
+            return self._inv_hessian_diag_fast(x, eta=eta, out=out)
         elif self.hessian == "frobenius_surrogate_pd":
-            return self._inv_hessian_diag_fastest_positive(x, eta=eta, epsilon=epsilon, out=out)
+            return self._inv_hessian_diag_fastest_positive(x, eta=eta, out=out)
         elif self.hessian == "vector_tv_per_modality":
-            return self._inv_hessian_diag_fastest_exact(x, epsilon=epsilon, out=out)
+            return self._inv_hessian_diag_fastest_exact(x, out=out)
         else:
             raise ValueError(
                 f"Unknown Hessian type: {self.hessian}. "

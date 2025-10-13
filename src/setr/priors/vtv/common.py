@@ -82,11 +82,11 @@ def perona_malik(x, eps):
 
 
 def perona_malik_grad(x, eps):
-    return x * torch.exp(-(x**2) / (eps**2)) / (eps**2)
+    return x * torch.exp(-(x**2) / (eps**2)) / (eps)
 
 
 def perona_malik_hessian_surrogate(x, eps):
-    return 0.5 * torch.exp(-(x**2) / (eps**2)) / (eps**2)
+    return 0.5 * torch.exp(-(x**2) / (eps**2)) / (eps)
 
 
 def perona_malik_hessian_diag(x, eps):

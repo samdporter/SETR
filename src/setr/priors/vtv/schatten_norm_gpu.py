@@ -52,9 +52,13 @@ def choose_order(M):
 # --------- Core value/grad/prox maps (batched) ---------
 
 
-def norm(M, func, smoothing_func, order, eps, tail=None):
+def norm(M, norm_type, smoothing_func, order, eps, tail=None):
     """
     Enhanced norm computation with adaptive regularization.
+
+    Args:
+        norm_type: "nuclear" or "frobenius"
+        smoothing_func: smoothing function to apply
     """
     # Get adaptively regularized Gram matrix
     H_reg, reg_scale, kappa = adaptive_gram_regularization(M, order)
@@ -74,12 +78,22 @@ def norm(M, func, smoothing_func, order, eps, tail=None):
     sigma_squared = torch.clamp(eig - reg_scale[..., None], min=0)
     sigma = torch.sqrt(sigma_squared)
 
-    # Apply smoothing and norm
+    # Apply smoothing and norm based on type
     mask = get_mask(sigma, tail) if tail is not None else torch.ones_like(sigma)
-    s_smoothed = smoothing_func(sigma * mask, eps)
-    s_to_norm = s_smoothed + sigma * (1 - mask)
 
-    return func(s_to_norm)
+    if norm_type == "nuclear":
+        # Nuclear norm: sum_i h(sigma_i)
+        s_smoothed = smoothing_func(sigma * mask, eps)
+        s_to_sum = s_smoothed + sigma * (1 - mask)
+        return torch.sum(s_to_sum, dim=-1)
+
+    elif norm_type == "frobenius":
+        # Frobenius norm: h(||sigma||_2)
+        frobenius_norm = torch.sqrt(torch.sum(sigma**2, dim=-1))
+        return smoothing_func(frobenius_norm, eps)
+
+    else:
+        raise ValueError(f"Unknown norm type: {norm_type}")
 
 
 def norm_func(M, func, tau, order=0, tail=None, blend_head: bool = True):
@@ -153,6 +167,68 @@ def sigma_map(M, elem_func, tau, order=0, tail=None, masked_only=True):
         return mapped
 
 
+def gradient_norm(M, norm_type, grad_func, eps, order, tail=None):
+    """
+    Compute gradient with respect to nuclear or Frobenius norm.
+
+    Args:
+        norm_type: "nuclear" or "frobenius"
+        grad_func: smoothing gradient function (e.g., perona_malik_grad)
+    """
+    # Get eigendecomposition
+    H_reg, reg_scale, kappa = adaptive_gram_regularization(M, order)
+
+    n = H_reg.shape[-1]
+    if n == 2:
+        S2_reg = eigenvalsh_2x2(H_reg)
+        B = eigenvecsh_2x2(H_reg, S2_reg)
+    elif n == 3:
+        S2_reg = eigenvalsh_3x3_cardano(H_reg)
+        B = eigenvecsh_3x3_cardano(H_reg, S2_reg)
+    else:
+        raise ValueError(f"Only 2×2 or 3×3 blocks supported, got {n}.")
+
+    # Correct for regularization
+    S2_true = torch.clamp(S2_reg - reg_scale[..., None], min=0)
+    S = torch.sqrt(S2_true)
+
+    tiny = torch.finfo(S.dtype).eps
+
+    if norm_type == "nuclear":
+        # Nuclear norm: gradient element-wise on singular values
+        S_grad = grad_func(S, eps)
+
+        # Apply tailing
+        if tail is not None:
+            mask = get_mask(S, tail)
+            S_grad = S_grad * mask
+
+        # Scale for reconstruction
+        scale = torch.where(S > tiny, S_grad / torch.clamp(S, min=tiny), torch.zeros_like(S))
+
+    elif norm_type == "frobenius":
+        # Frobenius norm: chain rule with ||sigma||_2
+        frobenius_norm = torch.sqrt(torch.sum(S**2, dim=-1, keepdim=True))
+        frobenius_norm = torch.maximum(frobenius_norm, torch.tensor(tiny * 100, device=S.device))
+
+        # h'(||sigma||_2)
+        h_prime = grad_func(frobenius_norm.squeeze(-1), eps)
+
+        # Chain rule: h'(||sigma||_2) * sigma / ||sigma||_2
+        grad_frob = S / frobenius_norm
+        S_grad_final = h_prime.unsqueeze(-1) * grad_frob
+
+        # Scale for reconstruction
+        scale = torch.where(S > tiny, S_grad_final / torch.clamp(S, min=tiny), torch.zeros_like(S))
+
+    else:
+        raise ValueError(f"Unknown norm type: {norm_type}")
+
+    # Reconstruct gradient matrix
+    D = (B * scale[..., None, :]) @ B.transpose(-1, -2)
+    return D @ M if order == 1 else M @ D
+
+
 # --------- Main class ---------
 
 
@@ -181,12 +257,6 @@ class GPUVectorialTotalVariation(Function):
     def direct(self, x):
         # value path: sum over smoothed σ (blend head semantics)
         order = choose_order(x)
-        if self.norm == "nuclear":
-            norm_func = l1_norm
-        elif self.norm == "frobenius":
-            norm_func = l2_norm
-        else:
-            raise ValueError("Norm not defined")
 
         if self.smoothing_function == "fair":
             smoothing_func = fair
@@ -197,7 +267,7 @@ class GPUVectorialTotalVariation(Function):
         else:
             smoothing_func = nothing
 
-        out = norm(x, norm_func, smoothing_func, order, self.eps, self.tail)
+        out = norm(x, self.norm, smoothing_func, order, self.eps, self.tail)
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
     def __call__(self, x):
@@ -219,7 +289,7 @@ class GPUVectorialTotalVariation(Function):
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
     def gradient(self, x):
-        # grad path: ONLY the tail contributes (blend_head=False)
+        # Compute gradient for nuclear or Frobenius norm
         x = to_tensor(x)
         order = choose_order(x)
         if self.smoothing_function == "fair":
@@ -230,7 +300,7 @@ class GPUVectorialTotalVariation(Function):
             grad_func = perona_malik_grad
         else:
             raise ValueError("Smoothing function not defined for gradient")
-        out = norm_func(x, grad_func, self.eps, order, self.tail, blend_head=False)
+        out = gradient_norm(x, self.norm, grad_func, self.eps, order, self.tail)
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
     def hessian_surrogate(self, x):
