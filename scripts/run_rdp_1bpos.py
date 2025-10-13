@@ -144,8 +144,11 @@ def run_rdp_ista(args, data):
     bsrem_precond = BSREMPreconditioner(s_inv, update_interval=update_interval)
 
     # Prior preconditioner using RDP inverse Hessian
+    # CRITICAL: Cap inverse Hessian to prevent huge preconditioner at FOV edges
+    # Cap at the scale of the BSREM preconditioner to keep both on same scale
+    max_precond_value = 10.0 * data["initial_image"].max() * s_inv.max()
     prior_precond = ImageFunctionPreconditioner(
-        prior.inv_hessian_diag, update_interval=update_interval
+        prior.inv_hessian_diag, update_interval=update_interval, max_value=max_precond_value
     )
 
     # Combined preconditioner using LehmerMean

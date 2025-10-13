@@ -32,7 +32,7 @@ from setr.cil_extensions.preconditioners import (
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
 )
-from setr.cil_extensions.operators import FlipOperator
+from setr.cil_extensions.operators import FlipOperator, TruncationOperator
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
     attach_prior_hessian,
@@ -241,17 +241,11 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
     """
     precond_type = getattr(args, "precond_type", "bsrem")
 
-    # Compute epsilon
-    epsilon = 0.001 * min(
-        initial_estimates.containers[0].as_array().min(),
-        initial_estimates.containers[1].as_array().min(),
-    )
-
     bsrem_precond = BSREMPreconditioner(
         s_inv,
         1,
         np.inf,
-        epsilon=epsilon,
+        epsilon=0,
         smooth=True,
     )
 
@@ -278,12 +272,22 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
     # (objective always uses fast hessian)
     logging.info(f"Creating prior preconditioners with hessian_type={hessian_type}")
 
+    # CRITICAL: Use max_value to cap the inverse Hessian preconditioner
+    # Without this, 1/(small Hessian at FOV edges) → huge preconditioner → divergence
+    # Cap at the scale of the BSREM preconditioner to keep both on same scale
+    # BSREM scale ≈ x / sensitivity ≈ x * s_inv, so use max(x) * max(s_inv) as upper bound
+    max_precond_value = 10.0 * max(
+        con.max() * s_inv_con.max()
+        for con, s_inv_con in zip(initial_estimates.containers, s_inv.containers)
+    )
+
     prior_precond = [
         ImageFunctionPreconditioner(
             p.inv_hessian_diag,
             1,
             freeze_iter=np.inf,
             epsilon=0,
+            max_value=max_precond_value,
         )
         for p in priors_list
     ]
@@ -291,7 +295,7 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
     return LehmerMeanPreconditioner(
         [bsrem_precond, *prior_precond],
         update_interval=1,
-        freeze_iter=len(all_funs) * 10,
+        freeze_iter=np.inf,
         epsilon=0,
     )
 
@@ -422,7 +426,10 @@ def main(args) -> None:
         )
 
     bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),
+        CompositionOperator(
+            IdentityOperator(pet_data["initial_image"]),
+            TruncationOperator(pet_data["initial_image"]),
+        ),
         ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
         ZeroOperator(pet_data["initial_image"]),
         spect2pet,

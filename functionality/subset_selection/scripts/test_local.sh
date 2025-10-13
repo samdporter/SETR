@@ -23,7 +23,7 @@ echo ""
 
 # Run a quick test with minimal epochs
 echo "Running test reconstruction..."
-echo "Config: separate subsets, always prior, bsrem precond, gamma=10, 2 epochs"
+echo "Config: separate subsets, always prior, bsrem precond, gamma=500, 2 epochs"
 echo ""
 
 cd "$BASE_DIR"
@@ -36,7 +36,7 @@ python "$SCRIPTS_DIR/run_subset_selection.py" \
         subset_mode=separate \
         prior_mode=always \
         precond_type=bsrem \
-        gamma_tnv=10
+        gamma_tnv=500
 
 echo ""
 echo "Test complete!"

@@ -238,11 +238,15 @@ def main(args) -> None:
     bsrem_precond = BSREMPreconditioner(s_inv, 1, np.inf, epsilon=0, smooth=True)
 
     if prior is not None:
+        # CRITICAL: Cap inverse Hessian to prevent huge preconditioner at FOV edges
+        # Cap at the scale of the BSREM preconditioner to keep both on same scale
+        max_precond_value = 10.0 * pet_data["initial_image"].max() * s_inv.max()
         prior_precond = ImageFunctionPreconditioner(
             dtv_prior.inv_hessian_diag,
             1.0,
             freeze_iter=np.inf,
             epsilon=0,
+            max_value=max_precond_value,
         )
         precond = LehmerMeanPreconditioner(
             [bsrem_precond, prior_precond],
