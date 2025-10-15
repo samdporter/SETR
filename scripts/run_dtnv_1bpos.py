@@ -19,8 +19,8 @@ from sirf.contrib.partitioner import partitioner
 from sirf.STIR import ImageData
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
-from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.cil_extensions.operators import FlipOperator
+from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,
@@ -30,13 +30,14 @@ from setr.scripts.common import (
 )
 from setr.scripts.dtnv_common import (
     apply_gradient_energy_scaling,
+    build_variance_reduced_function,
+    estimate_delta_from_gradients,
     get_algorithm,
     get_block_objective,
     get_callbacks,
     get_kappa_squareds,
     get_preconditioners,
     get_prior,
-    build_variance_reduced_function,
     get_s_inv_from_objs,
     gradient_energy_scale_sirf,
     normalise_kappa_squares,
@@ -233,7 +234,7 @@ def main(args) -> None:
     )
 
     kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
-    combined = bo.direct(initial_estimates)
+    combined = EnhancedBlockDataContainer(*bo.direct(initial_estimates).containers)
     scale = gradient_energy_scale_sirf(
         combined[0],
         combined[1],
@@ -246,22 +247,40 @@ def main(args) -> None:
 
     # Set delta (smoothing parameter) if not provided
     if args.delta is None:
-        # set delta as 1000 times smaller than maximum of the minimum dynamic
-        # range of initial images
-        # multiplied by the weighted alpha/beta
-        args.delta = (
-            min(
-                args.alpha * initial_estimates.containers[0].max(),
-                args.beta * initial_estimates.containers[1].max(),
-            )
-            / 1e3
+        percentile = getattr(args, "delta_percentile", 95)
+        divisor = getattr(args, "delta_gradient_divisor", 10.0)
+        delta_est = estimate_delta_from_gradients(
+            combined,
+            scales=(args.alpha, args.beta),
+            percentile=percentile,
+            divisor=divisor,
         )
+        if delta_est is not None:
+            args.delta = delta_est
+            logging.info(
+                "Auto-set delta to %.6g using %sth percentile scaled gradients / %.3g",
+                args.delta,
+                percentile,
+                divisor,
+            )
+        else:
+            args.delta = (
+                min(
+                    args.alpha * initial_estimates.containers[0].max(),
+                    args.beta * initial_estimates.containers[1].max(),
+                )
+                / 1e3
+            )
+            logging.warning(
+                "Falling back to intensity heuristic for delta: %.6g", args.delta
+            )
 
     save_args(args, "args.csv")
 
-    for i, kappa in enumerate(kappas.containers):
-        logging.info(f"Writing kappa {i} with max {kappa.max()}")
-        kappa.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
+    if kappas is not None:
+        for i, kappa in enumerate(kappas.containers):
+            logging.info(f"Writing kappa {i} with max {kappa.max()}")
+            kappa.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
 
     if args.no_prior:
         prior = None

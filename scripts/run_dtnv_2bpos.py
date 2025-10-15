@@ -32,6 +32,7 @@ from setr.scripts.dtnv_common import (
     apply_gradient_energy_scaling,
     build_variance_reduced_function,
     compute_kappa_squared_image_from_partitioned_objective,
+    estimate_delta_from_gradients,
     get_algorithm,
     get_block_objective,
     get_callbacks,
@@ -302,24 +303,47 @@ def main(args) -> None:
     )
 
     # cross-modal scaling (XXth pct)
-    kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
-    combined = bo.direct(initial_estimates)
+    #kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
+    combined = EnhancedBlockDataContainer(
+        *bo.direct(initial_estimates).containers
+    )
+    
     scale = gradient_energy_scale_sirf(
         combined[0],
         combined[1],
         mask=None,
-        kappa_pet=kappas.containers[0] if kappas else None,
-        kappa_spect=kappas.containers[1] if kappas else None,
+        kappa_pet=kappas.containers[0] if args.use_kappa else None,
+        kappa_spect=kappas.containers[1] if args.use_kappa else None,
     )
     # Apply consistent scaling to all prior weights
     apply_gradient_energy_scaling(args, scale)
 
     # now (re)compute delta if it depends on alpha
     if args.delta is None:
-        args.delta = max(
-            pet_data["initial_image"].max() / 1e4,
-            spect_data["initial_image"].max() / 1e4,
-        ) * min(args.alpha, args.beta)
+        percentile = getattr(args, "delta_percentile", 95)
+        divisor = getattr(args, "delta_gradient_divisor", 10.0)
+        delta_est = estimate_delta_from_gradients(
+            combined,
+            scales=(args.alpha, args.beta),
+            percentile=percentile,
+            divisor=divisor,
+        )
+        if delta_est is not None:
+            args.delta = delta_est
+            logging.info(
+                "Auto-set delta to %.6g using %sth percentile scaled gradients / %.3g",
+                args.delta,
+                percentile,
+                divisor,
+            )
+        else:
+            args.delta = max(
+                pet_data["initial_image"].max() / 1e2,
+                spect_data["initial_image"].max() / 1e2,
+            ) * min(args.alpha, args.beta)
+            logging.warning(
+                "Falling back to max-intensity heuristic for delta: %.6g", args.delta
+            )
 
     # write κ² images
     for i, image in enumerate(kappas.containers):

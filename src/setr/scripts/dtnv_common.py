@@ -509,6 +509,61 @@ def apply_gradient_energy_scaling(args, scale):
         logging.info(f"Adjusted gamma_pet to {args.gamma_pet:.6g} using gradient-energy scaling")
 
 
+def estimate_delta_from_gradients(images, scales=None, percentile=95, divisor=10.0):
+    """Estimate delta from scaled image-gradient magnitudes.
+
+    Parameters
+    ----------
+    images : EnhancedBlockDataContainer or iterable of ImageData
+        Images in a common geometry.
+    scales : sequence of float or None
+        Optional per-image scaling factors (e.g. alpha, beta).
+    percentile : float
+        Percentile of the gradient magnitude distribution to use (robust to outliers).
+    divisor : float
+        Factor by which to divide the chosen magnitude to obtain delta.
+
+    Returns
+    -------
+    float or None
+        Suggested delta value, or None if estimation failed.
+    """
+
+    if images is None:
+        return None
+
+    # Allow direct iterable of images
+    containers = getattr(images, "containers", images)
+
+    grad_stats = []
+
+    for idx, image in enumerate(containers):
+        arr = get_array(image)
+        if np.all(arr == 0):
+            continue
+
+        vz, vy, vx = image.voxel_sizes()
+        grads = np.gradient(arr, vz, vy, vx, edge_order=1)
+        grad_mag = np.sqrt(sum(g * g for g in grads))
+
+        scale = 1.0
+        if scales is not None and idx < len(scales):
+            scale = float(np.abs(scales[idx]))
+
+        stat = np.percentile(grad_mag, percentile)
+        grad_stats.append(scale * stat)
+
+    grad_stats = [val for val in grad_stats if val > 0 and np.isfinite(val)]
+    if not grad_stats:
+        return None
+
+    ref_stat = max(grad_stats)
+    if ref_stat <= 0:
+        return None
+
+    return ref_stat / divisor
+
+
 def get_prior(
     args,
     umap,
@@ -531,8 +586,24 @@ def get_prior(
         priors: List of individual prior functions for preconditioner setup.
     """
 
-    if kappas is None:
+    use_kappa = getattr(args, "use_kappa", getattr(args, "use_kappas", True))
+
+    if not use_kappa or kappas is None:
         kappas = initial_estimates.get_uniform_copy(1)
+    else:
+        # Ensure κ images live in the same geometry as `initial_estimates`
+        shapes_match = all(
+            kap.shape == est.shape
+            for kap, est in zip(kappas.containers, initial_estimates.containers)
+        )
+        if not shapes_match:
+            kappas = EnhancedBlockDataContainer(*bo.direct(kappas).containers)
+        elif hasattr(kappas, "clone"):
+            kappas = kappas.clone()
+        else:
+            kappas = EnhancedBlockDataContainer(
+                *[kap.clone() for kap in kappas.containers]
+            )
 
     priors = []
 
