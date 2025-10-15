@@ -228,7 +228,7 @@ def load_zoom_factors(spect_dir):
     raise ValueError("No zoom factors found in file")
 
 
-def get_spect_data(path: str) -> dict:
+def get_spect_data(path: str, load_sinos=True) -> dict:
     """
     Load SPECT data from the given path.
 
@@ -244,14 +244,16 @@ def get_spect_data(path: str) -> dict:
         dict: A dictionary with keys: "acquisition_data", "additive", "attenuation",
         "template_image", "initial_image", and "displacement".
     """
-    spect_data = {"acquisition_data": AcquisitionData(os.path.join(path, "peak.hs"))}
-
-    try:
-        spect_data["additive"] = AcquisitionData(os.path.join(path, "scatter_dl.hs"))
-    except Exception as e_scatter:
-        logging.warning("No scatter data found (%s). Using zeros.", str(e_scatter))
-        spect_data["additive"] = AcquisitionData(spect_data["acquisition_data"])
-        spect_data["additive"].fill(0)
+    if load_sinos:
+        spect_data = {"acquisition_data": AcquisitionData(os.path.join(path, "peak.hs"))}
+        try:
+            spect_data["additive"] = AcquisitionData(os.path.join(path, "scatter_dl.hs"))
+        except Exception as e_scatter:
+            logging.warning("No scatter data found (%s). Using zeros.", str(e_scatter))
+            spect_data["additive"] = AcquisitionData(spect_data["acquisition_data"])
+            spect_data["additive"].fill(0)
+    else:
+        spect_data = {}
 
     spect_data["attenuation"] = ImageData(os.path.join(path, "umap_zoomed.hv"))
     # Flip the attenuation image on the x-axis due to bug in STIR.
