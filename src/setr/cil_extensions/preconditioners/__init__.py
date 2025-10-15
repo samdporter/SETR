@@ -11,10 +11,12 @@ from .preconditioners import (
     IdentityPreconditioner,
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
+    PoissonHessianPreconditioner,
     PreconditionerWithInterval,
     SubsetEMPreconditioner,
     SubsetKernelisedEMPreconditioner,
     SubsetPreconditioner,
+    SubsetPoissonHessianPreconditioner,
 )
 
 __all__ = [
@@ -24,10 +26,12 @@ __all__ = [
     "ImageFunctionPreconditioner",
     "HarmonicMeanPreconditioner",
     "LehmerMeanPreconditioner",
+    "PoissonHessianPreconditioner",
     "ArithmeticMeanPreconditioner",
     "IdentityPreconditioner",
     "SubsetPreconditioner",
     "SubsetEMPreconditioner",
     "DualModalitySubsetKernelisedEMPreconditioner",
     "SubsetKernelisedEMPreconditioner",
+    "SubsetPoissonHessianPreconditioner",
 ]

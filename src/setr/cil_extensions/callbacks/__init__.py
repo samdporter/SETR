@@ -12,6 +12,7 @@ from .callbacks import (
     SaveKernelisedImageCallback,
     SaveObjectiveCallback,
     SavePreconditionerCallback,
+    SaveStepSizeCallback,
     SubsetValueCallback,
 )
 
@@ -26,4 +27,5 @@ __all__ = [
     "SubsetValueCallback",
     "ComputeMetricsCallback",
     "PrintMetricsCallback",
+    "SaveStepSizeCallback",
 ]

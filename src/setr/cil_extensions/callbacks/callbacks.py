@@ -105,6 +105,46 @@ class SaveObjectiveCallback(Callback):
             return
         pd.DataFrame(algo.objective).to_csv(f"{self.filename}.csv")
 
+class SaveStepSizeCallback(Callback):
+    """
+    Callback to save the step size at each iteration to a CSV file.
+
+    This is useful for analyzing the behavior of adaptive step size rules like
+    Armijo line search.
+
+    Args:
+        filename (str): Path to the output CSV file.
+        interval (int): Save step size every `interval` iterations.
+    """
+
+    def __init__(self, filename, interval=1):
+        super().__init__(interval)
+        self.filename = filename
+        self.step_sizes_df = pd.DataFrame(columns=["iteration", "step_size"])
+
+    def __call__(self, algorithm):
+        """
+        Save the current step size if the interval is met.
+        """
+        if self.skip_iteration(algorithm):
+            return
+
+        iteration = algorithm.iteration
+        
+        if hasattr(algorithm.step_size_rule, 'get_step_size'):
+            step_size = algorithm.step_size_rule.get_step_size()
+        else:
+            step_size = algorithm.step_size
+
+        # Append new row to DataFrame
+        self.step_sizes_df.loc[iteration] = [iteration, step_size]
+
+        # Save the entire DataFrame to CSV
+        try:
+            self.step_sizes_df.to_csv(f"{self.filename}.csv", index=False)
+        except IOError as e:
+            logging.error(f"Could not write to step size file: {e}")
+
 
 class SavePreconditionerCallback(Callback):
     """
@@ -310,3 +350,4 @@ class PrintMetricsCallback(Callback):
                 f"{m.upper()}={metrics[m]:.6e}" for m in self.metrics_to_print if m in metrics
             )
             logging.info(f"Iteration {iteration} metrics: {metric_str}")
+#

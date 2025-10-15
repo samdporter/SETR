@@ -4,6 +4,7 @@ def ista_update_step(self) -> None:
     .. math:: x_{k+1} = \mathrm{prox}_{\alpha g}(x_{k} - \alpha\nabla f(x_{k}))
     """
     self.gradient_update = self.f.gradient(self.x_old, out=self.gradient_update)
+    M = self.x.max()
     try:
         step_size = self.step_size_rule.get_step_size(self)
     except NameError:
@@ -12,15 +13,12 @@ def ista_update_step(self) -> None:
             "cil.optimisation.utilities.StepSizeRule"
         )
     if self.preconditioner is not None:
-        self.x_old.sapyb(
-            1.0,
-            self.preconditioner.apply(self, self.gradient_update),
-            -step_size,
-            out=self.x_old,
-        )
+        grad = self.preconditioner.apply(self, self.gradient_update)
     else:
-        self.x_old.sapyb(1.0, self.gradient_update, -step_size, out=self.x_old)
-    M = self.x.max()
-    self.x_old = self.x_old.maximum(-M)
-    self.x_old = self.x_old.minimum(M)
+        grad = self.gradient_update.clone()
+
+    grad=grad.maximum(-M)
+    grad=grad.minimum(M)
+
+    self.x_old.sapyb(1.0, grad, -step_size, out=self.x_old)
     self.g.proximal(self.x_old, step_size, out=self.x)
