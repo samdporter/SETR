@@ -12,6 +12,8 @@ references, and changelog material are easy to discover and maintain.
 ## Reference
 
 - [Hessian Diagonal Approximations for Weighted VTV](reference/vtv_hessian_diagonals.md)
+- [Poisson Log-Likelihood Preconditioners](reference/poisson_hessian_preconditioner.md)
+- [Residual-Aware KL Hessian](reference/residual_aware_kl.md)
 
 ## Project Overview
 
