@@ -88,8 +88,8 @@ qsub \
     -N "$JOB_NAME" \
     -t 1-${NUM_BOOTSTRAPS} \
     -l h_rt=04:00:00 \
-    -l h_vmem=16G \
-    -l gpu=1 \
+    -l tmem=16G \
+    -l gpu=true \
     -o "$LOG_DIR/${JOB_NAME}_\$JOB_ID_\$TASK_ID.log" \
     -v ALPHA="$ALPHA",BETA="$BETA",SETR_BASE_DIR="$BASE_DIR",RESULTS_BASE="$RESULTS_BASE" \
     "$QSUB_SCRIPT"

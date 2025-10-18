@@ -38,16 +38,16 @@ HKEM_SCRIPT_2BPOS="${SCRIPT_DIR}/run_hkem_2bpos.py"
 RESAMPLE_SCRIPT="${SCRIPT_DIR}/resample_spect_to_pet.py"
 
 # Patient list
-PATIENTS=("sirt4")
+PATIENTS=("sirt2" "sirt4")
 
 # ================================
 # CONTROL FLAGS - Edit these to run specific parts
 # ================================
-DO_SPECT=false       # Run SPECT HKEM reconstruction (only once)
+DO_SPECT=true       # Run SPECT HKEM reconstruction (only once)
 DO_RESAMPLE=false      # Resample SPECT to PET space for non-TOF
-DO_PET_HKEM=false     # Run PET HKEM reconstruction (non-TOF)
+DO_PET_HKEM=true     # Run PET HKEM reconstruction (non-TOF)
 DO_TOF_RESAMPLE=true  # Resample SPECT to PET space for TOF
-DO_TOF_PET_HKEM=true  # Run PET HKEM reconstruction (TOF)
+DO_TOF_PET_HKEM=false  # Run PET HKEM reconstruction (TOF)
 
 # ================================
 # FUNCTIONS

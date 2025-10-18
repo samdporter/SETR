@@ -28,6 +28,7 @@ tail_singular_values: null
 stable: false
 tnv_both_directions: true
 tnv_stencil: "18"
+tnv_max_step: 1
 tnv_bnd_cond: "Neumann"
 hessian_type: "slow"
 
