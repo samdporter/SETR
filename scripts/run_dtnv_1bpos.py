@@ -29,7 +29,7 @@ from setr.scripts.common import (
     save_results,
 )
 from setr.scripts.dtnv_common import (
-    apply_gradient_energy_scaling,
+    apply_dynamic_range_scaling,
     build_variance_reduced_function,
     estimate_delta_from_gradients,
     get_algorithm,
@@ -39,7 +39,7 @@ from setr.scripts.dtnv_common import (
     get_preconditioners,
     get_prior,
     get_s_inv_from_objs,
-    gradient_energy_scale_sirf,
+    dynamic_range_scale_sirf,
     normalise_kappa_squares,
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
@@ -235,15 +235,12 @@ def main(args) -> None:
 
     kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
     combined = EnhancedBlockDataContainer(*bo.direct(initial_estimates).containers)
-    scale = gradient_energy_scale_sirf(
+    scale = dynamic_range_scale_sirf(
         combined[0],
         combined[1],
-        mask=None,
-        kappa_pet=kappas.containers[0] if kappas else None,
-        kappa_spect=kappas.containers[1] if kappas else None,
     )
     # Apply consistent scaling to all prior weights
-    apply_gradient_energy_scaling(args, scale)
+    apply_dynamic_range_scaling(args, scale)
 
     # Set delta (smoothing parameter) if not provided
     if args.delta is None:

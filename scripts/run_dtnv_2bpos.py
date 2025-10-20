@@ -29,7 +29,7 @@ from setr.scripts.common import (
     save_results,
 )
 from setr.scripts.dtnv_common import (
-    apply_gradient_energy_scaling,
+    apply_dynamic_range_scaling,
     build_variance_reduced_function,
     compute_kappa_squared_image_from_partitioned_objective,
     estimate_delta_from_gradients,
@@ -39,7 +39,7 @@ from setr.scripts.dtnv_common import (
     get_preconditioners,
     get_prior,
     get_s_inv_from_subset_objs,
-    gradient_energy_scale_sirf,
+    dynamic_range_scale_sirf,
     normalise_kappa_squares,
 )
 from setr.utils import (
@@ -308,15 +308,12 @@ def main(args) -> None:
         *bo.direct(initial_estimates).containers
     )
     
-    scale = gradient_energy_scale_sirf(
+    scale = dynamic_range_scale_sirf(
         combined[0],
         combined[1],
-        mask=None,
-        kappa_pet=kappas.containers[0] if args.use_kappa else None,
-        kappa_spect=kappas.containers[1] if args.use_kappa else None,
     )
     # Apply consistent scaling to all prior weights
-    apply_gradient_energy_scaling(args, scale)
+    apply_dynamic_range_scaling(args, scale)
 
     # now (re)compute delta if it depends on alpha
     if args.delta is None:
@@ -324,7 +321,7 @@ def main(args) -> None:
         divisor = getattr(args, "delta_gradient_divisor", 10.0)
         delta_est = estimate_delta_from_gradients(
             combined,
-            scales=(args.alpha, args.beta),
+            scales=(args.alpha, args.beta),               
             percentile=percentile,
             divisor=divisor,
         )
