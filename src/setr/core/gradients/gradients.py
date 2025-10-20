@@ -26,15 +26,19 @@ class Jacobian:
         anatomical=None,  # None → plain Gradient3D; tensor/ndarray → DirectionalGradient
         stencil="6",  # '6' | '18' | '26'
         both_directions=False,  # False → 3/9/13 channels; True → 6/18/26
+        max_step: int = 1,
         normalize=True,  # must match the gradient operator
         numpy_out=False,
     ):
         self.voxel_sizes = tuple(float(v) for v in voxel_sizes)
         self.stencil = stencil
         self.both_directions = both_directions
+        self.max_step = int(max_step)
         self.normalize = normalize
         self.bnd_cond = bnd_cond
         self.numpy_out = numpy_out
+        if self.max_step < 1:
+            raise ValueError("max_step must be >= 1.")
 
         def _init_grad(anat):
             if anat is None:
@@ -43,6 +47,7 @@ class Jacobian:
                     stencil=self.stencil,
                     bnd_cond=self.bnd_cond,
                     both_directions=self.both_directions,
+                    max_step=self.max_step,
                     normalize=self.normalize,
                 )
             anat_t = torch.as_tensor(anat, device=device, dtype=torch.float32)
@@ -52,6 +57,7 @@ class Jacobian:
                 stencil=self.stencil,
                 bnd_cond=self.bnd_cond,
                 both_directions=self.both_directions,
+                max_step=self.max_step,
                 normalize=self.normalize,
             )
 
@@ -172,14 +178,8 @@ class Jacobian:
 
 
 def _shift_neumann_symmetric(x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
-    """Shift using zero-flux (symmetric) Neumann boundaries.
-
-    Each axis is clamped independently, which mirrors the last valid sample to
-    the out-of-domain location. This works for axis-aligned and diagonal
-    stencil directions alike.
-    """
+    """Shift using zero-flux (symmetric) Neumann boundaries for arbitrary |Δ|."""
     deltas = tuple(int(v) for v in sh)
-    assert all(abs(d) <= 1 for d in deltas), "Only ±1 shifts supported"
 
     result = x
     for dim, delta in enumerate(deltas):
@@ -200,7 +200,6 @@ def _shift_neumann_symmetric(x: torch.Tensor, sh: tuple[int, int, int]) -> torch
 def _shift_neumann_adjoint(x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
     """Adjoint of `_shift_neumann_symmetric` for zero-flux boundaries."""
     deltas = tuple(int(v) for v in sh)
-    assert all(abs(d) <= 1 for d in deltas), "Only ±1 shifts supported"
 
     result = x
     for dim, delta in reversed(list(enumerate(deltas))):
@@ -247,19 +246,26 @@ class _GradientLegacy:
         stencil: str = "6",
         bnd_cond: str = "Neumann",
         both_directions: bool = False,
+        max_step: int = 1,
         normalize: bool = True,
         numpy_out: bool = False,
     ):
         self.vx, self.vy, self.vz = map(float, voxel_sizes)
         self.bnd_cond = bnd_cond
         self.both_directions = both_directions
+        self.max_step = int(max_step)
         self.normalize = normalize
         self.numpy_out = numpy_out
+        if self.max_step < 1:
+            raise ValueError("max_step must be >= 1.")
 
         half = _stencil_halfspace(stencil)
-        self.directions = (
-            half + [(-dx, -dy, -dz) for dx, dy, dz in half] if both_directions else half
-        )
+        base_dirs = half + [(-dx, -dy, -dz) for dx, dy, dz in half] if both_directions else half
+        self.directions = [
+            (dx * step, dy * step, dz * step)
+            for dx, dy, dz in base_dirs
+            for step in range(1, self.max_step + 1)
+        ]
 
         steps = []
         for dx, dy, dz in self.directions:
@@ -344,17 +350,24 @@ class Sum:
         stencil: str = "6",
         bnd_cond: str = "Neumann",
         both_directions: bool = False,
+        max_step: int = 1,
         numpy_out: bool = False,
     ):
         # voxel_sizes kept for parity/API symmetry (not used for scaling)
         self.bnd_cond = bnd_cond
         self.both_directions = both_directions
+        self.max_step = int(max_step)
         self.numpy_out = numpy_out
+        if self.max_step < 1:
+            raise ValueError("max_step must be >= 1.")
 
         half = _stencil_halfspace(stencil)
-        self.directions = (
-            half + [(-dx, -dy, -dz) for dx, dy, dz in half] if both_directions else half
-        )
+        base_dirs = half + [(-dx, -dy, -dz) for dx, dy, dz in half] if both_directions else half
+        self.directions = [
+            (dx * step, dy * step, dz * step)
+            for dx, dy, dz in base_dirs
+            for step in range(1, self.max_step + 1)
+        ]
 
     def _shift(self, x: torch.Tensor, sh: tuple[int, int, int]) -> torch.Tensor:
         if self.bnd_cond == "Periodic":
@@ -404,6 +417,7 @@ class DirectionalGradient:
         bnd_cond="Neumann",
         both_directions=False,
         stencil="6",
+        max_step=1,
         normalize=True,
         numpy_out=False,
     ):
@@ -411,13 +425,17 @@ class DirectionalGradient:
         self.voxel_size = voxel_sizes
         self.gamma = gamma
         self.bnd_cond = bnd_cond
+        self.max_step = int(max_step)
         self.numpy_out = numpy_out
+        if self.max_step < 1:
+            raise ValueError("max_step must be >= 1.")
 
         self.gradient = Gradient(
             voxel_sizes=self.voxel_size,
             stencil=stencil,
             bnd_cond=self.bnd_cond,
             both_directions=both_directions,
+            max_step=self.max_step,
             normalize=normalize,
         )
         self.anatomical_grad = self.gradient.direct(self.anatomical)
@@ -467,19 +485,26 @@ class GradientOptimized:
         stencil: str = "6",
         bnd_cond: str = "Neumann",
         both_directions: bool = False,
+        max_step: int = 1,
         normalize: bool = True,
         numpy_out: bool = False,
     ):
         self.vx, self.vy, self.vz = map(float, voxel_sizes)
         self.bnd_cond = bnd_cond
         self.both_directions = both_directions
+        self.max_step = int(max_step)
         self.normalize = normalize
         self.numpy_out = numpy_out
+        if self.max_step < 1:
+            raise ValueError("max_step must be >= 1.")
 
         half = _stencil_halfspace(stencil)
-        self.directions = (
-            half + [(-dx, -dy, -dz) for dx, dy, dz in half] if both_directions else half
-        )
+        base_dirs = half + [(-dx, -dy, -dz) for dx, dy, dz in half] if both_directions else half
+        self.directions = [
+            (dx * step, dy * step, dz * step)
+            for dx, dy, dz in base_dirs
+            for step in range(1, self.max_step + 1)
+        ]
 
         steps = []
         for dx, dy, dz in self.directions:
@@ -559,6 +584,7 @@ class Gradient:
         stencil: str = "6",
         bnd_cond: str = "Neumann",
         both_directions: bool = False,
+        max_step: int = 1,
         normalize: bool = True,
         numpy_out: bool = False,
     ):
@@ -566,8 +592,11 @@ class Gradient:
         self.stencil = stencil
         self.bnd_cond = bnd_cond
         self.both_directions = both_directions
+        self.max_step = int(max_step)
         self.normalize = normalize
         self.numpy_out = numpy_out
+        if self.max_step < 1:
+            raise ValueError("max_step must be >= 1.")
 
         impl_cls = GradientOptimized if stencil != "6" else _GradientLegacy
         self._impl = impl_cls(
@@ -575,6 +604,7 @@ class Gradient:
             stencil=stencil,
             bnd_cond=bnd_cond,
             both_directions=both_directions,
+            max_step=self.max_step,
             normalize=normalize,
             numpy_out=numpy_out,
         )

@@ -156,6 +156,8 @@ class RelativeDifferencePrior(Function):
         gamma_dir: float = 1.0,  # projector strength for DirectionalGradient
         eta_dir: float = 1e-6,
         bnd_cond: str = "Neumann",
+        flip_anatomical: bool = False,  # flip anatomical image if needed (e.g., for MANC data)
+        flip_axes: tuple = (0, 2),  # axes to flip along
     ):
         super().__init__()
         self.gamma = gamma
@@ -172,8 +174,12 @@ class RelativeDifferencePrior(Function):
 
         # Δ-operator: plain Gradient OR DirectionalGradient (projected)
         if anatomical is not None:
+            import numpy as np
             if hasattr(anatomical, "as_array"):
                 anatomical = get_array(anatomical)
+            # Apply flip if requested
+            if flip_anatomical:
+                anatomical = np.flip(anatomical, axis=flip_axes)
             self.use_dir = True
             self.gradient_op = DirectionalGradient(
                 anatomical=anatomical,
@@ -365,9 +371,12 @@ class WeightedRDP(Function):
         gamma: float = 1,
         stencil: str = "6",
         both_directions: bool = False,
+        max_step: int = 1,
         epsilon: float = 1e-12,
         anatomical=None,  # optional, forwarded to Jacobian
         bnd_cond: str = "Neumann",
+        flip_anatomical: bool = False,  # flip anatomical image if needed (e.g., for MANC data)
+        flip_axes: tuple = (0, 2),  # axes to flip along
     ):
         self.gamma = gamma
         self.stencil = stencil
@@ -382,13 +391,18 @@ class WeightedRDP(Function):
         voxel_sizes = geometry.containers[0].voxel_sizes()
 
         # Jacobian over modalities
+        import numpy as np
         if hasattr(anatomical, "as_array"):
             anatomical = get_array(anatomical)
+        # Apply flip if requested
+        if anatomical is not None and flip_anatomical:
+            anatomical = np.flip(anatomical, axis=flip_axes)
         self.jacobian = Jacobian(
             voxel_sizes,
             anatomical=anatomical,
             stencil=stencil,
             both_directions=both_directions,
+            max_step=max_step,
             bnd_cond=bnd_cond,
         )
 
@@ -399,6 +413,7 @@ class WeightedRDP(Function):
             numpy_out=False,
             stencil=stencil,
             both_directions=both_directions,
+            max_step=max_step,
         )
 
         # Cache weights on device: shape (..., M)

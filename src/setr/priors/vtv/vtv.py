@@ -47,6 +47,7 @@ class WeightedVectorialTotalVariation(Function):
         stable=True,
         stencil="6",
         both_directions=False,
+        max_step=1,
         tail_singular_values=None,
         hessian="svd_principal_alpha",
         bnd_cond="Periodic",
@@ -59,6 +60,7 @@ class WeightedVectorialTotalVariation(Function):
             anatomical=anatomical,
             stencil=stencil,
             both_directions=both_directions,
+            max_step=max_step,
             bnd_cond=bnd_cond,
         )
 
@@ -572,6 +574,7 @@ class WeightedTotalVariation(Function):
         both_directions=False,
         hessian="slow",
         stencil="6",
+        max_step=1,
         bnd_cond="Periodic",
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
@@ -583,6 +586,7 @@ class WeightedTotalVariation(Function):
             anatomical=anatomical,
             both_directions=both_directions,
             stencil=stencil,
+            max_step=max_step,
             bnd_cond=bnd_cond,
         )
 

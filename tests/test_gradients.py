@@ -17,12 +17,14 @@ from setr.core.gradients.gradients import Gradient, GradientOptimized, LegacyGra
 @pytest.mark.parametrize("bnd_cond", ["Periodic", "Neumann"])
 @pytest.mark.parametrize("stencil", ["6", "18", "26"])
 @pytest.mark.parametrize("both_directions", [False, True])
-def test_gradient_adjointness(operator_cls, bnd_cond, stencil, both_directions):
+@pytest.mark.parametrize("max_step", [1, 3])
+def test_gradient_adjointness(operator_cls, bnd_cond, stencil, both_directions, max_step):
     op = operator_cls(
         voxel_sizes=(1.0, 1.0, 1.0),
         stencil=stencil,
         bnd_cond=bnd_cond,
         both_directions=both_directions,
+        max_step=max_step,
         normalize=True,
     )
     err = check_adjoint(op, shape=(6, 5, 4), trials=2)
