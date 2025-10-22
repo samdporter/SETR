@@ -430,6 +430,7 @@ class DirectionalGradient:
         if self.max_step < 1:
             raise ValueError("max_step must be >= 1.")
 
+        # Build base (isotropic) gradient with the same stencil/normalisation.
         self.gradient = Gradient(
             voxel_sizes=self.voxel_size,
             stencil=stencil,
@@ -439,12 +440,36 @@ class DirectionalGradient:
             normalize=normalize,
         )
         self.anatomical_grad = self.gradient.direct(self.anatomical)
+
+        # ----- Robust eta from dynamic range of ||∇a|| (percentiles) -----
+        # Single universal knob you can tweak if needed:
+        _ALPHA = 0.01   # use 5–15% typically
+        _P_LO  = 0.01
+        _P_HI  = 0.99
+
         if eta is None:
-            max_val = self.anatomical_grad.max().item()
-            min_val = self.anatomical_grad.min().item()
-            self.eta = (max_val - min_val) / 100000
+            # den: per-voxel gradient magnitude of guidance (same stencil & scaling)
+            if not isinstance(self.anatomical_grad, torch.Tensor):
+                den = torch.tensor(self.anatomical_grad, device=device, dtype=torch.float32)
+            else:
+                den = self.anatomical_grad
+            den = torch.norm(den, p=2, dim=-1)  # (..., n_dirs) -> (...) over channels
+
+            # Percentile-based scale (robust to outliers and absolute CT scaling)
+            q_lo, q_hi = torch.quantile(
+                den.flatten(), torch.tensor([_P_LO, _P_HI], device=den.device)
+            )
+            s = (q_hi - q_lo).item()
+            if not np.isfinite(s) or s <= 0.0:
+                # Fallback: use upper percentile itself; if still 0, use 1.0 to avoid zero eta
+                s = q_hi.item()
+                if not np.isfinite(s) or s <= 0.0:
+                    s = 1.0
+            self.eta = _ALPHA * s
         else:
-            self.eta = eta
+            self.eta = float(eta)
+
+        # -----------------------------------------------------------------
 
         self.directional_op = gpu_directional_op
         self.eta = torch.tensor(self.eta, device=device)
@@ -453,6 +478,7 @@ class DirectionalGradient:
             self.anatomical_grad = torch.tensor(self.anatomical_grad, device=device)
         else:
             self.anatomical_grad = self.anatomical_grad.to(device)
+
 
     def direct(self, x):
         X = _to_tensor(x, like_dtype=torch.float32, device=device)
