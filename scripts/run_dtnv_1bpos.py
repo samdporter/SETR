@@ -16,7 +16,7 @@ from cil.optimisation.operators import (
     ZeroOperator,
 )
 from sirf.contrib.partitioner import partitioner
-from sirf.STIR import ImageData
+from sirf.STIR import ImageData, SeparableGaussianImageFilter
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.operators import FlipOperator
@@ -31,6 +31,7 @@ from setr.scripts.common import (
 from setr.scripts.dtnv_common import (
     apply_dynamic_range_scaling,
     build_variance_reduced_function,
+    dynamic_range_scale_sirf,
     estimate_delta_from_gradients,
     get_algorithm,
     get_block_objective,
@@ -39,7 +40,6 @@ from setr.scripts.dtnv_common import (
     get_preconditioners,
     get_prior,
     get_s_inv_from_objs,
-    dynamic_range_scale_sirf,
     normalise_kappa_squares,
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
@@ -64,12 +64,15 @@ def prepare_data(args):
     # Normalize CT image
     ct += (-ct).max()
     ct /= ct.max()
+    ct_smooth = SeparableGaussianImageFilter()
+    ct_smooth.set_fwhms((0.5, 0.5, 0.5))
+    ct_smooth.apply(ct)
 
     pet_data = get_pet_data(args.pet_data_path)
     spect_data = get_spect_data(args.spect_data_path)
 
     # Apply filters to initial images
-    cyl, gauss = get_filters()
+    cyl, gauss = get_filters(fwhms=(20, 20, 20))
 
     gauss.apply(spect_data["initial_image"])
     gauss.apply(pet_data["initial_image"])

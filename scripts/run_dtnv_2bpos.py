@@ -16,6 +16,7 @@ from cil.optimisation.operators import (
     ZeroOperator,
 )
 from sirf.contrib.partitioner import partitioner
+from sirf.STIR import SeparableGaussianImageFilter
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
@@ -32,6 +33,7 @@ from setr.scripts.dtnv_common import (
     apply_dynamic_range_scaling,
     build_variance_reduced_function,
     compute_kappa_squared_image_from_partitioned_objective,
+    dynamic_range_scale_sirf,
     estimate_delta_from_gradients,
     get_algorithm,
     get_block_objective,
@@ -39,7 +41,6 @@ from setr.scripts.dtnv_common import (
     get_preconditioners,
     get_prior,
     get_s_inv_from_subset_objs,
-    dynamic_range_scale_sirf,
     normalise_kappa_squares,
 )
 from setr.utils import (
@@ -71,6 +72,9 @@ def prepare_data(args):
     umap = pet_data["attenuation"]
     umap += (-umap).max()
     umap /= umap.max()
+    ct_smooth = SeparableGaussianImageFilter()
+    ct_smooth.set_fwhms((0.5, 0.5, 0.5))
+    ct_smooth.apply(umap)
     spect_data = get_spect_data(args.spect_data_path)
 
     # Apply filters to initial images
@@ -82,13 +86,6 @@ def prepare_data(args):
 
     pet_data["initial_image"].write(os.path.join(args.output_path, "initial_image_0.hv"))
     spect_data["initial_image"].write(os.path.join(args.output_path, "initial_image_1.hv"))
-
-    # Set delta (smoothing parameter) if not provided
-    if args.delta is None:
-        args.delta = max(
-            pet_data["initial_image"].max() / 1e4,
-            spect_data["initial_image"].max() / 1e4,
-        ) * min(args.alpha, args.beta)
 
     initial_estimates = EnhancedBlockDataContainer(
         pet_data["initial_image"], spect_data["initial_image"]
@@ -302,8 +299,7 @@ def main(args) -> None:
         shape=(2, 2),
     )
 
-    # cross-modal scaling (XXth pct)
-    #kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
+    kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
     combined = EnhancedBlockDataContainer(
         *bo.direct(initial_estimates).containers
     )
@@ -315,13 +311,13 @@ def main(args) -> None:
     # Apply consistent scaling to all prior weights
     apply_dynamic_range_scaling(args, scale)
 
-    # now (re)compute delta if it depends on alpha
+    # Set delta (smoothing parameter) if not provided
     if args.delta is None:
         percentile = getattr(args, "delta_percentile", 95)
         divisor = getattr(args, "delta_gradient_divisor", 10.0)
         delta_est = estimate_delta_from_gradients(
             combined,
-            scales=(args.alpha, args.beta),               
+            scales=(args.alpha, args.beta),
             percentile=percentile,
             divisor=divisor,
         )
@@ -334,12 +330,15 @@ def main(args) -> None:
                 divisor,
             )
         else:
-            args.delta = max(
-                pet_data["initial_image"].max() / 1e2,
-                spect_data["initial_image"].max() / 1e2,
-            ) * min(args.alpha, args.beta)
+            args.delta = (
+                min(
+                    args.alpha * initial_estimates.containers[0].max(),
+                    args.beta * initial_estimates.containers[1].max(),
+                )
+                / 1e3
+            )
             logging.warning(
-                "Falling back to max-intensity heuristic for delta: %.6g", args.delta
+                "Falling back to intensity heuristic for delta: %.6g", args.delta
             )
 
     # write κ² images
