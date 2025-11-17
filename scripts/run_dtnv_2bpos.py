@@ -304,17 +304,17 @@ def main(args) -> None:
         *bo.direct(initial_estimates).containers
     )
     
-    scale = dynamic_range_scale_sirf(
+    pet_scale, spect_scale = dynamic_range_scale_sirf(
         combined[0],
         combined[1],
     )
     # Apply consistent scaling to all prior weights
-    apply_dynamic_range_scaling(args, scale)
+    apply_dynamic_range_scaling(args, pet_scale, spect_scale)
 
     # Set delta (smoothing parameter) if not provided
     if args.delta is None:
         percentile = getattr(args, "delta_percentile", 95)
-        divisor = getattr(args, "delta_gradient_divisor", 10.0)
+        divisor = getattr(args, "delta_gradient_divisor", 5.0)
         delta_est = estimate_delta_from_gradients(
             combined,
             scales=(args.alpha, args.beta),

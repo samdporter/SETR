@@ -63,7 +63,7 @@ from setr.scripts.dtnv_common import (
     get_prior,
     get_probabilities,
     get_s_inv_from_subset_objs,
-    gradient_energy_scale_sirf,
+    dynamic_range_scale_sirf,
     normalise_kappa_squares,
 )
 from setr.utils import (
@@ -261,16 +261,15 @@ def setup_reconstruction(args, output_dir):
 
     combined = bo.direct(initial_estimates)
 
-    # Compute cross-modal scaling
-    scale = gradient_energy_scale_sirf(
+    # Compute per-modality scaling (inverse dynamic ranges)
+    pet_scale, spect_scale = dynamic_range_scale_sirf(
         combined[0],
         combined[1],
-        mask=None,
-        kappa_pet=kappas.containers[0],
-        kappa_spect=kappas.containers[1],
     )
 
-    logging.info(f"Gradient energy scale: {scale:.6f}")
+    logging.info(
+        "Dynamic range scales -> PET: %.6g, SPECT: %.6g", pet_scale, spect_scale
+    )
 
     return {
         "initial_estimates": initial_estimates,
@@ -278,7 +277,8 @@ def setup_reconstruction(args, output_dir):
         "s_inv": s_inv,
         "umap": umap,
         "bo": bo,
-        "scale": scale,
+        "pet_scale": pet_scale,
+        "spect_scale": spect_scale,
         "kappas": kappas,
         "combined": combined,
         "num_subsets": args.num_subsets,
@@ -307,14 +307,17 @@ def create_prior_for_test(
     test_args = argparse.Namespace(**vars(args))
 
     # Apply gradient energy scaling to alpha/beta
-    test_args.alpha = alpha * setup_data["scale"]
-    test_args.beta = alpha
+    test_args.alpha = alpha * setup_data["pet_scale"]
+    test_args.beta = alpha * setup_data["spect_scale"]
 
     if test_args.delta is None:
         test_args.delta = max(
             setup_data["initial_estimates"][0].max() / 1e4,
             setup_data["initial_estimates"][1].max() / 1e4,
-        ) * (alpha * setup_data["scale"])
+        ) * max(
+            alpha * setup_data["pet_scale"],
+            alpha * setup_data["spect_scale"],
+        )
 
     # Set hessian type
     test_args.hessian_type = hessian_type

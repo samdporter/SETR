@@ -27,9 +27,9 @@ from setr.scripts.common import (
     init_run_env,
 )
 from setr.scripts.dtnv_common import (
-    apply_gradient_energy_scaling,
+    apply_dynamic_range_scaling,
     get_prior,
-    gradient_energy_scale_sirf,
+    dynamic_range_scale_sirf,
     normalise_kappa_squares,
 )
 from setr.utils import (
@@ -646,14 +646,11 @@ def main(args):
     # Apply scaling
     kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
     combined = bo.direct(initial_estimates)
-    scale = gradient_energy_scale_sirf(
+    pet_scale, spect_scale = dynamic_range_scale_sirf(
         combined[0],
         combined[1],
-        mask=None,
-        kappa_pet=kappas.containers[0] if kappas else None,
-        kappa_spect=kappas.containers[1] if kappas else None,
     )
-    apply_gradient_energy_scaling(args, scale)
+    apply_dynamic_range_scaling(args, pet_scale, spect_scale)
 
     # Set up priors
     if not args.no_prior:

@@ -44,6 +44,11 @@ from setr.priors import (
     WeightedTotalVariation,
     WeightedVectorialTotalVariation,
 )
+from setr.utils.dynamic_range import (
+    apply_dynamic_range_scaling,
+    apply_gradient_energy_scaling,
+    dynamic_range_scale_sirf,
+)
 from setr.utils.sirf import get_array
 
 ISTA.update = ista_update_step
@@ -496,92 +501,6 @@ def gradient_energy_scale_sirf(
     return num / den
 
 
-def dynamic_range_scale_sirf(
-    x_pet,
-    x_spect,
-    percentile_high: float = 99.0,
-    percentile_low: float = 1.0,
-    mask=None,
-    use_absolute: bool = True,
-    eps: float = 1e-12,
-):
-    """
-    Compute a scale factor that balances robust dynamic ranges between PET and SPECT.
-
-    Parameters
-    ----------
-    x_pet, x_spect : sirf.ImageData
-        Images in the SAME geometry (map SPECT→PET first if needed).
-    percentile_high : float
-        High percentile used to estimate the upper bound of the dynamic range.
-    percentile_low : float
-        Low percentile used to estimate the lower bound of the dynamic range.
-    mask : sirf.ImageData or None
-        Optional boolean/{0,1} mask to limit the statistic.
-    use_absolute : bool
-        Whether to use absolute intensities before computing percentiles.
-    eps : float
-        Numerical stabiliser to avoid division by zero.
-
-    Returns
-    -------
-    float
-        Scale factor ``≈ dynamic_range_spect / dynamic_range_pet``.
-    """
-    import numpy as np
-
-    def _prepare(arr):
-        if mask is not None:
-            m = get_array(mask).astype(bool)
-            arr = arr[m]
-        else:
-            arr = arr.ravel()
-        if use_absolute:
-            arr = np.abs(arr)
-        arr = arr[np.isfinite(arr)]
-        return arr
-
-    xp = _prepare(get_array(x_pet))
-    xs = _prepare(get_array(x_spect))
-
-    if xp.size == 0 or xs.size == 0:
-        logging.warning("Dynamic range scaling fallback to 1: empty or invalid data encountered.")
-        return 1.0
-
-    def _range(stat_arr):
-        hi = (
-            np.percentile(stat_arr, percentile_high)
-            if percentile_high is not None
-            else np.max(stat_arr)
-        )
-        lo = (
-            np.percentile(stat_arr, percentile_low)
-            if percentile_low is not None
-            else np.min(stat_arr)
-        )
-        return max(float(hi - lo), eps)
-
-    pet_range = _range(xp)
-    spect_range = _range(xs)
-    return spect_range / max(pet_range, eps)
-
-
-def apply_dynamic_range_scaling(args, scale):
-    """Apply dynamic range scaling to all prior weightings consistently."""
-
-    args.alpha *= scale
-    logging.info(f"Adjusted alpha to {args.alpha:.6g} using dynamic-range scaling")
-
-    if hasattr(args, "gamma_pet"):
-        args.gamma_pet *= scale
-        logging.info(f"Adjusted gamma_pet to {args.gamma_pet:.6g} using dynamic-range scaling")
-
-
-def apply_gradient_energy_scaling(args, scale):
-    """Backward-compatible alias for older gradient scaling usage."""
-    apply_dynamic_range_scaling(args, scale)
-
-
 def estimate_delta_from_gradients(images, scales=None, percentile=95, divisor=10.0):
     """Estimate delta from scaled image-gradient magnitudes.
 
@@ -696,6 +615,7 @@ def get_prior(
             initial_estimates,
             tnv_kappas,
             args.delta,
+            smoothing=getattr(args, "smoothing", "charbonnier"),
             anatomical=umap if args.directional_tnv else None,
             stable=getattr(args, "stable", True),
             tail_singular_values=getattr(args, "tail_singular_values", None),
@@ -737,8 +657,6 @@ def get_prior(
                     stencil=getattr(args, "tv_stencil", "6"),
                     both_directions=getattr(args, "tv_both_directions", False),
                     max_step=getattr(args, "tv_max_step", getattr(args, "tnv_max_step", 1)),
-                    flip_anatomical=getattr(args, "flip", False),
-                    flip_axes=getattr(args, "flip_axes", (0, 2)),
                 )
             else:
                 combined_tv = WeightedTotalVariation(

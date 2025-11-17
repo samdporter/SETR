@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SETR DTNV reconstruction for single bed position - Simplified version using shared modules."""
+"""SETR DTNV reconstruction for single bed position with modality-specific RelativeDifferencePrior."""
 
 import cProfile
 import logging
@@ -16,7 +16,7 @@ from cil.optimisation.operators import (
     ZeroOperator,
 )
 from sirf.contrib.partitioner import partitioner
-from sirf.STIR import ImageData, SeparableGaussianImageFilter
+from sirf.STIR import ImageData, RelativeDifferencePrior, SeparableGaussianImageFilter
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.operators import FlipOperator
@@ -45,6 +45,8 @@ from setr.scripts.dtnv_common import (
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters
+
+
 
 
 def prepare_data(args):
@@ -105,10 +107,10 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     Set up data fidelity (objective) functions.
 
     Returns:
-        all_funs: List of all objective functions.
-        update_interval: Update interval used by the algorithm.
+        pet_obj_funs: List of PET objective functions.
+        spect_obj_funs: List of SPECT objective functions.
         s_inv: Sensitivity image ^ -1.
-        pet_ams, spect_ams: Acquisition model components.
+        kappa: Kappa weights (or None).
     """
     # Partition PET data.
 
@@ -143,41 +145,76 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     for i, el in enumerate(s_inv.containers):
         s_inv.containers[i].write(os.path.join(args.output_path, f"s_inv_{i}.hv"))
 
-    pet_obj_funs = [
-        get_block_objective(
-            pet_data["initial_image"],
-            spect_data["initial_image"],
-            obj_fun,
-            order=0,
-        )
-        for obj_fun in pet_obj_funs
-    ]
-    spect_obj_funs = [
-        get_block_objective(
-            spect_data["initial_image"],
-            pet_data["initial_image"],
-            obj_fun,
-            order=1,
-        )
-        for obj_fun in spect_obj_funs
-    ]
-
+    # Compute kappa before wrapping in block objectives
     _, gauss = get_filters()
-
     if args.use_kappa:
+        # Temporarily wrap in block objectives just for kappa calculation
+        pet_block_temp = [get_block_objective(pet_data["initial_image"], spect_data["initial_image"], f, 0)
+                          for f in pet_obj_funs]
+        spect_block_temp = [get_block_objective(spect_data["initial_image"], pet_data["initial_image"], f, 1)
+                            for f in spect_obj_funs]
         kappa = get_kappa_squareds(
-            [pet_obj_funs, spect_obj_funs],
+            [pet_block_temp, spect_block_temp],
             [pet_data["initial_image"], spect_data["initial_image"]],
         )
         for kappa_image in kappa.containers:
             gauss.apply(kappa_image)
-        all_funs = pet_obj_funs + spect_obj_funs
     else:
         kappa = None
 
-    all_funs = pet_obj_funs + spect_obj_funs
+    return pet_obj_funs, spect_obj_funs, s_inv, kappa
 
-    return all_funs, s_inv, kappa
+
+def add_modality_specific_priors(args, pet_obj_funs, spect_obj_funs, pet_data, spect_data):
+    """
+    Add modality-specific RelativeDifferencePrior to each objective function.
+
+    Following the PETRIC pattern: scale prior by 1/num_subsets and add to each obj_fun.
+
+    Args:
+        args: Configuration arguments
+        pet_obj_funs: List of PET objective functions
+        spect_obj_funs: List of SPECT objective functions
+        pet_data: PET data dictionary
+        spect_data: SPECT data dictionary
+    """
+    # Use existing gamma_pet and gamma_spect from config
+    pet_prior_strength = getattr(args, "gamma_pet", 50.0)
+    spect_prior_strength = getattr(args, "gamma_spect", 0.5)
+
+    num_total_subsets = len(pet_obj_funs) + len(spect_obj_funs)
+
+    # Create PET prior
+    pet_prior = RelativeDifferencePrior()
+    # Scale by 1/num_subsets as in PETRIC pattern
+    pet_prior.set_penalisation_factor(pet_prior_strength / num_total_subsets)
+    pet_prior.set_up(pet_data["initial_image"])
+
+    # Create SPECT prior
+    spect_prior = RelativeDifferencePrior()
+    spect_prior.set_penalisation_factor(spect_prior_strength / num_total_subsets)
+    spect_prior.set_up(spect_data["initial_image"])
+
+    logging.info(
+        "PET RDP strength: %.6f (gamma_pet=%.6f / %d subsets)",
+        pet_prior_strength / num_total_subsets,
+        pet_prior_strength,
+        num_total_subsets,
+    )
+    logging.info(
+        "SPECT RDP strength: %.6f (gamma_spect=%.6f / %d subsets)",
+        spect_prior_strength / num_total_subsets,
+        spect_prior_strength,
+        num_total_subsets,
+    )
+
+    # Add PET prior to all PET objective functions
+    for f in pet_obj_funs:
+        f.set_prior(pet_prior)
+
+    # Add SPECT prior to all SPECT objective functions
+    for f in spect_obj_funs:
+        f.set_prior(spect_prior)
 
 
 def main(args) -> None:
@@ -214,7 +251,7 @@ def main(args) -> None:
 
     # Set up data fidelity functions.
     num_subsets = [int(i) for i in args.num_subsets]
-    all_funs, s_inv, kappas = get_data_fidelity(
+    pet_obj_funs, spect_obj_funs, s_inv, kappas = get_data_fidelity(
         args,
         pet_data,
         spect_data,
@@ -222,6 +259,31 @@ def main(args) -> None:
         get_spect_am_with_res,
         num_subsets,
     )
+
+    # Add modality-specific RDP priors to objective functions (PETRIC pattern)
+    add_modality_specific_priors(args, pet_obj_funs, spect_obj_funs, pet_data, spect_data)
+
+    # Now wrap in block objectives
+    pet_obj_funs = [
+        get_block_objective(
+            pet_data["initial_image"],
+            spect_data["initial_image"],
+            obj_fun,
+            order=0,
+        )
+        for obj_fun in pet_obj_funs
+    ]
+    spect_obj_funs = [
+        get_block_objective(
+            spect_data["initial_image"],
+            pet_data["initial_image"],
+            obj_fun,
+            order=1,
+        )
+        for obj_fun in spect_obj_funs
+    ]
+
+    all_funs = pet_obj_funs + spect_obj_funs
 
     if args.flip:
         spect2pet = CompositionOperator(
@@ -242,7 +304,7 @@ def main(args) -> None:
         combined[0],
         combined[1],
     )
-    # Apply consistent scaling to all prior weights
+    # Apply consistent scaling to all prior weights (gamma_pet, gamma_spect, etc.)
     apply_dynamic_range_scaling(args, pet_scale, spect_scale)
 
     # Set delta (smoothing parameter) if not provided
@@ -286,11 +348,22 @@ def main(args) -> None:
         prior = None
         priors_list = []
     else:
-        # Set up the prior.
-        priors_list = get_prior(args, umap, combined, bo, kappas)
-        for i, p in enumerate(priors_list):
-            attach_prior_hessian(priors_list[i])
+        # Set up dTNV cross-modality prior (for synergy)
+        dtnv_priors_list = get_prior(args, umap, combined, bo, kappas)
+        for i, p in enumerate(dtnv_priors_list):
+            attach_prior_hessian(dtnv_priors_list[i])
+
+        # Note: RDP modality-specific priors are already added to objective functions
+        priors_list = dtnv_priors_list
         prior = -SumFunction(*priors_list)
+
+        logging.info(
+            "Using dTNV for cross-modality synergy + SIRF RDP for modality-specific regularization"
+        )
+        logging.info(
+            "dTNV priors: %d | RDP priors added directly to objective functions",
+            len(priors_list)
+        )
 
     ui = getattr(args, "update_interval", None)
     update_interval = len(all_funs) if ui is None else ui
