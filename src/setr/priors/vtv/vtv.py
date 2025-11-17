@@ -1,5 +1,6 @@
 # VTV.py
 
+import numpy as np
 from cil.optimisation.functions import Function
 
 try:
@@ -41,7 +42,7 @@ class WeightedVectorialTotalVariation(Function):
         geometry,
         weights,
         delta,
-        smoothing="fair",
+        smoothing="charbonnier",
         norm="nuclear",
         anatomical=None,
         stable=True,
@@ -53,6 +54,7 @@ class WeightedVectorialTotalVariation(Function):
         bnd_cond="Periodic",
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
+        self._dV = float(np.prod(voxel_sizes))
         if isinstance(anatomical, ImageData):
             anatomical = get_array(anatomical)
         self.jacobian = Jacobian(
@@ -97,7 +99,7 @@ class WeightedVectorialTotalVariation(Function):
         w = self.weights.unsqueeze(-1)
         U = w * J
 
-        return self.vtv(U)
+        return self._dV*self.vtv(U)
 
     def gradient(self, x, out=None):
         x_arr = self.bdc2a.direct(x)
@@ -110,7 +112,7 @@ class WeightedVectorialTotalVariation(Function):
 
         ret = self.jacobian.adjoint(inner)
 
-        return self.bdc2a.adjoint(ret, out=out)
+        return self.bdc2a.adjoint(self._dV*ret, out=out)
 
     def _compute_directional_participation_counts(self, shape, device, dtype):
         """
@@ -232,7 +234,7 @@ class WeightedVectorialTotalVariation(Function):
         """
         x_arr = self.bdc2a.direct(x)
         H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)
-        return self.bdc2a.adjoint(H, out=out)
+        return self.bdc2a.adjoint(self._dV*H, out=out)
 
     def _inv_hessian_diag_fast(self, x, eta: float = 0.7, epsilon: float = 1e-8, out=None):
         """
@@ -243,7 +245,7 @@ class WeightedVectorialTotalVariation(Function):
         H = self._preconditioner_weights_core_fast(x_arr, eta, epsilon)
         Hinv = torch.reciprocal(H)
         Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=0.0, neginf=0.0)
-        return self.bdc2a.adjoint(Hinv, out=out)
+        return self.bdc2a.adjoint(Hinv/self._dV, out=out)
 
     def _preconditioner_weights_core_fastest_positive(
         self, x_arr, eta: float = 0.7, epsilon: float = 1e-8
@@ -456,7 +458,7 @@ class WeightedVectorialTotalVariation(Function):
         """Returns diagonal positive preconditioner using Frobenius approximation (fastest)."""
         x_arr = self.bdc2a.direct(x)
         H = self._preconditioner_weights_core_fastest_positive(x_arr, eta, epsilon)
-        return self.bdc2a.adjoint(H, out=out)
+        return self.bdc2a.adjoint(self._dV*H, out=out)
 
     def _inv_hessian_diag_fastest_positive(
         self, x, eta: float = 0.7, epsilon: float = 1e-8, out=None
@@ -466,13 +468,13 @@ class WeightedVectorialTotalVariation(Function):
         H = self._preconditioner_weights_core_fastest_positive(x_arr, eta, epsilon)
         Hinv = torch.reciprocal(H)
         Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=0.0, neginf=0.0)
-        return self.bdc2a.adjoint(Hinv, out=out)
+        return self.bdc2a.adjoint(Hinv/self._dV, out=out)
 
     def _hessian_diag_fastest_exact(self, x, epsilon: float = 1e-8, out=None):
         """Returns diagonal Hessian using Frobenius approximation with exact φ''."""
         x_arr = self.bdc2a.direct(x)
         H = self._preconditioner_weights_core_fastest_exact(x_arr, epsilon)
-        return self.bdc2a.adjoint(H, out=out)
+        return self.bdc2a.adjoint(self._dV*H, out=out)
 
     def _inv_hessian_diag_fastest_exact(self, x, epsilon: float = 1e-8, out=None):
         """Returns inverse diagonal Hessian (Frobenius, exact φ'')."""
@@ -480,20 +482,20 @@ class WeightedVectorialTotalVariation(Function):
         H = self._preconditioner_weights_core_fastest_exact(x_arr, epsilon)
         Hinv = torch.reciprocal(H)
         Hinv = torch.nan_to_num(Hinv, nan=0.0, posinf=0.0, neginf=0.0)
-        return self.bdc2a.adjoint(Hinv, out=out)
+        return self.bdc2a.adjoint(Hinv/self._dV, out=out)
 
     def _hessian_diag_slow(self, x, out=None):
         """Exact diagonal Hessian via full SVD (slowest, most accurate)."""
         x_arr = self.bdc2a.direct(x)
         diag_arr = self._preconditioner_weights_core_slow(x_arr)
-        return self.bdc2a.adjoint(diag_arr, out=out)
+        return self.bdc2a.adjoint(self._dV*diag_arr, out=out)
 
     def _inv_hessian_diag_slow(self, x, out=None):
         """Inverse of exact diagonal Hessian via full SVD."""
         diag_arr = self._preconditioner_weights_core_slow(self.bdc2a.direct(x))
         inv_arr = torch.reciprocal(diag_arr)
         torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0, out=inv_arr)
-        return self.bdc2a.adjoint(inv_arr, out=out)
+        return self.bdc2a.adjoint(inv_arr/self._dV, out=out)
 
     def hessian_diag(self, x, out=None, eta: float = 0.7, epsilon: float = 1e-8):
         """
@@ -567,7 +569,7 @@ class WeightedTotalVariation(Function):
         geometry,
         weights,
         delta,
-        smoothing="fair",
+        smoothing="charbonnier",
         norm="l2",
         anatomical=None,
         diagonal=False,
@@ -580,6 +582,8 @@ class WeightedTotalVariation(Function):
         voxel_sizes = geometry.containers[0].voxel_sizes()
         if hasattr(anatomical, "as_array"):  # ImageData
             anatomical = get_array(anatomical)
+            
+        self._dV = float(np.prod(voxel_sizes))
 
         self.jacobian = Jacobian(
             voxel_sizes,
@@ -614,7 +618,7 @@ class WeightedTotalVariation(Function):
             modality_gradients = U[..., m, :]
             total_tv += self.tv(modality_gradients)
 
-        return total_tv
+        return self._dV*total_tv
 
     def gradient(self, x, out=None):
         x_arr = self.bdc2a.direct(x)
@@ -630,7 +634,7 @@ class WeightedTotalVariation(Function):
 
         ret = self.jacobian.adjoint(inner)
 
-        return self.bdc2a.adjoint(ret, out=out)
+        return self.bdc2a.adjoint(self._dV*ret, out=out)
 
     def proximal(self, x, tau, out=None):
         """
@@ -645,7 +649,7 @@ class WeightedTotalVariation(Function):
         proxU = torch.zeros_like(U)
         for m in range(U.shape[-2]):
             modality_gradients = U[..., m, :]
-            proxU[..., m, :] = self.tv.proximal(modality_gradients, tau)
+            proxU[..., m, :] = self.tv.proximal(modality_gradients, tau*self._dV)
 
         ret = self.jacobian.adjoint(proxU * w)
         return self.bdc2a.adjoint(ret, out=out)
@@ -674,7 +678,7 @@ class WeightedTotalVariation(Function):
 
         h_img = torch.sum(w2 * S2 * h_dir, dim=-1)
 
-        return self.bdc2a.adjoint(h_img, out=out)
+        return self.bdc2a.adjoint(self._dV*h_img, out=out)
 
     def inv_hessian_diag(self, x, out=None, epsilon=1e-9):
         hess_arr = self.hessian_diag(x, out=None)
@@ -697,7 +701,7 @@ class TotalVariation(Function):
         geometry,
         weight=1.0,
         delta=1e-6,
-        smoothing="fair",
+        smoothing="charbonnier",
         norm="l2",
         anatomical=None,
         both_directions=False,
@@ -711,7 +715,7 @@ class TotalVariation(Function):
             geometry: ImageData template defining the image space
             weight: Scalar weighting factor for the TV prior
             delta: Smoothing parameter for the TV function
-            smoothing: Smoothing function type ('fair', 'huber', etc.)
+            smoothing: Smoothing function type ('charbonnier', 'fair', etc.)
             norm: Vector norm type ('l2', 'l1', etc.)
             anatomical: Optional anatomical image for directional guidance
             both_directions: Use bidirectional gradients
@@ -727,6 +731,7 @@ class TotalVariation(Function):
         self.hessian = hessian
 
         voxel_sizes = geometry.voxel_sizes()
+        self._dV = float(np.prod(voxel_sizes))
 
         # Choose gradient operator based on anatomical guidance
         if anatomical is not None:
@@ -767,7 +772,7 @@ class TotalVariation(Function):
 
         # Apply weight and compute TV
         weighted_grad = self.weight * grad
-        return self.tv(weighted_grad)
+        return self._dV*self.tv(weighted_grad)
 
     def gradient(self, x, out=None):
         """Compute gradient of TV functional."""
@@ -794,7 +799,7 @@ class TotalVariation(Function):
         if hasattr(result_arr, "detach"):  # torch tensor
             result_arr = result_arr.detach().cpu().numpy()
 
-        out.fill(result_arr)
+        out.fill(self._dV*result_arr)
         return out
 
     def proximal(self, x, tau, out=None):
@@ -809,7 +814,7 @@ class TotalVariation(Function):
         weighted_grad = self.weight * grad
 
         # Apply TV proximal operator
-        prox_grad = self.tv.proximal(weighted_grad, tau)
+        prox_grad = self.tv.proximal(weighted_grad, tau*self._dV)
 
         # Apply weight and compute adjoint
         weighted_prox = self.weight * prox_grad
@@ -849,7 +854,7 @@ class TotalVariation(Function):
         if hasattr(h_img, "detach"):  # torch tensor
             h_img = h_img.detach().cpu().numpy()
 
-        out.fill(h_img)
+        out.fill(self._dV*h_img)
         return out
 
     def inv_hessian_diag(self, x, out=None, epsilon=1e-9):

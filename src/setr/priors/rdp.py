@@ -156,8 +156,6 @@ class RelativeDifferencePrior(Function):
         gamma_dir: float = 1.0,  # projector strength for DirectionalGradient
         eta_dir: float = 1e-6,
         bnd_cond: str = "Neumann",
-        flip_anatomical: bool = False,  # flip anatomical image if needed (e.g., for MANC data)
-        flip_axes: tuple = (0, 2),  # axes to flip along
     ):
         super().__init__()
         self.gamma = gamma
@@ -166,20 +164,19 @@ class RelativeDifferencePrior(Function):
         self.epsilon = epsilon
         self.edge_factor = 0.5 if self.both_directions else 1.0
 
-        # voxel sizes (for API parity; no scaling used here)
+        # voxel sizes: compute volume element for scale-invariant regularization
         if hasattr(domain_geometry, "containers"):
             voxel_sizes = domain_geometry.containers[0].voxel_sizes()
         else:
             voxel_sizes = domain_geometry.voxel_sizes()
 
+        import numpy as np
+        self._dV = float(np.prod(voxel_sizes))
+
         # Δ-operator: plain Gradient OR DirectionalGradient (projected)
         if anatomical is not None:
-            import numpy as np
             if hasattr(anatomical, "as_array"):
                 anatomical = get_array(anatomical)
-            # Apply flip if requested
-            if flip_anatomical:
-                anatomical = np.flip(anatomical, axis=flip_axes)
             self.use_dir = True
             self.gradient_op = DirectionalGradient(
                 anatomical=anatomical,
@@ -277,15 +274,15 @@ class RelativeDifferencePrior(Function):
             for c in x.containers:
                 xt = _to_tensor(c)
                 total += float(self._value_tensor(xt).detach().item())
-            return total
+            return self._dV * total
         xt = _to_tensor(x)
-        return float(self._value_tensor(xt).detach().item())
+        return self._dV * float(self._value_tensor(xt).detach().item())
 
     def gradient(self, x, out=None):
         def one(img):
             xt = _to_tensor(img)
             gt = self._grad_tensor(xt)
-            return _from_tensor_like(img, gt)
+            return _from_tensor_like(img, self._dV * gt)
 
         if hasattr(x, "containers"):
             if out is None:
@@ -303,7 +300,7 @@ class RelativeDifferencePrior(Function):
         xt = _to_tensor(x if hasattr(x, "as_array") else x)
         vt = _to_tensor(v if hasattr(v, "as_array") else v)
         Hv = self._hess_vec_tensor(xt, vt)
-        mapped = _from_tensor_like(v, Hv)
+        mapped = _from_tensor_like(v, self._dV * Hv)
         if out is None:
             return mapped
         out.fill(get_array(mapped) if hasattr(mapped, "as_array") else mapped)
@@ -312,7 +309,7 @@ class RelativeDifferencePrior(Function):
     def hessian_diag(self, x):
         xt = _to_tensor(x if hasattr(x, "as_array") else x)
         Hii = self._hess_diag_tensor(xt)
-        return _from_tensor_like(x, Hii)
+        return _from_tensor_like(x, self._dV * Hii)
 
     def inv_hessian_diag(self, x, damping: float = 1e-8):
         """
@@ -320,6 +317,8 @@ class RelativeDifferencePrior(Function):
         """
         xt = _to_tensor(x if hasattr(x, "as_array") else x)
         Hii_t = self._hess_diag_tensor(xt)
+        # Apply _dV scaling before inversion
+        Hii_t = self._dV * Hii_t
         safe = torch.where(torch.abs(Hii_t) < damping, torch.sign(Hii_t) * damping, Hii_t)
         inv_t = 1.0 / safe
         return _from_tensor_like(x, inv_t)
@@ -375,8 +374,6 @@ class WeightedRDP(Function):
         epsilon: float = 1e-12,
         anatomical=None,  # optional, forwarded to Jacobian
         bnd_cond: str = "Neumann",
-        flip_anatomical: bool = False,  # flip anatomical image if needed (e.g., for MANC data)
-        flip_axes: tuple = (0, 2),  # axes to flip along
     ):
         self.gamma = gamma
         self.stencil = stencil
@@ -387,16 +384,15 @@ class WeightedRDP(Function):
         # Mapping between BlockDataContainer <-> array
         self.bdc2a = BlockDataContainerToArray(geometry)
 
-        # voxel sizes (for operator init)
+        # voxel sizes: compute volume element for scale-invariant regularization
         voxel_sizes = geometry.containers[0].voxel_sizes()
+        import numpy as np
+        self._dV = float(np.prod(voxel_sizes))
 
         # Jacobian over modalities
         import numpy as np
         if hasattr(anatomical, "as_array"):
             anatomical = get_array(anatomical)
-        # Apply flip if requested
-        if anatomical is not None and flip_anatomical:
-            anatomical = np.flip(anatomical, axis=flip_axes)
         self.jacobian = Jacobian(
             voxel_sizes,
             anatomical=anatomical,
@@ -517,13 +513,13 @@ class WeightedRDP(Function):
     def __call__(self, x) -> float:
         X_arr = self.bdc2a.direct(x)  # (nx,ny,nz,M)
         X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
-        return float(self._value_tensor(X_t).detach().item())
+        return self._dV * float(self._value_tensor(X_t).detach().item())
 
     def gradient(self, x, out=None):
         X_arr = self.bdc2a.direct(x)
         X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
         g_t = self._grad_tensor(X_t)  # (..., M)
-        return self.get_arr_and_fill(g_t, out)
+        return self.get_arr_and_fill(self._dV * g_t, out)
 
     def hessian(self, x, v, out=None):
         X_arr = self.bdc2a.direct(x)
@@ -531,7 +527,7 @@ class WeightedRDP(Function):
         X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
         V_t = torch.as_tensor(V_arr, device=_DEVICE, dtype=_DTYPE)
         Hv_t = self._hess_vec_tensor(X_t, V_t)
-        return self.get_arr_and_fill(Hv_t, out)
+        return self.get_arr_and_fill(self._dV * Hv_t, out)
 
     def get_arr_and_fill(self, arg0, out):
         g_arr = arg0.detach().to("cpu").numpy()
@@ -541,13 +537,15 @@ class WeightedRDP(Function):
         X_arr = self.bdc2a.direct(x)
         X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
         Hii_t = self._hess_diag_tensor(X_t)
-        Hii_arr = Hii_t.detach().to("cpu").numpy()
+        Hii_arr = (self._dV * Hii_t).detach().to("cpu").numpy()
         return self.bdc2a.adjoint(Hii_arr)
 
     def inv_hessian_diag(self, x, damping: float = 1e-8):
         X_arr = self.bdc2a.direct(x)
         X_t = torch.as_tensor(X_arr, device=_DEVICE, dtype=_DTYPE)
         Hii_t = self._hess_diag_tensor(X_t)
+        # Apply _dV scaling before inversion
+        Hii_t = self._dV * Hii_t
         safe = torch.where(torch.abs(Hii_t) < damping, torch.sign(Hii_t) * damping, Hii_t)
         inv_t = 1.0 / safe
         inv_arr = inv_t.detach().to("cpu").numpy()
