@@ -72,29 +72,38 @@ def dynamic_range_scale_sirf(
 def apply_dynamic_range_scaling(args, pet_scale: float, spect_scale: float) -> None:
     """Apply per-modality dynamic range scaling to all prior weights."""
 
-    args.alpha *= pet_scale
-    logging.info(
-        "Adjusted alpha to %s using PET dynamic-range scaling", f"{args.alpha:.6g}"
-    )
+    def _scale_attr(attr: str, scale: float, source: str) -> None:
+        if not hasattr(args, attr):
+            return
 
-    args.beta *= spect_scale
-    logging.info(
-        "Adjusted beta to %s using SPECT dynamic-range scaling", f"{args.beta:.6g}"
-    )
+        value = getattr(args, attr)
+        if value is None:
+            return
 
-    if hasattr(args, "gamma_pet"):
-        args.gamma_pet *= pet_scale
+        initial_attr = f"{attr}_initial"
+        scaled_attr = f"{attr}_scaled"
+
+        # Preserve the very first value we saw so the CLI input is retained.
+        if not hasattr(args, initial_attr):
+            setattr(args, initial_attr, value)
+
+        initial_value = getattr(args, initial_attr)
+        scaled_value = initial_value * scale
+        setattr(args, attr, scaled_value)
+        setattr(args, scaled_attr, scaled_value)
+
         logging.info(
-            "Adjusted gamma_pet to %s using PET dynamic-range scaling",
-            f"{args.gamma_pet:.6g}",
+            "Adjusted %s from %s to %s using %s dynamic-range scaling",
+            attr,
+            f"{initial_value:.6g}",
+            f"{scaled_value:.6g}",
+            source,
         )
 
-    if hasattr(args, "gamma_spect"):
-        args.gamma_spect *= spect_scale
-        logging.info(
-            "Adjusted gamma_spect to %s using SPECT dynamic-range scaling",
-            f"{args.gamma_spect:.6g}",
-        )
+    _scale_attr("alpha", pet_scale, "PET")
+    _scale_attr("beta", spect_scale, "SPECT")
+    _scale_attr("gamma_pet", pet_scale, "PET")
+    _scale_attr("gamma_spect", spect_scale, "SPECT")
 
 
 def apply_gradient_energy_scaling(args, pet_scale: float, spect_scale: float) -> None:

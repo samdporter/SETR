@@ -39,12 +39,11 @@ from setr.scripts.dtnv_common import (
     get_kappa_squareds,
     get_preconditioners,
     get_prior,
-    get_s_inv_from_objs,
     normalise_kappa_squares,
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_array, get_filters
+from setr.utils.sirf import get_array, get_filters, get_s_inv_from_objs
 
 
 

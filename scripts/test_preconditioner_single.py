@@ -51,6 +51,7 @@ from setr.cil_extensions.preconditioners import (
 )
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
+    apply_combine_sensitivities,
     attach_prior_hessian,
     get_resampling_operators,
     get_sensitivity_from_subset_objs,
@@ -62,7 +63,6 @@ from setr.scripts.dtnv_common import (
     get_block_objective,
     get_prior,
     get_probabilities,
-    get_s_inv_from_subset_objs,
     dynamic_range_scale_sirf,
     normalise_kappa_squares,
 )
@@ -73,7 +73,7 @@ from setr.utils import (
     get_spect_data,
 )
 from setr.utils.io import load_config
-from setr.utils.sirf import get_array, get_filters
+from setr.utils.sirf import get_array, get_filters, get_s_inv_from_subset_objs
 
 # Monkey-patch ISTA
 ISTA.update = ista_update_step
@@ -195,6 +195,7 @@ def setup_reconstruction(args, output_dir):
     # Get sensitivities
     logging.info("Computing sensitivities...")
     pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
+    apply_combine_sensitivities(pet_data, pet_sens)
     spect_s_inv = get_s_inv_from_subset_objs(spect_dfs, spect_data["initial_image"])
 
     pet_sens_combined = uncombine_op.adjoint(

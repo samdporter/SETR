@@ -8,15 +8,10 @@ import logging
 import os
 import string
 
-from cil.optimisation.operators import CompositionOperator
 from sirf.Reg import NiftiImageData3DDisplacement
 from sirf.STIR import ImageData
 
-from setr.cil_extensions.operators import (
-    EnlargementOperator,
-    NiftyResampleOperator,
-    ZoomOperator,
-)
+from setr.cil_extensions.operators import NiftyResampleOperator
 from setr.utils import get_pet_data, get_pet_data_multiple_bed_pos, get_spect_data
 from setr.utils.io import apply_overrides, load_config
 
@@ -79,27 +74,15 @@ def main():
     logging.info(f"Loading transformation: {transform_path}")
     transform = NiftiImageData3DDisplacement(transform_path)
 
-    # Create resampler
-    enlarger = EnlargementOperator(
-        enlarged_shape=(128, 256, 256),
-        enlargement_sino=spect_data["acquisition_data"],
-        original_floating=spect_recon,
-    )
-    zoomer = ZoomOperator(
-        spect_data["zoom_factors"],
-        spect_recon,
-        pet_template.voxel_sizes(),
-    )
+    # Direct resampler (no zoom)
     resampler = NiftyResampleOperator(
         reference=pet_template,
-        floating=zoomer.direct(enlarger.direct(spect_recon)),
+        floating=spect_recon,
         transform=transform,
     )
-    composition = CompositionOperator(resampler, zoomer, enlarger)
 
-    # Resample
-    logging.info("Resampling SPECT to PET space...")
-    spect_recon2pet = composition.direct(spect_recon)
+    logging.info("Resampling SPECT to PET space (direct warp)...")
+    spect_recon2pet = resampler.direct(spect_recon)
 
     # Save result
     logging.info(f"Saving resampled image: {output_path}")

@@ -286,7 +286,6 @@ def get_spect_data(path: str, load_sinos=True) -> dict:
         "spect2pet_zoom_rigid.nii",
         "spect2pet.nii",
     ]
-
     displacement_path = None
     for filename in displacement_files:
         full_path = os.path.join(path, filename)
@@ -307,6 +306,33 @@ def get_spect_data(path: str, load_sinos=True) -> dict:
                 str(e_displacement),
             )
             spect_data["displacement"] = None
+            
+    no_zoom_displacement_files = [
+        "spect2pet_nozoom_nonrigid.nii",
+        "spect2pet_nozoom_rigid.nii",
+        "spect2pet_nozoom.nii"
+    ]
+
+    no_zoom_displacement_path = None
+    for filename in no_zoom_displacement_files:
+        full_path = os.path.join(path, filename)
+        if os.path.exists(full_path):
+            no_zoom_displacement_path = full_path
+            break
+
+    if no_zoom_displacement_path is None:
+        logging.warning("No SPECT no-zoom displacement field found. Registration will not be available.")
+        spect_data["no_zoom_displacement"] = None
+    else:
+        try:
+            spect_data["no_zoom_displacement"] = NiftiImageData3DDisplacement(no_zoom_displacement_path)
+        except Exception as e_no_zoom:
+            logging.warning(
+                "Failed to load SPECT no-zoom displacement field from %s (%s). Registration will not be available.",
+                no_zoom_displacement_path,
+                str(e_no_zoom),
+            )
+            spect_data["no_zoom_displacement"] = None
 
     try:
         spect_data["zoom_factors"] = load_zoom_factors(path)
@@ -315,7 +341,7 @@ def get_spect_data(path: str, load_sinos=True) -> dict:
             "No SPECT zoom factors found (%s). Zooming will not be available.",
             str(e_zoom),
         )
-        spect_data["zoom_factors"] = (1.0, 1.0, 1.0)
+        spect_data["zoom_factors"] = None
 
     return spect_data
 
@@ -473,7 +499,17 @@ def set_up_kl_objectives(
     return pet_obj_funs, spect_obj_funs
 
 
-def get_s_inv_from_objs(obj_funs, initial_estimates):
+def _clamp_inverse(inv_sens_arr, clamp_percentile):
+    if clamp_percentile is None:
+        return inv_sens_arr
+    finite_vals = inv_sens_arr[np.isfinite(inv_sens_arr)]
+    if finite_vals.size == 0:
+        return inv_sens_arr
+    clamp_value = np.percentile(finite_vals, clamp_percentile)
+    return np.minimum(inv_sens_arr, clamp_value)
+
+
+def get_s_inv_from_objs(obj_funs, initial_estimates, clamp_percentile: float | None = None):
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimates.get_uniform_copy(0)
     for i, el in enumerate(s_inv.containers):
@@ -488,12 +524,13 @@ def get_s_inv_from_objs(obj_funs, initial_estimates):
         # We can afford to avoid zeros because
         # a zero sensitivity means we're outside the FOV
         inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
+        inv_sens_arr = _clamp_inverse(inv_sens_arr, clamp_percentile)
         # there really shouldn't be any NaNs, but just in case
         s_inv.containers[i].fill(np.nan_to_num(inv_sens_arr))
     return s_inv
 
 
-def get_s_inv_from_am(ams, initial_estimates):
+def get_s_inv_from_am(ams, initial_estimates, clamp_percentile: float | None = None):
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimates * 0
     for i, el in enumerate(s_inv.containers):
@@ -504,11 +541,12 @@ def get_s_inv_from_am(ams, initial_estimates):
         el = el.maximum(0)
         el_arr = get_array(el)
         el_arr = np.reciprocal(el_arr, where=el_arr != 0)
+        el_arr = _clamp_inverse(el_arr, clamp_percentile)
         el.fill(np.nan_to_num(el_arr))
     return s_inv
 
 
-def get_s_inv_from_subset_objs(obj_funs, initial_estimate):
+def get_s_inv_from_subset_objs(obj_funs, initial_estimate, clamp_percentile: float | None = None):
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimate.get_uniform_copy(0)
     for j, obj_fun in enumerate(obj_funs):
@@ -522,6 +560,7 @@ def get_s_inv_from_subset_objs(obj_funs, initial_estimate):
     # We can afford to avoid zeros because
     # a zero sensitivity means we're outside the FOV
     inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
+    inv_sens_arr = _clamp_inverse(inv_sens_arr, clamp_percentile)
     # there really shouldn't be any NaNs, but just in case
     s_inv.fill(np.nan_to_num(inv_sens_arr))
     return s_inv

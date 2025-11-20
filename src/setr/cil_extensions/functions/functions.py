@@ -1,18 +1,38 @@
 import numpy as np
 from cil.optimisation.functions import Function
 
+from setr.utils.sirf import get_array
+
 class BlockIndicatorBox(Function):
     def __init__(self, lower=0, upper=np.inf):
         self.lower = lower
         self.upper = upper
 
     def __call__(self, x):
-        # because we're using this as a projection, this should always return 0
-        # se we'll be a bit cheeky and return 0.0 to save computation time
-        # TODO: change this to work as an actual indicator function
+        """Return 0 when `x` is inside [lower, upper], otherwise +∞."""
+
+        containers = x.containers if hasattr(x, "containers") else (x,)
+
+        for el in containers:
+            arr = get_array(el)
+            if not np.all((arr >= self.lower) & (arr <= self.upper)):
+                return np.inf
+
         return 0.0
 
     def proximal(self, x, tau, out=None):
+        """Projects the input onto the box defined by lower and upper bounds.
+
+        This function modifies the input array so that all values are within the specified lower and upper bounds.
+        
+        Args:
+            x: The input array to be projected.
+            tau: Step size parameter (not used in this implementation).
+            out: Optional output array to store the result.
+
+        Returns:
+            The projected array with values clipped to the box constraints.
+        """
         if out is None:
             out = x.copy()
         x.maximum(self.lower, out=out)

@@ -32,6 +32,7 @@ from setr.cil_extensions.preconditioners import (
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.priors import RelativeDifferencePrior
 from setr.scripts.common import (
+    apply_combine_sensitivities,
     attach_prior_hessian,
     configure_logging,
     get_shift_operators,
@@ -100,6 +101,7 @@ def get_data_fidelity(args, pet_data, uncombine_op, unshift_ops, choose_ops):
     from setr.scripts.common import get_sensitivity_from_subset_objs
 
     pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
+    apply_combine_sensitivities(pet_data, pet_sens)
 
     # Unshift and combine PET sensitivities to common PET grid
     pet_sens_combined = uncombine_op.adjoint(

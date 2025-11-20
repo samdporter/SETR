@@ -8,16 +8,12 @@ from types import MethodType
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.operators import (
     BlockOperator,
-    CompositionOperator,
     IdentityOperator,
     ZeroOperator,
 )
 
-from setr.cil_extensions.operators import (
-    EnlargementOperator,
-    NiftyResampleOperator,
-    ZoomOperator,
-)
+from setr.cil_extensions.operators import NiftyResampleOperator
+from setr.cil_extensions.framework import EnhancedBlockDataContainer
 
 
 def init_run_env(args):
@@ -50,11 +46,7 @@ def save_results(bsrem: ISTA, args: argparse.Namespace) -> None:
         final_image.write(os.path.join(args.output_path, "final_image.hv"))
 
 
-def get_resampling_operators(
-    pet_data: dict,
-    spect_data: dict,
-    enlarged_shape=(128, 256, 256),
-):
+def get_resampling_operators(*inputs):
     """
     Set up resampling operators for SPECT images to PET images.
 
@@ -63,38 +55,33 @@ def get_resampling_operators(
         spect_data: Dictionary containing SPECT data including initial_image and displacement
 
     Returns:
-        Resampling operator (CompositionOperator with NiftyResampleOperator and NaNToZeroOperator)
+        Resampling operator (direct NiftyResampleOperator using no-zoom displacement)
 
     Raises:
         RuntimeError: If displacement field is not available
     """
 
-    if spect_data["displacement"] is None:
+    if len(inputs) == 2:
+        pet_data, spect_data = inputs
+        args = None
+    elif len(inputs) == 3:
+        args, pet_data, spect_data = inputs
+    else:
+        raise TypeError("get_resampling_operators expects (pet_data, spect_data, ...) or (args, pet_data, spect_data, ...)")
+
+    no_zoom_available = spect_data.get("no_zoom_displacement") is not None
+    if not no_zoom_available:
         raise RuntimeError(
-            "Displacement field is required for SPECT to PET resampling. "
-            "Ensure spect2pet.nii is available in the SPECT data directory."
+            "No SPECT→PET no-zoom displacement field found. Expected files named spect2pet_nozoom*.nii"
         )
 
-    logging.info("Setting up resampling operators with displacement field")
-
-    # Create resampler
-    enlarger = EnlargementOperator(
-        enlarged_shape=enlarged_shape,
-        enlargement_sino=spect_data["acquisition_data"],
-        original_floating=spect_data["initial_image"],
-    )
-    zoomer = ZoomOperator(
-        spect_data["zoom_factors"],
-        spect_data["initial_image"],
-        pet_data["initial_image"].voxel_sizes(),
-    )
+    logging.info("Setting up resampling operators with direct displacement (no zoom)")
     resampler = NiftyResampleOperator(
         reference=pet_data["initial_image"],
-        floating=zoomer.direct(enlarger.direct(spect_data["initial_image"])),
-        transform=spect_data["displacement"],
+        floating=spect_data["initial_image"],
+        transform=spect_data["no_zoom_displacement"],
     )
-
-    return CompositionOperator(resampler, zoomer, enlarger)
+    return resampler
 
 
 def attach_prior_hessian(prior, epsilon=0) -> None:
@@ -165,6 +152,8 @@ def get_shift_operators(pet_data, path=""):
 
     # Create combine operator
     combine_op = ImageCombineOperator(EnhancedBlockDataContainer(*shifted_images))
+    pet_data["combine_operator"] = combine_op
+    pet_data["shift_operators"] = shift_ops
 
     # Create unshift operators (adjoints of shift operators)
     unshift_ops = [AdjointOperator(op) for op in shift_ops]
@@ -188,6 +177,26 @@ def get_shift_operators(pet_data, path=""):
     choose_ops = [choose_op_0, choose_op_1]
 
     return uncombine_op, unshift_ops, choose_ops
+
+
+def apply_combine_sensitivities(pet_data, per_bed_sensitivities):
+    """
+    Attach per-bed sensitivities to the stored ImageCombineOperator for weighted overlap.
+    """
+    combine_op = pet_data.get("combine_operator", None)
+    shift_ops = pet_data.get("shift_operators", None)
+
+    if combine_op is None or shift_ops is None or per_bed_sensitivities is None:
+        return
+
+    shifted_sens = [
+        shift_op.direct(sens) for shift_op, sens in zip(shift_ops, per_bed_sensitivities)
+    ]
+    # Resample sensitivities onto the combine operator geometry
+    resampled_sens = combine_op.resample_op.direct(
+        EnhancedBlockDataContainer(*shifted_sens)
+    )
+    combine_op.set_sensitivities(resampled_sens)
 
 
 def get_sensitivity_from_subset_objs(obj_funs):

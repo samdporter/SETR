@@ -443,7 +443,7 @@ class DirectionalGradient:
 
         # ----- Robust eta from dynamic range of ||∇a|| (percentiles) -----
         # Single universal knob you can tweak if needed:
-        _ALPHA = 0.01   # use 5–15% typically
+        _ALPHA = 0.01 
         _P_LO  = 0.01
         _P_HI  = 0.99
 

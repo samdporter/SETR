@@ -30,11 +30,10 @@ from setr.scripts.common import (
 from setr.scripts.dtnv_common import (
     compute_kappa_squared_image_from_partitioned_objective,
     get_callbacks,
-    get_s_inv_from_subset_objs,
 )
 from setr.utils import get_pet_am, get_pet_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_array, get_filters
+from setr.utils.sirf import get_array, get_filters, get_s_inv_from_subset_objs
 
 
 def prepare_data(args):

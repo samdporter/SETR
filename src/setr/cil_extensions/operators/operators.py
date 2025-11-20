@@ -1,5 +1,7 @@
+import logging
 import os
 import re
+from dataclasses import dataclass
 
 import numpy as np
 from cil.framework import BlockDataContainer, BlockGeometry
@@ -262,6 +264,16 @@ class EnlargementOperator(LinearOperator):
         return res
 
 
+@dataclass(frozen=True)
+class _AxisMapping:
+    size: int
+    idx_low: np.ndarray
+    idx_high: np.ndarray
+    weight_high: np.ndarray
+    valid_low: np.ndarray
+    valid_high: np.ndarray
+    
+    
 class ZoomOperator(LinearOperator):
     """Operator for zooming images."""
 
@@ -323,6 +335,119 @@ class ZoomOperator(LinearOperator):
         return res
 
 
+class ZoomOperatorAdjoint(LinearOperator):
+    """Pure Python zoom that keeps array dimensions fixed while adjusting voxel sizes."""
+
+    def __init__(self, zoom_factors, input_geometry):
+        self.domain_template = input_geometry
+        self.zoom_factors = tuple(float(factor) for factor in zoom_factors)
+        self.domain_shape = tuple(int(dim) for dim in input_geometry.dimensions())
+        self.range_template = self._make_range_template()
+
+        super().__init__(domain_geometry=self.domain_template, range_geometry=self.range_template)
+
+        self.axis_maps = tuple(
+            self._build_axis_mapping(self.domain_shape[idx], self.zoom_factors[idx])
+            for idx in range(3)
+        )
+        det = float(np.prod(self.zoom_factors))
+        if det == 0:
+            raise ValueError("Zoom factors must not include zeros.")
+        # Normalise so zoom keeps L2 norm (and therefore scale) roughly constant.
+        self.norm_scale = np.sqrt(abs(det))
+
+    def _make_range_template(self):
+        zero = self.domain_template.get_uniform_copy(0)
+        template = zero.zoom_image(self.zoom_factors, scaling="preserve_projections")
+        template.fill(0)
+        return template
+
+    @staticmethod
+    def _build_axis_mapping(size: int, zoom_factor: float) -> _AxisMapping:
+        if zoom_factor == 0:
+            raise ValueError("Zoom factor must be non-zero.")
+        centre = (size - 1) / 2.0
+        positions = (np.arange(size, dtype=np.float32) - centre) / zoom_factor + centre
+        idx_low = np.floor(positions).astype(np.int64)
+        idx_high = idx_low + 1
+        valid_low = (idx_low >= 0) & (idx_low < size)
+        valid_high = (idx_high >= 0) & (idx_high < size)
+        idx_low = np.clip(idx_low, 0, size - 1)
+        idx_high = np.clip(idx_high, 0, size - 1)
+        weight_high = (positions - np.floor(positions)).astype(np.float32)
+        return _AxisMapping(
+            size=size,
+            idx_low=idx_low,
+            idx_high=idx_high,
+            weight_high=weight_high,
+            valid_low=valid_low.astype(np.float32),
+            valid_high=valid_high.astype(np.float32),
+        )
+
+    def direct(self, x, out=None):
+        arr = np.asarray(get_array(x), dtype=np.float32)
+        zoomed = self._apply_separable_interp(arr)
+        zoomed /= self.norm_scale
+        return self._project_and_fill(zoomed, out, self.range_template)
+
+    def adjoint(self, x, out=None):
+        arr = np.asarray(get_array(x), dtype=np.float32)
+        back = self._apply_separable_adjoint(arr)
+        back /= self.norm_scale
+        return self._project_and_fill(back, out, self.domain_template)
+
+    def _apply_separable_interp(self, arr: np.ndarray) -> np.ndarray:
+        result = arr
+        for axis, axis_map in enumerate(self.axis_maps):
+            result = self._interp_along_axis(result, axis, axis_map)
+        return result
+
+    def _apply_separable_adjoint(self, arr: np.ndarray) -> np.ndarray:
+        result = arr
+        for axis in reversed(range(len(self.axis_maps))):
+            result = self._interp_adjoint_along_axis(result, axis, self.axis_maps[axis])
+        return result
+
+    @staticmethod
+    def _interp_along_axis(data: np.ndarray, axis: int, axis_map: _AxisMapping) -> np.ndarray:
+        data = np.moveaxis(data, axis, 0)
+        size, *rest = data.shape
+        if size != axis_map.size:
+            raise ValueError(f"Axis {axis} size mismatch: expected {axis_map.size}, got {size}")
+        flat = data.reshape(size, -1)
+        low = flat[axis_map.idx_low] * axis_map.valid_low[:, None]
+        high = flat[axis_map.idx_high] * axis_map.valid_high[:, None]
+        w_high = axis_map.weight_high[:, None]
+        w_low = 1.0 - w_high
+        out_flat = low * w_low + high * w_high
+        out = out_flat.reshape((size,) + tuple(rest))
+        return np.moveaxis(out, 0, axis)
+
+    @staticmethod
+    def _interp_adjoint_along_axis(data: np.ndarray, axis: int, axis_map: _AxisMapping) -> np.ndarray:
+        data = np.moveaxis(data, axis, 0)
+        size, *rest = data.shape
+        if size != axis_map.size:
+            raise ValueError(f"Axis {axis} size mismatch: expected {axis_map.size}, got {size}")
+        flat = data.reshape(size, -1)
+        out_flat = np.zeros((size, flat.shape[1]), dtype=flat.dtype)
+        contrib_low = flat * (1.0 - axis_map.weight_high)[:, None]
+        contrib_high = flat * axis_map.weight_high[:, None]
+        contrib_low *= axis_map.valid_low[:, None]
+        contrib_high *= axis_map.valid_high[:, None]
+        np.add.at(out_flat, axis_map.idx_low, contrib_low)
+        np.add.at(out_flat, axis_map.idx_high, contrib_high)
+        out = out_flat.reshape((size,) + tuple(rest))
+        return np.moveaxis(out, 0, axis)
+
+    def _project_and_fill(self, array: np.ndarray, out, template: ImageData):
+        array = np.ascontiguousarray(array)
+        if out is None:
+            out = template.get_uniform_copy(0)
+        out.fill(array)
+        return out
+
+
 class NiftyResampleOperator(LinearOperator):
     """Pure registration operator without zoom complications."""
 
@@ -343,19 +468,19 @@ class NiftyResampleOperator(LinearOperator):
         self.resampler.add_transformation(self.transform)
 
         if assume_matched_voxels:
-            # If voxels are already matched, no scaling needed
+            # If voxels are already matched, keep scale unity
             self.scale = 1.0
             print("Assuming voxel sizes are matched - using scale = 1.0")
         else:
             # Calculate scaling factor for different voxel sizes
             vx_ref = self.reference.voxel_sizes()
             vx_flt = self.floating.voxel_sizes()
-            self.scale = (vx_ref[0] * vx_ref[1] * vx_ref[2]) / (vx_flt[0] * vx_flt[1] * vx_flt[2])
+            self.scale = np.sqrt((vx_ref[0] * vx_ref[1] * vx_ref[2]) / (vx_flt[0] * vx_flt[1] * vx_flt[2]))
             print(f"Voxel size scaling factor: {self.scale}")
 
     def direct(self, x, out=None):
         """Forward registration transformation."""
-        result = self.resampler.forward(x)
+        result = self.resampler.forward(x) * self.scale
         return self._project_and_fill(result, out)
 
     def adjoint(self, x, out=None):
@@ -507,38 +632,23 @@ class ImageCombineOperator(LinearOperator):
     def __init__(
         self,
         images: BlockDataContainer,
+        weight_overlap: bool = False,
+        sens_images: BlockDataContainer | None = None,
     ):
         self.images = images
+        self.weight_overlap = weight_overlap
+        self.sens_images = sens_images
 
-        self.reference = ImageData()
-        dim_xy = images.containers[0].dimensions()[1]
-        dim_z = ImageCombineOperator.get_combined_length_voxels(images)
-        # offset_xy = images.containers[0].get_geometrical_info().get_offset()[0]
-        offset_z = -images.containers[-1].get_geometrical_info().get_offset()[2]
-        print(
-            f"setting offset_z to {-offset_z}. If something goes wrong try swapping the image order"
-        )
-        # for some reason, initialising as offset_xy=0 works here
-        self.reference.initialise(
-            (dim_z, dim_xy, dim_xy),
-            images.containers[0].voxel_sizes(),
-            (offset_z, 0, 0),
-        )
-        self.reference = self.reference
-
-        # Ensure all images have the same voxel size as the reference
-        assert all(
-            img.voxel_sizes() == self.reference.voxel_sizes() for img in images.containers
-        ), "All images must have the same voxel size as the reference"
-
-        # Ensure the combined image length matches the reference dimensions
-        assert self.get_combined_length_voxels(images) == self.reference.dimensions()[0], (
-            f"Combined image length and reference dimensions do not match. Something is wrong \n"
-            f"Combined image length: {self.get_combined_length_voxels(images)} \n"
-            f"Reference dimensions: {self.reference.dimensions()[0]}"
+        self.resample_op = ImageResampleOperator(images)
+        self.resampled_block = self.resample_op.range_geometry()
+        self.summation_op = ImageSummationOperator(
+            self.resampled_block, weight_overlap=weight_overlap
         )
 
-        super().__init__(domain_geometry=images, range_geometry=self.reference)
+        super().__init__(
+            domain_geometry=images,
+            range_geometry=self.summation_op.range_geometry,
+        )
 
     @staticmethod
     def get_combined_length(images):
@@ -559,92 +669,30 @@ class ImageCombineOperator(LinearOperator):
         assert (length / voxel_size) % 1 < 1.001
         return int(round(length / voxel_size))
 
-    @staticmethod
-    def combine_images(
-        reference: ImageData,
-        images: BlockDataContainer,
-        sens_images: BlockDataContainer = None,
-        weight_overlap: bool = False,
-    ):
-        """
-        Combines images onto `reference`. If weight_overlap=True, then:
-        - overlap mask M = (coverage_count ≥ 2)
-        - num = ∑_i [S_i · f_i],  den = ∑_i [S_i]
-        - out = M*(num/den) + (1−M)*∑_i[f_i]
-        Else does plain ∑_i[f_i].
-        """
-        # zoom all images
-        zoomed_imgs = [img.zoom_image_as_template(reference) for img in images.containers]
-
-        if not weight_overlap:
-            out = reference.get_uniform_copy(0)
-            for z in zoomed_imgs:
-                out += z
-            return out
-
-        # 1) build coverage masks (1 inside each img's FOV, 0 outside)
-        zoomed_masks = [
-            img.get_uniform_copy(1).zoom_image_as_template(reference) for img in images.containers
-        ]
-        cov_arrs = [get_array(m) for m in zoomed_masks]
-        coverage = sum(cov_arrs)  # integer count
-        overlap = coverage >= 2  # boolean mask
-
-        # 2) zoom sensitivities and pull raw arrays
-        zoomed_sens = [s.zoom_image_as_template(reference) for s in sens_images.containers]
-        img_arrs = [get_array(z) for z in zoomed_imgs]
-        sens_arrs = [get_array(s) for s in zoomed_sens]
-
-        # 3) numerator, denominator, simple sum
-        num = sum(f * s for f, s in zip(img_arrs, sens_arrs))  # ∑ S_i·f_i
-        den = sum(sens_arrs)  # ∑ S_i
-        simple = sum(img_arrs)  # ∑ f_i
-
-        # 4) merge
-        combined = np.where(overlap, num / den, simple)
-
-        out = reference.get_uniform_copy(0)
-        out.fill(combined)
-        return out
-
-    @staticmethod
-    def retrieve_original_images(combined_image, original_references):
-        """
-        Retrieves the original images from the combined image.
-
-        Parameters:
-            combined_image: The image obtained from combine_images.
-            original_references: List of original image references.
-            weight_overlap: If True, adjust for overlapping regions. Default is False
-                           (ignore weighting).
-
-        Returns:
-            original_images: List of images zoomed to the original references.
-        """
-        original_images = []
-
-        original_images.extend(
-            combined_image.zoom_image_as_template(ref) for ref in original_references
-        )
-        return original_images
-
     def direct(self, images: BlockDataContainer, out=None):
-        if out is None:
-            out = self.range_geometry().allocate(0)
+        resampled = self.resample_op.direct(images)
+        if self.weight_overlap and self.sens_images is None:
+            raise ValueError("Sensitivity images must be set for weighted combination.")
 
-        out.fill(ImageCombineOperator.combine_images(self.reference, images))
-        return out
+        combined = self.summation_op.direct(resampled, sens_images=self.sens_images if self.weight_overlap else None)
+        if out is not None:
+            out.fill(combined)
+            return out
+        return combined
 
     def adjoint(self, image, out=None):
-        if out is None:
-            out = BlockDataContainer(*[img.get_uniform_copy(0) for img in self.images.containers])
+        resampled_adj = self.summation_op.adjoint(image)
+        original_space = self.resample_op.adjoint(resampled_adj)
+        if out is not None:
+            out.fill(original_space)
+            return out
+        return original_space
 
-        original_images = ImageCombineOperator.retrieve_original_images(image, self.images)
-
-        for img, container in zip(original_images, out.containers):
-            container.fill(img)
-
-        return out
+    def set_sensitivities(self, sens_images: BlockDataContainer | None):
+        self.sens_images = sens_images
+        self.weight_overlap = sens_images is not None
+        self.summation_op.weight_overlap = self.weight_overlap
+        self.summation_op.set_sensitivities(sens_images)
 
 
 ###############################################################################################
@@ -729,7 +777,9 @@ class ImageResampleOperator(LinearOperator):
         Resamples each image in the input BlockDataContainer to the common reference grid.
         """
         if out is None:
-            out = self.range_geometry.allocate(0)
+            out = BlockDataContainer(
+                *[container.get_uniform_copy(0) for container in self.range_geometry().containers]
+            )
 
         for i, img in enumerate(images.containers):
             # `zoom_image_as_template` handles the resampling/warping
@@ -738,12 +788,14 @@ class ImageResampleOperator(LinearOperator):
 
         return out
 
-    def adjoint(self, warped_images: BlockDataContainer, out: BlockDataContainer = None):
+    def adjoint(self, warped_images: BlockDataContainer, out: BlockDataContainer | None = None):
         """
         Resamples each image from the common grid back to its original geometry.
         """
         if out is None:
-            out = self.domain_geometry.allocate(0)
+            out = BlockDataContainer(
+                *[container.get_uniform_copy(0) for container in self.domain_geometry().containers]
+            )
 
         for i, warped_img in enumerate(warped_images.containers):
             # Get the geometry of the original image to use as a template
@@ -772,6 +824,7 @@ class ImageSummationOperator(LinearOperator):
 
     def __init__(self, domain_geometry: BlockDataContainer, weight_overlap: bool = False):
         self.weight_overlap = weight_overlap
+        self.sens_images = None
 
         # All images in the domain are expected to have the same geometry
         self.reference = domain_geometry.containers[0].copy()
@@ -783,18 +836,18 @@ class ImageSummationOperator(LinearOperator):
     def direct(
         self,
         images: BlockDataContainer,
-        sens_images: BlockDataContainer = None,
-        out: ImageData = None,
+        sens_images: BlockDataContainer | None = None,
+        out: ImageData | None = None,
     ):
         """
         Combines images from a BlockDataContainer into a single ImageData.
         """
         if out is None:
-            out = self.range_geometry.allocate(0)
+            out = self.range_geometry().get_uniform_copy(0)
 
         # Case 1: Simple summation (no weighting)
         if not self.weight_overlap:
-            summed_image = self.range_geometry.get_uniform_copy(0)
+            summed_image = self.range_geometry().get_uniform_copy(0)
             for img in images.containers:
                 summed_image += img
             out.fill(summed_image)
@@ -802,38 +855,30 @@ class ImageSummationOperator(LinearOperator):
 
         # Case 2: Weighted summation for overlapping regions
         if sens_images is None:
+            sens_images = self.sens_images
+        if sens_images is None:
             raise ValueError(
                 "Sensitivity images (`sens_images`) are required when `weight_overlap` is True."
             )
 
-        # 1) Build coverage masks to find overlapping areas
-        zoomed_masks = [
-            img.get_uniform_copy(1)  # Images are already zoomed, create masks from them
-            for img in images.containers
-        ]
-        cov_arrs = [get_array(m) for m in zoomed_masks]
-        coverage = sum(cov_arrs)  # Integer count of how many images cover each pixel
-        overlap = coverage >= 2  # Boolean mask where 2 or more images overlap
-
-        # 2) Pull raw arrays for images and sensitivities
+        # 1) Pull raw arrays for images and sensitivities
         img_arrs = [get_array(z) for z in images.containers]
         sens_arrs = [get_array(s) for s in sens_images.containers]
 
-        # 3) Calculate components for the weighted sum formula
+        # 2) Calculate components for the weighted sum formula
         num = sum(f * s for f, s in zip(img_arrs, sens_arrs))  # Numerator: ∑ (S_i * f_i)
         den = sum(sens_arrs)  # Denominator: ∑ S_i
-        # Handle division by zero in denominator, though unlikely with sens maps
-        den[den == 0] = 1e-9
         simple_sum = sum(img_arrs)  # Simple sum for non-overlap regions: ∑ f_i
 
-        # 4) Merge the results based on the overlap mask
-        # out = M * (num/den) + (1−M) * simple_sum
-        combined_arr = np.where(overlap, num / den, simple_sum)
+        mask = den > 0
+        weighted = np.zeros_like(den, dtype=np.float32)
+        np.divide(num, den, where=mask, out=weighted)
+        combined_arr = np.where(mask, weighted, simple_sum)
 
         out.fill(combined_arr)
         return out
 
-    def adjoint(self, image: ImageData, out: BlockDataContainer = None):
+    def adjoint(self, image: ImageData, out: BlockDataContainer | None = None):
         """
         Performs the adjoint operation, which is a broadcast.
 
@@ -841,9 +886,30 @@ class ImageSummationOperator(LinearOperator):
         each container with that image.
         """
         if out is None:
-            out = self.domain_geometry.allocate(0)
+            out = BlockDataContainer(
+                *[container.get_uniform_copy(0) for container in self.domain_geometry().containers]
+            )
 
-        for container in out.containers:
-            container.fill(image)
+        if not self.weight_overlap:
+            for container in out.containers:
+                container.fill(image)
+            return out
+
+        sens_images = self.sens_images
+        if sens_images is None:
+            raise ValueError("Sensitivity images must be set for weighted adjoint.")
+
+        image_arr = get_array(image)
+        sens_arrs = [get_array(s) for s in sens_images.containers]
+        den = sum(sens_arrs)
+        mask = den > 0
+        safe_den = np.where(mask, den, 1.0)
+
+        for container, sens in zip(out.containers, sens_arrs):
+            contrib = np.where(mask, image_arr * sens / safe_den, image_arr)
+            container.fill(contrib)
 
         return out
+
+    def set_sensitivities(self, sens_images: BlockDataContainer | None):
+        self.sens_images = sens_images

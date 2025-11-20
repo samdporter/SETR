@@ -28,6 +28,7 @@ from setr.cil_extensions.preconditioners import (
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.priors import TotalVariation
 from setr.scripts.common import (
+    apply_combine_sensitivities,
     configure_logging,
     get_sensitivity_from_subset_objs,
     get_shift_operators,
@@ -141,6 +142,7 @@ def get_data_fidelity(
 
     # PET sensitivity computation
     pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
+    apply_combine_sensitivities(pet_data, pet_sens)
     pet_sens_combined = uncombine_op.adjoint(
         EnhancedBlockDataContainer(
             *[unshift_op.adjoint(s) for unshift_op, s in zip(unshift_ops, pet_sens)]
@@ -178,10 +180,10 @@ def main(args) -> None:
 
     # Initialize run environment
     msg = init_run_env(args)
-    save_args(args, "args.csv")
 
-    # Prepare data
+    # Prepare data (may update args such as delta)
     guidance_image, pet_data = prepare_data(args)
+    save_args(args, "args.csv")
 
     # Set up operators for multiple bed positions
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)

@@ -32,6 +32,7 @@ from setr.cil_extensions.preconditioners import (
     SubsetKernelisedEMPreconditioner,
 )
 from setr.scripts.common import (
+    apply_combine_sensitivities,
     configure_logging,
     get_shift_operators,
     init_run_env,
@@ -106,13 +107,14 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
             pet_dfs[i][j].set_up(tmpl)
 
     # Get sensitivities for each bed position
-    pet_sens = [[f.get_subset_sensitivity(0) for f in df] for df in pet_dfs]
-    for i, s in enumerate(pet_sens):
-        for j, ss in enumerate(s):
-            pet_sens[i][j] = ss.maximum(0)
+    pet_sens = [[f.get_subset_sensitivity(0).maximum(0) for f in df] for df in pet_dfs]
 
     # Set up shift operators
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
+
+    bed_sens = [sum(sens_list) for sens_list in pet_sens]
+    apply_combine_sensitivities(pet_data, bed_sens)
+
     shift = CouchShiftOperator.get_couch_shift_from_sinogram(
         pet_data["bed_positions"]["_f2b1"]["acquisition_data"]
     )

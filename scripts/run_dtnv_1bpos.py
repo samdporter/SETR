@@ -39,12 +39,11 @@ from setr.scripts.dtnv_common import (
     get_kappa_squareds,
     get_preconditioners,
     get_prior,
-    get_s_inv_from_objs,
     normalise_kappa_squares,
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_array, get_filters
+from setr.utils.sirf import get_array, get_filters, get_s_inv_from_objs
 
 
 def prepare_data(args):
@@ -138,6 +137,7 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     s_inv = get_s_inv_from_objs(
         [pet_obj_funs, spect_obj_funs],
         EnhancedBlockDataContainer(pet_data["initial_image"], spect_data["initial_image"]),
+        clamp_percentile=99.5,
     )
 
     for i, el in enumerate(s_inv.containers):
@@ -188,7 +188,7 @@ def main(args) -> None:
     umap, pet_data, spect_data = prepare_data(args)
 
     # Set up resampling operators.
-    spect2pet = get_resampling_operators(pet_data, spect_data)
+    spect2pet = get_resampling_operators(args, pet_data, spect_data)
 
     initial_estimates = EnhancedBlockDataContainer(
         pet_data["initial_image"], spect_data["initial_image"]

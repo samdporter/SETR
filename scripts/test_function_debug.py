@@ -21,8 +21,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.scripts.common import (
+    apply_combine_sensitivities,
     configure_logging,
     get_resampling_operators,
+    get_sensitivity_from_subset_objs,
     get_shift_operators,
     init_run_env,
 )
@@ -84,12 +86,11 @@ def get_data_fidelity(args, pet_data, spect_data, uncombine_op, unshift_ops, cho
     from cil.optimisation.operators import CompositionOperator
     from sirf.contrib.partitioner import partitioner
 
-    from setr.scripts.common import get_sensitivity_from_subset_objs
     from setr.scripts.dtnv_common import (
         compute_kappa_squared_image_from_partitioned_objective,
         get_block_objective,
-        get_s_inv_from_subset_objs,
     )
+    from setr.utils.sirf import get_s_inv_from_subset_objs
 
     # PET acquisition model function
     def get_pet_am_with_res():
@@ -170,6 +171,7 @@ def get_data_fidelity(args, pet_data, spect_data, uncombine_op, unshift_ops, cho
 
     # Compute sensitivities
     pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
+    apply_combine_sensitivities(pet_data, pet_sens)
     spect_s_inv = get_s_inv_from_subset_objs(spect_dfs, spect_data["initial_image"])
 
     # Combine PET sensitivities
@@ -612,7 +614,6 @@ def main(args):
 
     # Create output directory
     os.makedirs(args.output_path, exist_ok=True)
-    save_args(args, "args.csv")
 
     logging.info("Starting function debugging test...")
 
@@ -651,6 +652,7 @@ def main(args):
         combined[1],
     )
     apply_dynamic_range_scaling(args, pet_scale, spect_scale)
+    save_args(args, "args.csv")
 
     # Set up priors
     if not args.no_prior:

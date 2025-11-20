@@ -53,6 +53,7 @@ def _make_scalar_wvtv(weight):
     vtv.weights = torch.tensor([[[[weight]]]], device=DEVICE)
     vtv.vtv = ScalarSmoothNorm(delta=0.25)
     vtv.smoothing = "fair"
+    vtv._dV = 1.0  # Set voxel volume to 1.0 (identity scaling for tests)
     return vtv
 
 
@@ -128,6 +129,7 @@ def _make_linear_wvtv(weights, scale):
     vtv.weights = weights
     vtv.vtv = QuadraticVTV()
     vtv.smoothing = "fair"
+    vtv._dV = 1.0  # Set voxel volume to 1.0 (identity scaling for tests)
     return vtv
 
 

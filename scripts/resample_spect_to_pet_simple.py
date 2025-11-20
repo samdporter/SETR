@@ -9,12 +9,10 @@ import logging
 import os
 import string
 
-from cil.optimisation.operators import CompositionOperator
 from sirf.Reg import NiftiImageData3DDisplacement
 from sirf.STIR import ImageData
 
 from setr.cil_extensions.operators import (
-    EnlargementOperator,
     FlipOperator,
     NiftyResampleOperator,
 )
@@ -87,49 +85,21 @@ def main():
     logging.info(f"Loading transformation: {transform_path}")
     transform = NiftiImageData3DDisplacement(transform_path)
 
-    # Build operator chain
-    operators = []
-
-    # 1. Flip if needed
+    # Apply optional flip prior to resampling
     if flip:
-        logging.info("Adding flip operator for MANC data")
+        logging.info("Applying flip operator for MANC data")
         flip_op = FlipOperator(spect_recon)
-        operators.append(flip_op)
-        current_image = flip_op.direct(spect_recon)
+        floating = flip_op.direct(spect_recon)
     else:
-        current_image = spect_recon
+        floating = spect_recon
 
-    # 2. Enlargement (always needed)
-    logging.info("Adding enlargement operator")
-    enlarger = EnlargementOperator(
-        enlarged_shape=(128, 256, 256),
-        enlargement_sino=spect_data["acquisition_data"],
-        original_floating=current_image,
-    )
-    operators.append(enlarger)
-    current_image = enlarger.direct(current_image)
-
-    # 3. Resampling (no zoom for MANC data)
-    logging.info("Adding resampling operator")
+    logging.info("Resampling SPECT to PET space (direct warp)...")
     resampler = NiftyResampleOperator(
         reference=pet_template,
-        floating=current_image,
+        floating=floating,
         transform=transform,
     )
-    operators.append(resampler)
-
-    # Create composition
-    if len(operators) > 1:
-        composition = CompositionOperator(*reversed(operators))
-    else:
-        composition = operators[0]
-
-    # Resample
-    logging.info("Resampling SPECT to PET space...")
-    if flip:
-        spect_recon2pet = composition.direct(spect_recon)
-    else:
-        spect_recon2pet = composition.direct(spect_recon)
+    spect_recon2pet = resampler.direct(floating)
 
     # Save result
     logging.info(f"Saving resampled image: {output_path}")

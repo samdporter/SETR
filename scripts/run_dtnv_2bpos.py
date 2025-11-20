@@ -21,6 +21,7 @@ from sirf.STIR import SeparableGaussianImageFilter
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
+    apply_combine_sensitivities,
     attach_prior_hessian,
     configure_logging,
     get_resampling_operators,
@@ -40,7 +41,6 @@ from setr.scripts.dtnv_common import (
     get_callbacks,
     get_preconditioners,
     get_prior,
-    get_s_inv_from_subset_objs,
     normalise_kappa_squares,
 )
 from setr.utils import (
@@ -50,7 +50,7 @@ from setr.utils import (
     get_spect_data,
 )
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.sirf import get_array, get_filters
+from setr.utils.sirf import get_array, get_filters, get_s_inv_from_subset_objs
 
 
 def prepare_data(args):
@@ -185,7 +185,12 @@ def get_data_fidelity(
 
     pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
 
-    spect_s_inv = get_s_inv_from_subset_objs(spect_dfs, spect_data["initial_image"])
+    apply_combine_sensitivities(pet_data, pet_sens)
+
+    spect_s_inv = get_s_inv_from_subset_objs(
+        spect_dfs, spect_data["initial_image"],
+        clamp_percentile=99.5,
+    )
 
     # unshift+combine PET sensitivities to common PET grid
     pet_sens_combined = uncombine_op.adjoint(
@@ -251,7 +256,6 @@ def main(args) -> None:
 
     # Initialize run environment (creates dirs, sets storage scheme, redirects messages)
     _ = init_run_env(args)
-    save_args(args, "args.csv")
 
     # Prepare data
     umap, pet_data, spect_data, initial_estimates = prepare_data(args)
@@ -260,7 +264,10 @@ def main(args) -> None:
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
 
     # Set up resampling operators
-    spect2pet = get_resampling_operators(pet_data, spect_data)
+    spect2pet = get_resampling_operators(
+        args,
+        pet_data, spect_data
+    )
 
     def get_pet_am_with_res():
         return get_pet_am(
@@ -341,6 +348,8 @@ def main(args) -> None:
                 "Falling back to intensity heuristic for delta: %.6g", args.delta
             )
 
+    save_args(args, "args.csv")
+
     # write κ² images
     for i, image in enumerate(kappas.containers):
         image.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
@@ -369,7 +378,7 @@ def main(args) -> None:
         args, all_funs, prior, args.num_subsets, epoch_length, bpos=2
     )
 
-    variance_reduction = getattr(args, "variance_reduction", "svrg")
+    variance_reduction = getattr(args, "variance_reduction", "saga")
     logging.info(
         "Variance reduction: %s | stochastic functions: %d",
         variance_reduction,

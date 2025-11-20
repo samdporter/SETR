@@ -93,3 +93,33 @@ def test_apply_dynamic_range_scaling_handles_missing_gamma_weights():
     assert args.beta == pytest.approx(1.2)
     assert not hasattr(args, "gamma_pet")
     assert not hasattr(args, "gamma_spect")
+
+
+def test_apply_dynamic_range_scaling_records_initial_and_scaled_values():
+    args = SimpleNamespace(alpha=2.0, beta=4.0, gamma_pet=10.0, gamma_spect=5.0)
+
+    apply_dynamic_range_scaling(args, pet_scale=0.5, spect_scale=0.25)
+
+    assert args.alpha_initial == pytest.approx(2.0)
+    assert args.alpha_scaled == pytest.approx(1.0)
+    assert args.beta_initial == pytest.approx(4.0)
+    assert args.beta_scaled == pytest.approx(1.0)
+    assert args.gamma_pet_initial == pytest.approx(10.0)
+    assert args.gamma_pet_scaled == pytest.approx(5.0)
+    assert args.gamma_spect_initial == pytest.approx(5.0)
+    assert args.gamma_spect_scaled == pytest.approx(1.25)
+
+
+def test_apply_dynamic_range_scaling_is_based_on_initial_value():
+    args = SimpleNamespace(alpha=2.0, beta=4.0)
+
+    apply_dynamic_range_scaling(args, pet_scale=0.5, spect_scale=0.25)
+    apply_dynamic_range_scaling(args, pet_scale=2.0, spect_scale=4.0)
+
+    assert args.alpha == pytest.approx(4.0)  # 2.0 (initial) * 2.0
+    assert args.alpha_initial == pytest.approx(2.0)
+    assert args.alpha_scaled == pytest.approx(4.0)
+
+    assert args.beta == pytest.approx(16.0)  # 4.0 (initial) * 4.0
+    assert args.beta_initial == pytest.approx(4.0)
+    assert args.beta_scaled == pytest.approx(16.0)

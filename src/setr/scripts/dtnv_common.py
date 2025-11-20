@@ -49,7 +49,12 @@ from setr.utils.dynamic_range import (
     apply_gradient_energy_scaling,
     dynamic_range_scale_sirf,
 )
-from setr.utils.sirf import get_array
+from setr.utils.sirf import (
+    get_array,
+    get_s_inv_from_am,
+    get_s_inv_from_objs,
+    get_s_inv_from_subset_objs,
+)
 
 ISTA.update = ista_update_step
 
@@ -239,7 +244,7 @@ def build_variance_reduced_function(
         probs = data_probs
 
     sampler = Sampler.random_with_replacement(len(stochastic_functions), prob=probs)
-    variance_reduction = getattr(args, "variance_reduction", "svrg")
+    variance_reduction = getattr(args, "variance_reduction", "saga")
     variance_reduction = str(variance_reduction).lower()
 
     if variance_reduction == "svrg":
@@ -358,60 +363,6 @@ def set_up_kl_objectives(
     ]
 
     return pet_obj_funs, spect_obj_funs
-
-
-def get_s_inv_from_objs(obj_funs, initial_estimates):
-    # get subset_sensitivity BDC for preconditioner
-    s_inv = initial_estimates.get_uniform_copy(0)
-    for i, el in enumerate(s_inv.containers):
-        for j, obj_fun in enumerate(obj_funs[i]):
-            if j == 0:
-                sens = obj_fun.get_subset_sensitivity(0)
-            else:
-                sens += obj_fun.get_subset_sensitivity(0)
-        # Compute maximum with zero (returning a new container)
-        sens.maximum(0, out=sens)
-        sens_arr = get_array(sens).astype(np.float32)
-        # We can afford to avoid zeros because
-        # a zero sensitivity means we're outside the FOV
-        inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
-        # there really shouldn't be any NaNs, but just in case
-        s_inv.containers[i].fill(np.nan_to_num(inv_sens_arr))
-    return s_inv
-
-
-def get_s_inv_from_am(ams, initial_estimates):
-    # get subset_sensitivity BDC for preconditioner
-    s_inv = initial_estimates.get_uniform_copy(0)
-    for i, el in enumerate(s_inv.containers):
-        for am in ams[i]:
-            one = am.forward(initial_estimates[i]).get_uniform_copy(1)
-            tmp = am.backward(one)
-            el += tmp
-        el = el.maximum(0)
-        el_arr = get_array(el)
-        el_arr = np.reciprocal(el_arr, where=el_arr != 0)
-        el.fill(np.nan_to_num(el_arr))
-    return s_inv
-
-
-def get_s_inv_from_subset_objs(obj_funs, initial_estimate):
-    # get subset_sensitivity BDC for preconditioner
-    s_inv = initial_estimate.get_uniform_copy(0)
-    for j, obj_fun in enumerate(obj_funs):
-        if j == 0:
-            sens = obj_fun.get_subset_sensitivity(0)
-        else:
-            sens += obj_fun.get_subset_sensitivity(0)
-    # Compute maximum with zero (returning a new container)
-    sens = sens.maximum(0)
-    sens_arr = get_array(sens).astype(np.float32)
-    # We can afford to avoid zeros because
-    # a zero sensitivity means we're outside the FOV
-    inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
-    # there really shouldn't be any NaNs, but just in case
-    s_inv.fill(np.nan_to_num(inv_sens_arr))
-    return s_inv
 
 
 def compute_inv_hessian_diagonals(bdc, obj_funs_list):
