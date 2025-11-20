@@ -36,10 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Synthetic diagnostics and visualization updates (2025-10-06):
   - Added log-scale preconditioner plot and slow-term diagnostics in `test_vtv_preconditioners_synthetic.py`
 - Documented spectral-to-diagonal derivations in `docs/reference/vtv_hessian_diagonals.md`
+- Per-modality dynamic-range scaling utilities and regression tests (2025-11-20):
+  - `setr.utils.dynamic_range` exposes `dynamic_range_scale_sirf` plus helpers that capture and persist the pre-scaled prior weights before adjusting `alpha`, `beta`, `gamma_pet`, and `gamma_spect`.
+  - `tests/test_dynamic_range_scaling.py` validates masking, absolute-intensity handling, fallback behaviour, and repeated scaling so every DTNV script can rely on consistent modalities.
+- Resampling diagnostics and tooling for PET/SPECT guidance (2025-11-20):
+  - Added `scripts/resample_spect_to_pet.py`/`scripts/resample_spect_to_pet_simple.py` to warp SPECT reconstructions directly into PET space using the stored no-zoom displacement.
+  - Added `scripts/nifty_resample_diagnostics.py` and `scripts/test_spatial_ops.py` to inspect forward/backward `NiftyResample` consistency, SPECT→PET resampling, couch shifts, combine/uncombine operators, and block wiring with optional viewer dumps.
 
 ### Changed
 - Updated `test_preconditioners.py` to test all 5 preconditioner variants
 - Updated `run_preconditioner_tests.sh` with new test configurations (18/80 runs)
+- Dynamic-range scaling now divides each modality’s weights (`alpha`, `beta`, `gamma_pet`, `gamma_spect`) by its own robust intensity range so `alpha=beta=1` yields balanced PET/SPECT priors
 - **Modified `test_preconditioners.py`** (2025-10-05):
   - Added `attach_prior_hessian()` to wrap inv_hessian_diag methods
   - Priors for preconditioners now correctly apply `bo` operator transformations
@@ -48,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consolidated Markdown docs into `docs/` with guides and reference index
 - Renamed Hessian diagonal variants to canonical names (`svd_principal_alpha`, `mm_jensen`,
   `frobenius_surrogate_pd`, `vector_tv_per_modality`) and updated scripts/configs; legacy aliases retained
+- SPECT→PET resampling now relies solely on the direct `NiftyResampleOperator` (see `setr.scripts.common.get_resampling_operators` and the new scripts) so the previous enlarge-then-zoom pipeline has been dropped in favour of an adjoint-consistent warp informed by the stored no-zoom displacement.
 
 ### Fixed
 - **Critical bug in `fast` preconditioner** (2025-01-04):
