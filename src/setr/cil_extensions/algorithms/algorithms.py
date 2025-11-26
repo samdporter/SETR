@@ -17,8 +17,8 @@ def ista_update_step(self) -> None:
     else:
         grad = self.gradient_update.clone()
 
-    grad=grad.maximum(-M/self.step_size)
-    grad=grad.minimum(M/self.step_size)
+    grad=grad.maximum(-M/step_size)
+    grad=grad.minimum(M/step_size)
 
     self.x_old.sapyb(1.0, grad, -step_size, out=self.x_old)
     self.g.proximal(self.x_old, step_size, out=self.x)
