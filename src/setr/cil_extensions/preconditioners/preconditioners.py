@@ -71,13 +71,13 @@ class BSREMPreconditioner(PreconditionerWithInterval):
     """Preconditioner for BSREM."""
 
     def __init__(
-        self, s_inv, update_interval=1, freeze_iter=np.inf, epsilon=None, smooth=False, max_val=None
+        self, s_inv, update_interval=1, freeze_iter=np.inf, epsilon=None, smooth=False, max_val=None, smoothing_fwhm=(10,10,10)
     ):
         super().__init__(update_interval, freeze_iter)
         self.s_inv = s_inv
         if smooth:
             self.gaussian = SeparableGaussianImageFilter()
-            self.gaussian.set_fwhms((10, 10, 10))
+            self.gaussian.set_fwhms(smoothing_fwhm)
         else:
             self.gaussian = None
         if epsilon is None:
