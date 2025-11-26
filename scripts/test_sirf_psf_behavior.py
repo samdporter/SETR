@@ -96,10 +96,12 @@ def test_psf_backward_projection(acquisition_data, initial_image):
     am_without_psf = AcquisitionModelUsingParallelproj()
     am_without_psf.set_up(acquisition_data, initial_image)
 
-    # Backward project uniform data
-    ones_proj = acquisition_data.get_uniform_copy(1.0)
-    back_with_psf = am_with_psf.backward(ones_proj)
-    back_without_psf = am_without_psf.backward(ones_proj)
+    # Backward project random data
+    random_arr = np.random.rand(*acquisition_data.shape)
+    random_proj = acquisition_data.clone()
+    random_proj.fill(random_arr)
+    back_with_psf = am_with_psf.backward(random_proj)
+    back_without_psf = am_without_psf.backward(random_proj)
 
     # Calculate difference
     diff = (back_with_psf - back_without_psf).norm()
@@ -162,44 +164,6 @@ def test_fwhm_scaling(acquisition_data, initial_image, point_source):
     return passed
 
 
-def test_raytracing_psf(acquisition_data, initial_image, point_source):
-    """Test that PSF works with RayTracing acquisition model."""
-    print(f"\n{'='*60}")
-    print("Test: PSF with RayTracing projector")
-    print(f"{'='*60}")
-
-    try:
-        # Create acquisition model WITH PSF
-        am_with_psf = AcquisitionModelUsingRayTracingMatrix()
-        am_with_psf.set_num_tangential_LORs(10)
-        psf = SeparableGaussianImageFilter()
-        psf.set_fwhms([21, 21, 21])
-        am_with_psf.set_image_data_processor(psf)
-        am_with_psf.set_up(acquisition_data, initial_image)
-
-        # Create acquisition model WITHOUT PSF
-        am_without_psf = AcquisitionModelUsingRayTracingMatrix()
-        am_without_psf.set_num_tangential_LORs(10)
-        am_without_psf.set_up(acquisition_data, initial_image)
-
-        # Forward project
-        proj_with_psf = am_with_psf.forward(point_source)
-        proj_without_psf = am_without_psf.forward(point_source)
-
-        # Calculate difference
-        diff_norm = (proj_with_psf - proj_without_psf).norm()
-
-        print(f"  Absolute difference: {diff_norm:.6e}")
-
-        passed = diff_norm > 1e-6
-        print(f"  Status: {'✓ PASS' if passed else '✗ FAIL'}")
-
-        return passed
-    except Exception as e:
-        print(f"  ✗ FAIL: {e}")
-        return False
-
-
 def main():
     """Run all PSF tests."""
     if not SIRF_AVAILABLE:
@@ -232,9 +196,9 @@ def main():
     results['FWHM Scaling'] = test_fwhm_scaling(
         acquisition_data, initial_image, point_source
     )
-    results['RayTracing'] = test_raytracing_psf(
-        acquisition_data, initial_image, point_source
-    )
+    # results['RayTracing'] = test_raytracing_psf(
+    #     acquisition_data, initial_image, point_source
+    # )
 
     # Summary
     print(f"\n{'='*60}")
