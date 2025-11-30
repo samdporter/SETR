@@ -160,3 +160,6 @@ CODING_STANDARDS.md
 sweeps/configs/*.yaml
 other/
 *.tmp
+
+# config files
+configs/*.yaml
