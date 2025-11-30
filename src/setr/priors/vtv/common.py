@@ -78,23 +78,23 @@ def fair_inv_hessian_diag(x, eps):
 
 
 def perona_malik(x, eps):
-    return (eps / 2) * (1 - torch.exp(-(x**2) / (eps**2)))
+    return (1 / 2) * (1 - torch.exp(-(x**2) / (eps**2)))
 
 
 def perona_malik_grad(x, eps):
-    return x * torch.exp(-(x**2) / (eps**2)) / (eps)
+    return x * torch.exp(-(x**2) / (eps**2)) / (eps**2)
 
 
 def perona_malik_hessian_surrogate(x, eps):
-    return 0.5 * torch.exp(-(x**2) / (eps**2)) / (eps)
+    return 0.5 * torch.exp(-(x**2) / (eps**2)) / (eps**2)
 
 
 def perona_malik_hessian_diag(x, eps):
-    return (eps**2 - 2 * x**2) * torch.exp(-(x**2) / (eps**2)) / (eps**3)
+    return (eps**2 - 2 * x**2) * torch.exp(-(x**2) / (eps**2)) / (eps**4)
 
 
 def perona_malik_inv_hessian_diag(x, eps):
-    return (eps**3) * torch.exp(x**2 / (eps**2)) / (eps**2 - 2 * x**2)
+    return (eps**4) * torch.exp(x**2 / (eps**2)) / (eps**2 - 2 * x**2)
 
 
 def nothing(x, eps=0):

@@ -87,7 +87,7 @@ def _rank_one_fields_from_gram(M, order, B, S):
     """
     *lead, Mdim, Ddim = M.shape
     r = S.shape[-1]
-    tiny = torch.finfo(S.dtype).eps
+    tiny = 1e-9 # A more robust epsilon
     Sinv = 1.0 / torch.clamp(S, min=tiny)  # (..., r)
 
     if order == 1:

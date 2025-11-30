@@ -27,6 +27,7 @@ from .common import (
     perona_malik_hessian_surrogate,
     to_tensor,
 )
+from .numerical_constants import get_gradient_floor
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -146,12 +147,17 @@ class GPUVectorialTotalVariation(Function):
             # Gradient: U diag(h'(sigma_i)) V^T
             S_grad_values = grad_func(S, self.eps)
 
-            # If tailing, the gradient for non-tailed values is 0
-            mask = torch.ones_like(S) if self.tail is None else get_mask(S, self.tail)
-            S_grad_values = S_grad_values * mask
+            if self.tail is not None:
+                # Apply smoothing derivative to tail, identity derivative (1) to head
+                mask = get_mask(S, self.tail)  # 1 on smallest `tail` sigma
+                # The gradient of h(s)=s is 1.
+                S_grad_head = torch.ones_like(S) * (1 - mask)
+                S_grad_final = S_grad_values * mask + S_grad_head
+            else:
+                S_grad_final = S_grad_values
 
             # Reconstruct the gradient matrix: U diag(h'(s)) V^T
-            out = torch.matmul(U, Vh * S_grad_values[..., None])
+            out = torch.matmul(U, Vh * S_grad_final[..., None])
 
         elif self.norm == "frobenius":
             # Frobenius norm: gradient of h(||sigma||_2)
@@ -159,7 +165,8 @@ class GPUVectorialTotalVariation(Function):
             #           = h'(||sigma||_2) * sigma / ||sigma||_2
             frobenius_norm = torch.sqrt(torch.sum(S**2, dim=-1, keepdim=True))
             # Avoid division by zero
-            frobenius_norm = torch.maximum(frobenius_norm, torch.tensor(1e-10, device=S.device))
+            eps_floor = get_gradient_floor(S.dtype)
+            frobenius_norm = torch.maximum(frobenius_norm, torch.tensor(eps_floor, device=S.device))
 
             # h'(||sigma||_2) - scalar for each voxel
             h_prime = grad_func(frobenius_norm.squeeze(-1), self.eps)

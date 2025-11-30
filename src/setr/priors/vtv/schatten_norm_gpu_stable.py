@@ -24,6 +24,7 @@ from .common import (
     perona_malik_hessian_surrogate,
     to_tensor,
 )
+from .numerical_constants import get_division_epsilon, get_gradient_floor
 from .small_eig import (
     eigenvalsh_2x2,
     eigenvalsh_3x3_cardano,
@@ -70,8 +71,10 @@ def safe_svd_with_fallback(x, condition_threshold=None):
             S2 = eigenvalsh_2x2(H)
             Bmat = eigenvecsh_2x2(H, S2)  # eigenvectors (U if order=1, V if order=0)
             S = torch.sqrt(torch.clamp(S2, min=0.0))
-            tiny = torch.finfo(S.dtype).eps * 100
-            Sinv = torch.where(S > tiny, 1.0 / S, torch.zeros_like(S))
+            eps_div = get_division_epsilon(S.dtype)
+            # Safer inverse: clamp S before division to avoid instability
+            S_safe = torch.clamp(S, min=eps_div)
+            Sinv = torch.where(S > eps_div, 1.0 / S_safe, torch.zeros_like(S))
 
             if order == 1:
                 Uout = Bmat
@@ -101,8 +104,10 @@ def safe_svd_with_fallback(x, condition_threshold=None):
                 S2_all = eigenvalsh_3x3_cardano(Hn)  # (B,3)
                 B_all = eigenvecsh_3x3_cardano(Hn, S2_all)  # (B,3,3)
                 S_all = torch.sqrt(torch.clamp(S2_all * alpha.unsqueeze(-1), min=0.0))
-                tiny = torch.finfo(S_all.dtype).eps * 100
-                Sinv = torch.where(S_all > tiny, 1.0 / S_all, torch.zeros_like(S_all))
+                eps_div = get_division_epsilon(S_all.dtype)
+                # Safer inverse
+                S_safe = torch.clamp(S_all, min=eps_div)
+                Sinv = torch.where(S_all > eps_div, 1.0 / S_safe, torch.zeros_like(S_all))
 
                 if order == 1:
                     Uout = B_all
@@ -124,8 +129,10 @@ def safe_svd_with_fallback(x, condition_threshold=None):
                 S2_ok = eigenvalsh_3x3_cardano(Hn[ok])
                 B_ok = eigenvecsh_3x3_cardano(Hn[ok], S2_ok)
                 S_ok = torch.sqrt(torch.clamp(S2_ok * alpha[ok].unsqueeze(-1), min=0.0))
-                tiny = torch.finfo(S_ok.dtype).eps * 100
-                Sinv_ok = torch.where(S_ok > tiny, 1.0 / S_ok, torch.zeros_like(S_ok))
+                eps_div = get_division_epsilon(S_ok.dtype)
+                # Safer inverse
+                S_safe_ok = torch.clamp(S_ok, min=eps_div)
+                Sinv_ok = torch.where(S_ok > eps_div, 1.0 / S_safe_ok, torch.zeros_like(S_ok))
 
                 if order == 1:
                     Uout[ok] = B_ok
@@ -367,7 +374,8 @@ class GPUVectorialTotalVariation(Function):
             # Frobenius norm: gradient of h(||sigma||_2)
             # Chain rule: h'(||sigma||_2) * sigma / ||sigma||_2
             frobenius_norm = torch.sqrt(torch.sum(S**2, dim=-1, keepdim=True))
-            frobenius_norm = torch.maximum(frobenius_norm, torch.tensor(1e-10, device=S.device))
+            eps_floor = get_gradient_floor(S.dtype)
+            frobenius_norm = torch.maximum(frobenius_norm, torch.tensor(eps_floor, device=S.device))
 
             # h'(||sigma||_2) - scalar for each voxel
             h_prime = grad_func(frobenius_norm.squeeze(-1), self.eps)

@@ -12,6 +12,7 @@ except ImportError:
 from sirf.STIR import ImageData
 
 from setr.core.gradients import Jacobian
+from setr.priors.vtv.numerical_constants import get_division_epsilon, get_sqrt_epsilon
 from setr.utils import BlockDataContainerToArray
 from setr.utils.sirf import get_array
 
@@ -182,7 +183,8 @@ class WeightedVectorialTotalVariation(Function):
 
         # Average singular value via Jensen: σ_avg = √(||A||²_F / r)
         sigma_avg_sq = A_frob_sq / r
-        sigma_avg = torch.sqrt(sigma_avg_sq + 1e-12)  # stabilize
+        eps_sqrt = get_sqrt_epsilon(A.dtype)
+        sigma_avg = torch.sqrt(sigma_avg_sq + eps_sqrt)  # stabilize
 
         # Select smoothing function derivative
         if self.smoothing == "charbonnier":
@@ -201,7 +203,8 @@ class WeightedVectorialTotalVariation(Function):
             phi_prime = torch.ones_like(sigma_avg)
 
         # Jensen bound: ω_j = φ'(σ_avg) / (2·σ_avg)
-        omega = phi_prime / (2.0 * sigma_avg + 1e-12)  # (nx, ny, nz)
+        eps_div = get_division_epsilon(A.dtype)
+        omega = phi_prime / (2.0 * sigma_avg + eps_div)  # (nx, ny, nz)
 
         # Get Jacobian sensitivity: per-direction scaling factors
         S = self.jacobian.sensitivity(x_arr)  # (nx, ny, nz, M, d)
@@ -271,7 +274,8 @@ class WeightedVectorialTotalVariation(Function):
 
         # Compute Frobenius norm per voxel: ||A_j||_F = sqrt(Σ_{m,d} A²_{j,m,d})
         A_frob_sq = torch.sum(A * A, dim=(-2, -1))  # (nx, ny, nz)
-        A_frob = torch.sqrt(A_frob_sq + 1e-12)  # stabilize
+        eps_sqrt = get_sqrt_epsilon(A.dtype)
+        A_frob = torch.sqrt(A_frob_sq + eps_sqrt)  # stabilize
 
         # Select smoothing function derivative
         if self.smoothing == "charbonnier":
@@ -291,7 +295,8 @@ class WeightedVectorialTotalVariation(Function):
 
         # Hessian surrogate weight: M · φ'(||A||_F) / ||A||_F
         M = A.shape[-2]  # number of modalities
-        omega = M * phi_prime / (A_frob + 1e-12)  # (nx, ny, nz)
+        eps_div = get_division_epsilon(A.dtype)
+        omega = M * phi_prime / (A_frob + eps_div)  # (nx, ny, nz)
 
         # Get Jacobian sensitivity (same as fast method)
         S = self.jacobian.sensitivity(x_arr)  # (nx, ny, nz, M, d)
@@ -339,7 +344,8 @@ class WeightedVectorialTotalVariation(Function):
 
         # Radial terms per modality
         r2 = torch.sum(A * A, dim=-1)  # (nx, ny, nz, M)
-        r = torch.sqrt(r2 + 1e-12)
+        eps_sqrt = get_sqrt_epsilon(A.dtype)
+        r = torch.sqrt(r2 + eps_sqrt)
 
         if self.smoothing == "charbonnier":
             from .common import charbonnier_grad as phi1, charbonnier_hessian_diag as phi2
@@ -352,10 +358,11 @@ class WeightedVectorialTotalVariation(Function):
 
         phi1_r = phi1(r, self.vtv.eps)
         phi2_r = phi2(r, self.vtv.eps)
-        alpha = phi1_r / (r + 1e-12)
+        eps_div = get_division_epsilon(A.dtype)
+        alpha = phi1_r / (r + eps_div)
         beta = phi2_r - alpha
 
-        frac = (A * A) / (r2.unsqueeze(-1) + 1e-12)  # (..., M, d)
+        frac = (A * A) / (r2.unsqueeze(-1) + eps_div)  # (..., M, d)
         h_dir = alpha.unsqueeze(-1) + beta.unsqueeze(-1) * frac
 
         # Sensitivity mapping
@@ -494,7 +501,7 @@ class WeightedVectorialTotalVariation(Function):
         """Inverse of exact diagonal Hessian via full SVD."""
         diag_arr = self._preconditioner_weights_core_slow(self.bdc2a.direct(x))
         inv_arr = torch.reciprocal(diag_arr)
-        torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0, out=inv_arr)
+        inv_arr = torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0)
         return self.bdc2a.adjoint(inv_arr/self._dV, out=out)
 
     def hessian_diag(self, x, out=None, eta: float = 0.7, epsilon: float = 1e-8):
