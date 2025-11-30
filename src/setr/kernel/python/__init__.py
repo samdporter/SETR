@@ -1,17 +1,19 @@
 """
 setr.kernel.python
 
-Pure-Python and Numba-based kernel operators.
+Numba-based kernel operators (KRL implementation).
 """
 
 from .my_kem import (
     NUMBA_AVAIL,
-    SLIDING_WINDOW_AVAIL,
     BaseKernelOperator,
     KernelOperator,
-    NumbaKernelOperator,
     get_kernel_operator,
 )
+
+# Backward compatibility alias
+NumbaKernelOperator = KernelOperator
+SLIDING_WINDOW_AVAIL = False  # No longer used
 
 __all__ = [
     "get_kernel_operator",

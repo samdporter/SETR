@@ -4,13 +4,17 @@ synergistic_recon.kernel
 Top-level kernel package. Exposes factory and subpackages.
 """
 
-from .python import (
+from .python import (  # noqa: F401
     BaseKernelOperator,
     KernelOperator as PythonKernelOperator,
     NumbaKernelOperator,
     get_kernel_operator,
 )
-from .stir import STIRKernelOperator
+
+try:  # pragma: no cover - optional dependency
+    from .stir import STIRKernelOperator
+except Exception:  # pragma: no cover - optional dependency
+    STIRKernelOperator = None  # type: ignore[misc]
 
 __all__ = [
     "get_kernel_operator",
