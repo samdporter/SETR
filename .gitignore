@@ -163,3 +163,6 @@ other/
 
 # config files
 configs/*.yaml
+
+# Temporary/scratch files
+xit
