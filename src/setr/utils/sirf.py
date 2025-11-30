@@ -79,8 +79,8 @@ def get_spect_am(
     if attenuation:
         try:
             spect_am_mat.set_attenuation_image(spect_data["attenuation"])
-        except:
-            print("No attenuation data")
+        except Exception as e:
+            print("No attenuation data:", e)
     if res:
         spect_am_mat.set_resolution_model(*res)
     spect_am = AcquisitionModelUsingMatrix(spect_am_mat)
@@ -509,9 +509,18 @@ def _clamp_inverse(inv_sens_arr, clamp_percentile):
     return np.minimum(inv_sens_arr, clamp_value)
 
 
-def get_s_inv_from_objs(obj_funs, initial_estimates, clamp_percentile: float | None = None):
+def get_s_inv_from_objs(
+    obj_funs,
+    initial_estimates,
+    clamp_percentile: float | None = None,
+    adjoint_ops=None,
+):
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimates.get_uniform_copy(0)
+    if adjoint_ops is None:
+        adjoint_ops = [None] * len(obj_funs)
+    if len(adjoint_ops) != len(obj_funs):
+        raise ValueError("adjoint_ops must match number of objective function blocks")
     for i, el in enumerate(s_inv.containers):
         for j, obj_fun in enumerate(obj_funs[i]):
             if j == 0:
@@ -520,6 +529,9 @@ def get_s_inv_from_objs(obj_funs, initial_estimates, clamp_percentile: float | N
                 sens += obj_fun.get_subset_sensitivity(0)
         # Compute maximum with zero (returning a new container)
         sens.maximum(0, out=sens)
+        adjoint_op = adjoint_ops[i]
+        if adjoint_op is not None:
+            sens = adjoint_op.adjoint(sens)
         sens_arr = get_array(sens).astype(np.float32)
         # We can afford to avoid zeros because
         # a zero sensitivity means we're outside the FOV
@@ -530,15 +542,27 @@ def get_s_inv_from_objs(obj_funs, initial_estimates, clamp_percentile: float | N
     return s_inv
 
 
-def get_s_inv_from_am(ams, initial_estimates, clamp_percentile: float | None = None):
+def get_s_inv_from_am(
+    ams,
+    initial_estimates,
+    clamp_percentile: float | None = None,
+    adjoint_ops=None,
+):
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimates * 0
+    if adjoint_ops is None:
+        adjoint_ops = [None] * len(ams)
+    if len(adjoint_ops) != len(ams):
+        raise ValueError("adjoint_ops must match number of acquisition model blocks")
     for i, el in enumerate(s_inv.containers):
         for am in ams[i]:
             one = am.forward(initial_estimates[i]).get_uniform_copy(1)
             tmp = am.backward(one)
             el += tmp
         el = el.maximum(0)
+        adjoint_op = adjoint_ops[i]
+        if adjoint_op is not None:
+            el = adjoint_op.adjoint(el)
         el_arr = get_array(el)
         el_arr = np.reciprocal(el_arr, where=el_arr != 0)
         el_arr = _clamp_inverse(el_arr, clamp_percentile)
@@ -546,7 +570,12 @@ def get_s_inv_from_am(ams, initial_estimates, clamp_percentile: float | None = N
     return s_inv
 
 
-def get_s_inv_from_subset_objs(obj_funs, initial_estimate, clamp_percentile: float | None = None):
+def get_s_inv_from_subset_objs(
+    obj_funs,
+    initial_estimate,
+    clamp_percentile: float | None = None,
+    adjoint_operator=None,
+):
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimate.get_uniform_copy(0)
     for j, obj_fun in enumerate(obj_funs):
@@ -556,6 +585,8 @@ def get_s_inv_from_subset_objs(obj_funs, initial_estimate, clamp_percentile: flo
             sens += obj_fun.get_subset_sensitivity(0)
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
+    if adjoint_operator is not None:
+        sens = adjoint_operator.adjoint(sens)
     sens_arr = get_array(sens).astype(np.float32)
     # We can afford to avoid zeros because
     # a zero sensitivity means we're outside the FOV
@@ -566,7 +597,7 @@ def get_s_inv_from_subset_objs(obj_funs, initial_estimate, clamp_percentile: flo
     return s_inv
 
 
-def get_sensitivity_from_subset_objs(obj_funs, initial_estimate):
+def get_sensitivity_from_subset_objs(obj_funs, initial_estimate, adjoint_operator=None):
     # get subset_sensitivity BDC for preconditioner
     for j, obj_fun in enumerate(obj_funs):
         if j == 0:
@@ -575,6 +606,8 @@ def get_sensitivity_from_subset_objs(obj_funs, initial_estimate):
             sens += obj_fun.get_subset_sensitivity(0)
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
+    if adjoint_operator is not None:
+        sens = adjoint_operator.adjoint(sens)
     return sens
 
 
