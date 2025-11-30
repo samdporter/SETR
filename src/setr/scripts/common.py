@@ -199,7 +199,7 @@ def apply_combine_sensitivities(pet_data, per_bed_sensitivities):
     combine_op.set_sensitivities(resampled_sens)
 
 
-def get_sensitivity_from_subset_objs(obj_funs):
+def get_sensitivity_from_subset_objs(obj_funs, adjoint_operator=None):
     # get subset_sensitivity BDC for preconditioner
     for j, obj_fun in enumerate(obj_funs):
         if j == 0:
@@ -208,6 +208,8 @@ def get_sensitivity_from_subset_objs(obj_funs):
             sens += obj_fun.get_subset_sensitivity(0)
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
+    if adjoint_operator is not None:
+        sens = adjoint_operator.adjoint(sens)
     return sens
 
 
