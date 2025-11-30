@@ -498,63 +498,78 @@ class HarmonicMeanPreconditioner(PreconditionerWithInterval):
 
 
 class LehmerMeanPreconditioner(PreconditionerWithInterval):
-    """Combine multiple preconditioners via a Lehmer mean of order p."""
+    """Combine multiple preconditioners via a Lehmer mean of order p.
+
+    For positive scalars x_i, the Lehmer mean of order p is
+
+        L_p(x_1, ..., x_n) = (Σ x_i^p) / (Σ x_i^(p-1))
+
+    so that:
+        p = 0  -> harmonic mean
+        p = 1  -> arithmetic mean
+        p > 1  -> biased toward max
+        p < 0  -> biased toward min (not recommended here)
+
+    We use an epsilon floor on the inputs to avoid 0^(p-1) when p < 1,
+    and to ensure the combined preconditioner never collapses to exactly 0
+    when at least one input preconditioner is positive.
+    """
 
     def __init__(
         self,
         preconds,
-        p=1e-1,  # Lehmer order: p=0→harmonic, p=1→arithmetic, p>1→toward max
-        epsilon=1e-12,  # CRITICAL: Must be > 0 when p < 1 to prevent 0^(p-1) = infinity
+        p=1e-1,
+        epsilon=1e-12,   # floor applied to all inputs before exponentiation
         update_interval=np.inf,
         freeze_iter=np.inf,
         scales=None,
     ):
         super().__init__(update_interval, freeze_iter)
         self.preconds = preconds
-        self.p = p
-        # Enforce minimum epsilon when p < 1 to prevent mathematical singularities
-        if p < 1 and epsilon == 0:
+        self.p = float(p)
+
+        if p < 1 and epsilon <= 0:
             epsilon = 1e-12
             logging.warning(
-                f"LehmerMeanPreconditioner: epsilon=0 with p={p} < 1 causes 0^(p-1) = inf. "
-                f"Setting epsilon={epsilon} to prevent singularities."
+                f"LehmerMeanPreconditioner: epsilon must be > 0 when p={p} < 1 "
+                f"to avoid 0^(p-1) singularities. Using epsilon={epsilon}."
             )
-        self.epsilon = epsilon
+        self.epsilon = float(epsilon)
+
         if scales is not None and len(scales) != len(preconds):
             raise ValueError("Length of scales must match number of preconditioners.")
         self.scales = scales
 
     def compute_preconditioner(self, algorithm, out=None):
-        # Collect (and, if needed, clamp) inputs
-        precond_values = []
+        # 1) Collect individual preconditioners (optionally scaled)
+        values = []
         for i, precond in enumerate(self.preconds):
-            value = precond.compute_preconditioner(algorithm)
+            v = precond.compute_preconditioner(algorithm)
             if self.scales is not None:
-                scale = self.scales[i]
-                if scale != 1:
-                    value = value * scale
-            precond_values.append(value)
+                s = self.scales[i]
+                if s != 1:
+                    v = v * s
+            values.append(v)
 
         p = self.p
-        need_clamp_for_den = p < 1
         eps = self.epsilon
 
-        # First term
-        x0 = precond_values[0]
-        base_num = x0
-        base_den = x0.maximum(eps) if need_clamp_for_den else x0
+        # 2) Apply a symmetric floor to all inputs
+        #    This guarantees x >= eps everywhere for all subsequent powers.
+        clamped = [v.maximum(eps) for v in values]
 
-        num = base_num.power(p)  # Σ x^p
-        den = base_den.power(p - 1)  # Σ x^(p-1), safe if p<1
+        # 3) Lehmer numerator and denominator:
+        #      num = Σ x^p
+        #      den = Σ x^(p-1)
+        x0 = clamped[0]
+        num = x0.power(p)
+        den = x0.power(p - 1)
 
-        # Accumulate remaining terms
-        for x in precond_values[1:]:
-            base_num = x
-            base_den = x.maximum(eps) if need_clamp_for_den else x
-            num += base_num.power(p)
-            den += base_den.power(p - 1)
+        for v in clamped[1:]:
+            num += v.power(p)
+            den += v.power(p - 1)
 
-        # Final guard and division
+        # 4) Final safeguard on denominator and division
         den = den.maximum(eps)
         if out is None:
             return num / den
