@@ -163,6 +163,7 @@ other/
 
 # config files
 configs/*.yaml
+functionality/subset_selection/configs/*.yaml
 
 # Temporary/scratch files
 xit
