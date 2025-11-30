@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 from cil.optimisation.algorithms import ISTA
-from cil.optimisation.functions import SumFunction, SVRGFunction
+from cil.optimisation.functions import OperatorCompositionFunction, SumFunction, SVRGFunction
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
 from sirf.STIR import ImageData
@@ -34,6 +34,7 @@ from setr.scripts.dtnv_common import (
 from setr.utils import get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters, get_s_inv_from_subset_objs
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
@@ -107,6 +108,9 @@ def get_data_fidelity(args, spect_data, get_spect_am, num_subsets):
         gauss.apply(kappa)
     else:
         kappa = None
+
+    # SPECT uses image_data_processor which works correctly for SPECT projectors
+    # No need to wrap objectives with blur operator
 
     return obj_funs, s_inv, kappa
 

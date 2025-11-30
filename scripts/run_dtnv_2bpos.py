@@ -51,6 +51,7 @@ from setr.utils import (
 )
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters, get_s_inv_from_subset_objs
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
@@ -73,7 +74,7 @@ def prepare_data(args):
     umap += (-umap).max()
     umap /= umap.max()
     ct_smooth = SeparableGaussianImageFilter()
-    ct_smooth.set_fwhms((0.5, 0.5, 0.5))
+    ct_smooth.set_fwhms((2, 2, 2))
     ct_smooth.apply(umap)
     spect_data = get_spect_data(args.spect_data_path)
 
@@ -156,6 +157,16 @@ def get_data_fidelity(
     for obj_fun in spect_dfs:
         obj_fun.set_up(spect_data["initial_image"])
 
+    # Create Gaussian blurring operators for PET only
+    # SPECT uses image_data_processor which works correctly for SPECT projectors
+    pet_blur_ops = [
+        create_gaussian_blur_operator(
+            args.pet_gauss_fwhm,
+            pet_data["bed_positions"][suffix]["template_image"]
+        )
+        for suffix in pet_data["bed_positions"]
+    ]
+
     # =========================
     # κ² build *before* op wrapping
     # =========================
@@ -183,9 +194,12 @@ def get_data_fidelity(
 
     logging.info(f"SPECT κ² image computed with shape {spect_kappa_sq.shape}.")
 
-    pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
+    pet_sens = [
+        get_sensitivity_from_subset_objs(df, adjoint_operator=op)
+        for df, op in zip(pet_dfs, pet_blur_ops)
+    ]
 
-    apply_combine_sensitivities(pet_data, pet_sens)
+    #apply_combine_sensitivities(pet_data, pet_sens)
 
     spect_s_inv = get_s_inv_from_subset_objs(
         spect_dfs, spect_data["initial_image"],
@@ -211,16 +225,30 @@ def get_data_fidelity(
         image.write(os.path.join(args.output_path, f"s_inv_{i}.hv"))
         logging.info(f"Writing s_inv_{i} with max {image.max()}")
 
-    # --- now wrap PET objectives with uncombine/choose/unshift ---
+    # --- now wrap PET objectives with blur + uncombine/choose/unshift ---
     for i, suffix in enumerate(pet_data["bed_positions"]):
         for j in range(len(pet_dfs[i])):
-            pet_dfs[i][j] = OperatorCompositionFunction(
-                pet_dfs[i][j],
-                CompositionOperator(unshift_ops[i], choose_ops[i], uncombine_op),
-            )
+            # Build operator chain: blur -> unshift -> choose -> uncombine
+            if pet_blur_ops[i] is not None:
+                op_chain = CompositionOperator(
+                    pet_blur_ops[i],
+                    unshift_ops[i],
+                    choose_ops[i],
+                    uncombine_op
+                )
+            else:
+                op_chain = CompositionOperator(
+                    unshift_ops[i],
+                    choose_ops[i],
+                    uncombine_op
+                )
+            pet_dfs[i][j] = OperatorCompositionFunction(pet_dfs[i][j], op_chain)
 
     # flatten beds
     pet_combined_dfs = [df for bed in pet_dfs for df in bed]
+
+    # SPECT objectives are NOT wrapped with blur operator
+    # SPECT uses image_data_processor which works correctly for SPECT projectors
 
     # block objectives
     pet_dfs_block = [
@@ -272,7 +300,7 @@ def main(args) -> None:
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
-            gauss_fwhm=args.pet_gauss_fwhm,
+            gauss_fwhm=None,
         )
 
     def get_spect_am_with_res():

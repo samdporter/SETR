@@ -41,6 +41,7 @@ from setr.scripts.common import (
 from setr.utils import get_pet_data_multiple_bed_pos
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters, get_pet_am
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
@@ -76,7 +77,7 @@ def get_data_fidelity(args, pet_data, uncombine_op, unshift_ops, choose_ops):
 
     # Get acquisition model function
     def get_pet_am_with_res():
-        return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.pet_gauss_fwhm)
+        return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=None)
 
     # Partition PET data by bed position
     pet_dfs = [
@@ -97,10 +98,22 @@ def get_data_fidelity(args, pet_data, uncombine_op, unshift_ops, choose_ops):
         for j in range(len(pet_dfs[i])):
             pet_dfs[i][j].set_up(tmpl)
 
+    # Create Gaussian blurring operators for PET (one per bed)
+    pet_blur_ops = [
+        create_gaussian_blur_operator(
+            args.pet_gauss_fwhm,
+            pet_data["bed_positions"][suffix]["template_image"]
+        )
+        for suffix in pet_data["bed_positions"]
+    ]
+
     # Get sensitivities for each bed position
     from setr.scripts.common import get_sensitivity_from_subset_objs
 
-    pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
+    pet_sens = [
+        get_sensitivity_from_subset_objs(df, adjoint_operator=op)
+        for df, op in zip(pet_dfs, pet_blur_ops)
+    ]
     apply_combine_sensitivities(pet_data, pet_sens)
 
     # Unshift and combine PET sensitivities to common PET grid
@@ -123,17 +136,24 @@ def get_data_fidelity(args, pet_data, uncombine_op, unshift_ops, choose_ops):
     s_inv.write(os.path.join(args.output_path, "s_inv.hv"))
     logging.info(f"Writing s_inv with max {s_inv.max()}")
 
-    # Wrap PET objectives with uncombine/choose/unshift operators
+    # Wrap PET objectives with blur + uncombine/choose/unshift operators
     for i, suffix in enumerate(pet_data["bed_positions"]):
         for j in range(len(pet_dfs[i])):
-            pet_dfs[i][j] = OperatorCompositionFunction(
-                pet_dfs[i][j],
-                CompositionOperator(
+            # Build operator chain: blur -> unshift -> choose -> uncombine
+            if pet_blur_ops[i] is not None:
+                op_chain = CompositionOperator(
+                    pet_blur_ops[i],
                     unshift_ops[i],
                     choose_ops[i],
-                    uncombine_op,
-                ),
-            )
+                    uncombine_op
+                )
+            else:
+                op_chain = CompositionOperator(
+                    unshift_ops[i],
+                    choose_ops[i],
+                    uncombine_op
+                )
+            pet_dfs[i][j] = OperatorCompositionFunction(pet_dfs[i][j], op_chain)
 
     # Flatten the list to get one function per subset per bed
     all_funs = [df for bed in pet_dfs for df in bed]

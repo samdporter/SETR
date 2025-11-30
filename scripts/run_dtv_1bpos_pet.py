@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 from cil.optimisation.algorithms import ISTA
-from cil.optimisation.functions import SumFunction, SVRGFunction
+from cil.optimisation.functions import OperatorCompositionFunction, SumFunction, SVRGFunction
 from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
 from sirf.STIR import ImageData
@@ -34,6 +34,7 @@ from setr.scripts.dtnv_common import (
 from setr.utils import get_pet_am, get_pet_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters, get_s_inv_from_subset_objs
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
@@ -99,8 +100,15 @@ def get_data_fidelity(args, pet_data, get_pet_am, num_subsets):
     for obj_fun in obj_funs:
         obj_fun.set_up(pet_data["initial_image"])
 
+    # Create Gaussian blurring operator for PET
+    pet_blur_op = create_gaussian_blur_operator(args.pet_gauss_fwhm, pet_data["initial_image"])
+
     # Get sensitivity image ^ -1
-    s_inv = get_s_inv_from_subset_objs(obj_funs, pet_data["initial_image"])
+    s_inv = get_s_inv_from_subset_objs(
+        obj_funs,
+        pet_data["initial_image"],
+        adjoint_operator=pet_blur_op,
+    )
     s_inv.write(os.path.join(args.output_path, "s_inv_pet.hv"))
 
     # Compute kappa image if requested
@@ -112,6 +120,13 @@ def get_data_fidelity(args, pet_data, get_pet_am, num_subsets):
         gauss.apply(kappa)
     else:
         kappa = None
+
+    # Wrap PET objectives with Gaussian blurring operator (if specified)
+    if pet_blur_op is not None:
+        obj_funs = [
+            OperatorCompositionFunction(obj_fun, pet_blur_op)
+            for obj_fun in obj_funs
+        ]
 
     return obj_funs, s_inv, kappa
 
@@ -126,7 +141,7 @@ def main(args) -> None:
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
-            gauss_fwhm=args.pet_gauss_fwhm,
+            gauss_fwhm=None,
         )
 
     # Set up data fidelity functions

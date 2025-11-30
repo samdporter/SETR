@@ -21,6 +21,7 @@ from setr.scripts.hkem_common import get_attn_and_normalise, get_kernel_hyperpar
 from setr.utils import get_pet_data, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters, get_pet_am, get_spect_am
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
@@ -65,11 +66,11 @@ def run_ista(args, data, guidance, hyperparams):
     if args.modality.upper() == "PET":
 
         def get_am():
-            return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.gauss_fwhm)
+            return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=None)
     else:
 
         def get_am():
-            return get_spect_am(data, args.spect_res, True, args.gauss_fwhm)
+            return get_spect_am(data, args.spect_res, True, gauss_fwhm=args.gauss_fwhm)
 
     # Handle SPECT normalisation
     if args.modality.upper() == "SPECT":
@@ -87,6 +88,15 @@ def run_ista(args, data, guidance, hyperparams):
 
     for obj in objs:
         obj.set_up(data["initial_image"])
+
+    # Create Gaussian blurring operator for PET only
+    # SPECT uses image_data_processor which works correctly for SPECT projectors
+    if args.modality.upper() == "PET":
+        blur_op = create_gaussian_blur_operator(args.gauss_fwhm, data["initial_image"])
+
+        # Wrap PET objectives with Gaussian blurring operator (if specified)
+        if blur_op is not None:
+            objs = [OperatorCompositionFunction(obj, blur_op) for obj in objs]
 
     # Create kernel operator
     K = KernelOperator(data["initial_image"], **hyperparams)

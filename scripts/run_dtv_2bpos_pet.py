@@ -42,6 +42,7 @@ from setr.scripts.dtnv_common import (
 from setr.utils import get_pet_am, get_pet_data_multiple_bed_pos
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
@@ -123,6 +124,15 @@ def get_data_fidelity(
         for j in range(len(pet_dfs[i])):
             pet_dfs[i][j].set_up(tmpl)
 
+    # Create Gaussian blurring operators for PET (one per bed)
+    pet_blur_ops = [
+        create_gaussian_blur_operator(
+            args.pet_gauss_fwhm,
+            pet_data["bed_positions"][suffix]["template_image"]
+        )
+        for suffix in pet_data["bed_positions"]
+    ]
+
     # κ² build *before* op wrapping (per-bed PET κ² in bed coords)
     pet_kappa_bed_sq = []
     for df_list, suffix in zip(pet_dfs_raw, pet_data["bed_positions"]):
@@ -141,7 +151,10 @@ def get_data_fidelity(
     logging.info(f"PET κ² images computed and uncombined with shape {kappa.shape}.")
 
     # PET sensitivity computation
-    pet_sens = [get_sensitivity_from_subset_objs(df) for df in pet_dfs]
+    pet_sens = [
+        get_sensitivity_from_subset_objs(df, adjoint_operator=op)
+        for df, op in zip(pet_dfs, pet_blur_ops)
+    ]
     apply_combine_sensitivities(pet_data, pet_sens)
     pet_sens_combined = uncombine_op.adjoint(
         EnhancedBlockDataContainer(
@@ -160,13 +173,24 @@ def get_data_fidelity(
     s_inv.write(os.path.join(args.output_path, "s_inv_pet.hv"))
     logging.info(f"Writing s_inv_pet with max {s_inv.max()}")
 
-    # --- now wrap PET objectives with uncombine/choose/unshift ---
+    # Wrap PET objectives with blur + uncombine/choose/unshift
     for i, suffix in enumerate(pet_data["bed_positions"]):
         for j in range(len(pet_dfs[i])):
-            pet_dfs[i][j] = OperatorCompositionFunction(
-                pet_dfs[i][j],
-                CompositionOperator(unshift_ops[i], choose_ops[i], uncombine_op),
-            )
+            # Build operator chain: blur -> unshift -> choose -> uncombine
+            if pet_blur_ops[i] is not None:
+                op_chain = CompositionOperator(
+                    pet_blur_ops[i],
+                    unshift_ops[i],
+                    choose_ops[i],
+                    uncombine_op
+                )
+            else:
+                op_chain = CompositionOperator(
+                    unshift_ops[i],
+                    choose_ops[i],
+                    uncombine_op
+                )
+            pet_dfs[i][j] = OperatorCompositionFunction(pet_dfs[i][j], op_chain)
 
     # flatten beds
     obj_funs = [df for bed in pet_dfs for df in bed]
@@ -191,7 +215,7 @@ def main(args) -> None:
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
-            gauss_fwhm=args.pet_gauss_fwhm,
+            gauss_fwhm=None,
         )
 
     # Set up data fidelity

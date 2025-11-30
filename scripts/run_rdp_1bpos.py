@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import (
+    OperatorCompositionFunction,
     ScaledFunction,
     SumFunction,
     SVRGFunction,
@@ -36,6 +37,7 @@ from setr.scripts.common import (
 from setr.utils import get_pet_data, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters, get_pet_am, get_spect_am
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
@@ -73,11 +75,11 @@ def run_rdp_ista(args, data):
     if args.modality.upper() == "PET":
 
         def get_am():
-            return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.gauss_fwhm)
+            return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=None)
     else:
 
         def get_am():
-            return get_spect_am(data, args.spect_res, True, args.gauss_fwhm)
+            return get_spect_am(data, args.spect_res, True, gauss_fwhm=args.gauss_fwhm)
 
     # Handle SPECT normalisation
     if args.modality.upper() == "SPECT":
@@ -96,10 +98,16 @@ def run_rdp_ista(args, data):
     for obj in objs:
         obj.set_up(data["initial_image"])
 
+    # Create Gaussian blurring operator for PET only
+    # SPECT uses image_data_processor which works correctly for SPECT projectors
+    blur_op = None
+    if args.modality.upper() == "PET":
+        blur_op = create_gaussian_blur_operator(args.gauss_fwhm, data["initial_image"])
+
     # Compute sensitivity inverse for BSREM preconditioner
     from setr.scripts.common import get_sensitivity_from_subset_objs
 
-    sensitivity = get_sensitivity_from_subset_objs(objs)
+    sensitivity = get_sensitivity_from_subset_objs(objs, adjoint_operator=blur_op)
 
     # Create sensitivity inverse
     s_inv = sensitivity.clone()
@@ -113,6 +121,13 @@ def run_rdp_ista(args, data):
     # Save sensitivity inverse
     s_inv.write(os.path.join(args.output_path, "s_inv.hv"))
     logging.info(f"Writing s_inv with max {s_inv.max()}")
+
+    # Wrap PET objectives with Gaussian blurring operator (if specified)
+    if blur_op is not None:
+        objs = [
+            OperatorCompositionFunction(obj, blur_op)
+            for obj in objs
+        ]
 
     # Set up RDP prior
     rdp_prior = RelativeDifferencePrior(

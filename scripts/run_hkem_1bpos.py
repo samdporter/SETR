@@ -34,6 +34,7 @@ from setr.scripts.hkem_common import (
 from setr.utils import get_pet_data, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_pet_am, get_spect_am
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 ISTA.update = ista_update_step  # Patch ISTA with our custom update step
 
@@ -70,11 +71,11 @@ def run_ista(args, data, guidance, hyperparams):
     if args.modality.upper() == "PET":
 
         def get_am():
-            return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.gauss_fwhm)
+            return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=None)
     else:
 
         def get_am():
-            return get_spect_am(data, args.spect_res, True, args.gauss_fwhm)
+            return get_spect_am(data, args.spect_res, True, gauss_fwhm=args.gauss_fwhm)
 
     # Handle SPECT normalisation
     if args.modality.upper() == "SPECT":
@@ -93,6 +94,16 @@ def run_ista(args, data, guidance, hyperparams):
     for obj in objs:
         obj.set_up(data["initial_image"])
 
+    # Create Gaussian blurring operator for PET only
+    # SPECT uses image_data_processor which works correctly for SPECT projectors
+    blur_op = None
+    if args.modality.upper() == "PET":
+        blur_op = create_gaussian_blur_operator(args.gauss_fwhm, data["initial_image"])
+
+        # Wrap PET objectives with Gaussian blurring operator (if specified)
+        if blur_op is not None:
+            objs = [OperatorCompositionFunction(obj, blur_op) for obj in objs]
+
     K = get_kernel_operator(
         args, guidance, data["initial_image"], data["acquisition_data"], hyperparams
     )
@@ -109,6 +120,8 @@ def run_ista(args, data, guidance, hyperparams):
     for obj in objs:
         sens = obj.get_subset_sensitivity(0)
         sens = sens.maximum(0)
+        if blur_op is not None:
+            sens = blur_op.adjoint(sens)
         sensitivities.append(sens * args.num_subsets)  # Scale by number of subsets
 
     # Create preconditioner

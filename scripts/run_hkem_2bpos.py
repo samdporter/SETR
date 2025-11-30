@@ -41,6 +41,7 @@ from setr.scripts.hkem_common import get_kernel_hyperparams, get_kernel_operator
 from setr.utils import get_pet_data_multiple_bed_pos
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_pet_am
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 DEBUG = False
 
@@ -86,7 +87,7 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
 
     # Get acquisition model function
     def get_am():
-        return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=args.pet_gauss_fwhm)
+        return get_pet_am(gpu=not args.no_gpu, gauss_fwhm=None)
 
     pet_dfs = [
         partitioner.data_partition(
@@ -106,8 +107,25 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
         for j in range(len(pet_dfs[i])):
             pet_dfs[i][j].set_up(tmpl)
 
+    # Create Gaussian blurring operators for PET (one per bed)
+    pet_blur_ops = [
+        create_gaussian_blur_operator(
+            args.pet_gauss_fwhm,
+            pet_data["bed_positions"][suffix]["template_image"]
+        )
+        for suffix in pet_data["bed_positions"]
+    ]
+
     # Get sensitivities for each bed position
-    pet_sens = [[f.get_subset_sensitivity(0).maximum(0) for f in df] for df in pet_dfs]
+    pet_sens = []
+    for blur_op, df in zip(pet_blur_ops, pet_dfs):
+        sens_list = []
+        for f in df:
+            sens = f.get_subset_sensitivity(0).maximum(0)
+            if blur_op is not None:
+                sens = blur_op.adjoint(sens)
+            sens_list.append(sens)
+        pet_sens.append(sens_list)
 
     # Set up shift operators
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
@@ -147,18 +165,26 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
         hyperparams,
     )
 
-    # Wrap PET objectives with uncombine/choose/unshift operators
+    # Wrap PET objectives with blur + uncombine/choose/unshift operators
     for i, suffix in enumerate(pet_data["bed_positions"]):
         for j in range(len(pet_dfs[i])):
-            pet_dfs[i][j] = OperatorCompositionFunction(
-                pet_dfs[i][j],
-                CompositionOperator(
+            # Build operator chain: blur -> unshift -> choose -> uncombine -> unzero_shift
+            if pet_blur_ops[i] is not None:
+                op_chain = CompositionOperator(
+                    pet_blur_ops[i],
                     unshift_ops[i],
                     choose_ops[i],
                     uncombine_op,
-                    unzero_shift_op,
-                ),
-            )
+                    unzero_shift_op
+                )
+            else:
+                op_chain = CompositionOperator(
+                    unshift_ops[i],
+                    choose_ops[i],
+                    uncombine_op,
+                    unzero_shift_op
+                )
+            pet_dfs[i][j] = OperatorCompositionFunction(pet_dfs[i][j], op_chain)
 
     # Combine objectives across bed positions
     f_list = [

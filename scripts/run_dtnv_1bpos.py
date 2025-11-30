@@ -8,7 +8,7 @@ import pstats
 from types import SimpleNamespace
 
 import numpy as np
-from cil.optimisation.functions import SumFunction
+from cil.optimisation.functions import OperatorCompositionFunction, SumFunction
 from cil.optimisation.operators import (
     BlockOperator,
     CompositionOperator,
@@ -44,6 +44,7 @@ from setr.scripts.dtnv_common import (
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
 from setr.utils.sirf import get_array, get_filters, get_s_inv_from_objs
+from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
@@ -133,16 +134,29 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     for obj_fun in spect_obj_funs:
         obj_fun.set_up(spect_data["initial_image"])
 
+    # Create Gaussian blurring operator for PET only
+    # SPECT uses image_data_processor which works correctly for SPECT projectors
+    pet_blur_op = create_gaussian_blur_operator(args.pet_gauss_fwhm, pet_data["initial_image"])
+
     # Get sensitivity image ^ -1 now before we complicate things
     s_inv = get_s_inv_from_objs(
         [pet_obj_funs, spect_obj_funs],
         EnhancedBlockDataContainer(pet_data["initial_image"], spect_data["initial_image"]),
         clamp_percentile=99.5,
+        adjoint_ops=[pet_blur_op, None],
     )
 
     for i, el in enumerate(s_inv.containers):
         s_inv.containers[i].write(os.path.join(args.output_path, f"s_inv_{i}.hv"))
 
+    # Wrap PET objectives with Gaussian blurring operator (if specified)
+    if pet_blur_op is not None:
+        pet_obj_funs = [
+            OperatorCompositionFunction(obj_fun, pet_blur_op)
+            for obj_fun in pet_obj_funs
+        ]
+
+    # Convert to block objectives
     pet_obj_funs = [
         get_block_objective(
             pet_data["initial_image"],
@@ -200,7 +214,7 @@ def main(args) -> None:
     def get_pet_am_with_res():
         return get_pet_am(
             not args.no_gpu,
-            gauss_fwhm=args.pet_gauss_fwhm,
+            gauss_fwhm=None,
         )
 
     def get_spect_am_with_res():
