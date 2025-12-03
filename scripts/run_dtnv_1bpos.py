@@ -237,7 +237,7 @@ def main(args) -> None:
         num_subsets,
     )
 
-    if args.flip:
+    if getattr(args, "flip", False):
         spect2pet = CompositionOperator(
             spect2pet, FlipOperator(axis=(0, 2), image=["initial_image"])
         )
