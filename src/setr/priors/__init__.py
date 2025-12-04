@@ -17,12 +17,14 @@ from .vtv.vtv import (
     TotalVariation,
     WeightedTotalVariation,
     WeightedVectorialTotalVariation,
+    WeightedLogVectorialTotalVariation,
 )
 
 __all__ = [
     "TotalVariation",
     "WeightedTotalVariation",
     "WeightedVectorialTotalVariation",
+    "WeightedLogVectorialTotalVariation",
     "MutualInformationGradientPrior",
     "MutualInformationImagePrior",
     "RelativeDifferencePrior",

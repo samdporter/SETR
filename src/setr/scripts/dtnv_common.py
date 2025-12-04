@@ -43,6 +43,7 @@ from setr.priors import (
     WeightedRDP,
     WeightedTotalVariation,
     WeightedVectorialTotalVariation,
+    WeightedLogVectorialTotalVariation,
 )
 from setr.utils.dynamic_range import (
     apply_dynamic_range_scaling,
@@ -562,20 +563,41 @@ def get_prior(
         for i, el in enumerate(tnv_kappas.containers):
             el.multiply(kappas.containers[i], out=el)
 
-        vtv = WeightedVectorialTotalVariation(
-            initial_estimates,
-            tnv_kappas,
-            args.delta,
-            smoothing=getattr(args, "smoothing", "charbonnier"),
-            anatomical=umap if args.directional_tnv else None,
-            stable=getattr(args, "stable", True),
-            tail_singular_values=getattr(args, "tail_singular_values", None),
-            both_directions=getattr(args, "tnv_both_directions", True),
-            stencil=getattr(args, "tnv_stencil", "6"),
-            max_step=getattr(args, "tnv_max_step", 1),
-            hessian=getattr(args, "hessian_type", "slow"),
-            bnd_cond=getattr(args, "tnv_bnd_cond", "Periodic"),
-        )
+        # Select TNV variant: standard or log-domain
+        use_log_tnv = getattr(args, "use_log_tnv", False)
+
+        if use_log_tnv:
+            vtv = WeightedLogVectorialTotalVariation(
+                initial_estimates,
+                tnv_kappas,
+                args.delta,
+                log_eps=getattr(args, "log_eps", 1e-6),
+                smoothing=getattr(args, "smoothing", "charbonnier"),
+                anatomical=umap if args.directional_tnv else None,
+                stable=getattr(args, "stable", True),
+                tail_singular_values=getattr(args, "tail_singular_values", None),
+                both_directions=getattr(args, "tnv_both_directions", True),
+                stencil=getattr(args, "tnv_stencil", "6"),
+                max_step=getattr(args, "tnv_max_step", 1),
+                hessian=getattr(args, "hessian_type", "slow"),
+                bnd_cond=getattr(args, "tnv_bnd_cond", "Periodic"),
+            )
+        else:
+            vtv = WeightedVectorialTotalVariation(
+                initial_estimates,
+                tnv_kappas,
+                args.delta,
+                smoothing=getattr(args, "smoothing", "charbonnier"),
+                anatomical=umap if args.directional_tnv else None,
+                stable=getattr(args, "stable", True),
+                tail_singular_values=getattr(args, "tail_singular_values", None),
+                both_directions=getattr(args, "tnv_both_directions", True),
+                stencil=getattr(args, "tnv_stencil", "6"),
+                max_step=getattr(args, "tnv_max_step", 1),
+                hessian=getattr(args, "hessian_type", "slow"),
+                bnd_cond=getattr(args, "tnv_bnd_cond", "Periodic"),
+            )
+
         tnv_prior = OperatorCompositionFunction(vtv, bo)
 
         # Apply TNV weighting
