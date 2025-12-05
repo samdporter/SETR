@@ -594,7 +594,7 @@ class WeightedLogVectorialTotalVariation(Function):
         geometry,
         weights,
         delta,
-        log_eps=1e-6,
+        log_eps_values,
         smoothing="charbonnier",
         norm="nuclear",
         anatomical=None,
@@ -632,8 +632,13 @@ class WeightedLogVectorialTotalVariation(Function):
         self.inv_weights = torch.reciprocal(self.weights)
         self.inv_weights = torch.nan_to_num(self.inv_weights, nan=0.0, neginf=0.0, posinf=0.0)
 
-        # Convert log_eps to torch tensor with same device/dtype as weights
-        self.log_eps = torch.tensor(log_eps, device=self.weights.device, dtype=self.weights.dtype)
+        # Convert per-modality log_eps values to torch tensor
+        # Shape: (M,) where M is number of modalities (typically 2 for PET+SPECT)
+        self.log_eps = torch.tensor(
+            log_eps_values,
+            device=self.weights.device,
+            dtype=self.weights.dtype
+        )
 
         if tail_singular_values is not None:
             print(f"tail_singular_values = {tail_singular_values}")
@@ -651,9 +656,11 @@ class WeightedLogVectorialTotalVariation(Function):
     def __call__(self, x):
         x_arr = self.bdc2a.direct(x)
 
-        # Clamp to non-negative and apply log transform
+        # Clamp to non-negative and apply log transform with per-modality epsilon
         x_clamped = torch.clamp(x_arr, min=0.0)
-        v = torch.log(x_clamped + self.log_eps)
+        # Reshape log_eps from (M,) to (1,1,1,M) for broadcasting with (nx,ny,nz,M)
+        log_eps_broadcast = self.log_eps.view(1, 1, 1, -1)
+        v = torch.log(x_clamped + log_eps_broadcast)
 
         # Compute Jacobian of v
         J = self.jacobian.direct(v)
@@ -666,9 +673,11 @@ class WeightedLogVectorialTotalVariation(Function):
     def gradient(self, x, out=None):
         x_arr = self.bdc2a.direct(x)
 
-        # Clamp to non-negative and apply log transform
+        # Clamp to non-negative and apply log transform with per-modality epsilon
         x_clamped = torch.clamp(x_arr, min=0.0)
-        v = torch.log(x_clamped + self.log_eps)
+        # Reshape log_eps from (M,) to (1,1,1,M) for broadcasting
+        log_eps_broadcast = self.log_eps.view(1, 1, 1, -1)
+        v = torch.log(x_clamped + log_eps_broadcast)
 
         # Compute Jacobian of v
         J = self.jacobian.direct(v)
@@ -681,8 +690,8 @@ class WeightedLogVectorialTotalVariation(Function):
         # Apply Jacobian adjoint to get gradient w.r.t. v
         g_v = self.jacobian.adjoint(inner)
 
-        # Chain rule: multiply by 1/(u + log_eps)
-        chain_multiplier = torch.reciprocal(x_clamped + self.log_eps)
+        # Chain rule: multiply by 1/(u + log_eps) with per-modality epsilon
+        chain_multiplier = torch.reciprocal(x_clamped + log_eps_broadcast)
         g_u = g_v * chain_multiplier
 
         return self.bdc2a.adjoint(self._dV*g_u, out=out)
@@ -1099,10 +1108,12 @@ class WeightedLogVectorialTotalVariation(Function):
             - "frobenius_surrogate_pd": Frobenius surrogate (positive, ultra-fast)
             - "vector_tv_per_modality": Per‑modality vector‑norm exact radial
         """
-        # Transform to log-domain
+        # Transform to log-domain with per-modality epsilon
         x_arr = self.bdc2a.direct(x)
         x_clamped = torch.clamp(x_arr, min=0.0)
-        v = torch.log(x_clamped + self.log_eps)
+        # Reshape log_eps from (M,) to (1,1,1,M) for broadcasting
+        log_eps_broadcast = self.log_eps.view(1, 1, 1, -1)
+        v = torch.log(x_clamped + log_eps_broadcast)
 
         # Compute TNV Hessian diagonal in log-domain (dispatches to appropriate method)
         if self.hessian == "svd_principal_alpha":
@@ -1119,8 +1130,8 @@ class WeightedLogVectorialTotalVariation(Function):
                 f"Options: 'svd_principal_alpha', 'mm_jensen', 'frobenius_surrogate_pd', 'vector_tv_per_modality'"
             )
 
-        # Chain rule for second derivative: H_u ≈ H_v / (u + log_eps)^2
-        chain_multiplier = torch.reciprocal((x_clamped + self.log_eps) ** 2)
+        # Chain rule for second derivative: H_u ≈ H_v / (u + log_eps)^2 with per-modality epsilon
+        chain_multiplier = torch.reciprocal((x_clamped + log_eps_broadcast) ** 2)
         H_u = H_v * chain_multiplier
         H_u = torch.clamp(H_u, min=epsilon)
 

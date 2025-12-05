@@ -514,6 +514,8 @@ def get_prior(
     initial_estimates,
     bo,
     kappas=None,
+    pet_scale=None,
+    spect_scale=None,
 ):
     """
     Set up the prior function for image reconstruction.
@@ -567,11 +569,48 @@ def get_prior(
         use_log_tnv = getattr(args, "use_log_tnv", False)
 
         if use_log_tnv:
+            # Compute per-modality epsilon from dynamic ranges
+            epsilon_divisor = float(getattr(args, "epsilon_divisor", 100.0))
+
+            # Extract arrays from initial_estimates (already in common geometry)
+            pet_arr = get_array(initial_estimates[0])
+            spect_arr = get_array(initial_estimates[1])
+
+            # Filter for valid (positive, finite) values before percentile computation
+            pet_valid = pet_arr[np.isfinite(pet_arr) & (pet_arr > 0)]
+            spect_valid = spect_arr[np.isfinite(spect_arr) & (spect_arr > 0)]
+
+            # Use pet_scale and spect_scale if provided, otherwise compute from percentiles
+            if pet_scale is not None and spect_scale is not None:
+                pet_range = pet_scale
+                spect_range = spect_scale
+            else:
+                # Fallback: compute from images directly
+                dynamic_percentile = getattr(args, "dynamic_percentile", 95.0)
+                pet_range = (
+                    np.percentile(pet_valid, dynamic_percentile)
+                    if len(pet_valid) > 0 else 1.0
+                )
+                spect_range = (
+                    np.percentile(spect_valid, dynamic_percentile)
+                    if len(spect_valid) > 0 else 1.0
+                )
+
+            # Compute epsilon values with fallback for zero/near-zero ranges
+            log_eps_pet = max(pet_range / epsilon_divisor, 1e-10)
+            log_eps_spect = max(spect_range / epsilon_divisor, 1e-10)
+            log_eps_values = [log_eps_pet, log_eps_spect]
+
+            logging.info(
+                "Auto-computed log_eps: PET=%.6g, SPECT=%.6g (from dynamic ranges / %.3g)",
+                log_eps_pet, log_eps_spect, epsilon_divisor
+            )
+
             vtv = WeightedLogVectorialTotalVariation(
                 initial_estimates,
                 tnv_kappas,
                 args.delta,
-                log_eps=getattr(args, "log_eps", 1e-6),
+                log_eps_values=log_eps_values,
                 smoothing=getattr(args, "smoothing", "charbonnier"),
                 anatomical=umap if args.directional_tnv else None,
                 stable=getattr(args, "stable", True),

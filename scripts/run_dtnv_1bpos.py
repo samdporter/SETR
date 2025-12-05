@@ -32,7 +32,6 @@ from setr.scripts.dtnv_common import (
     apply_dynamic_range_scaling,
     build_variance_reduced_function,
     dynamic_range_scale_sirf,
-    estimate_delta_from_gradients,
     get_algorithm,
     get_block_objective,
     get_callbacks,
@@ -256,37 +255,68 @@ def main(args) -> None:
         combined[0],
         combined[1],
     )
+
     # Apply consistent scaling to all prior weights
-    apply_dynamic_range_scaling(args, pet_scale, spect_scale)
+    # Skip this for log TNV since the log transform already normalizes dynamic range
+    use_log_tnv = getattr(args, "use_log_tnv", False)
+    if not use_log_tnv:
+        apply_dynamic_range_scaling(args, pet_scale, spect_scale)
+        logging.info(
+            "Applied dynamic range scaling: pet_scale=%.6g, spect_scale=%.6g",
+            pet_scale,
+            spect_scale,
+        )
+    else:
+        logging.info(
+            "Skipping dynamic range scaling for log-TNV "
+            "(alpha=%.6g, beta=%.6g remain as configured)",
+            args.alpha,
+            args.beta,
+        )
 
     # Set delta (smoothing parameter) if not provided
     if args.delta is None:
-        percentile = getattr(args, "delta_percentile", 99.9)
-        divisor = getattr(args, "delta_gradient_divisor", 5.0)
-        delta_est = estimate_delta_from_gradients(
-            combined,
-            scales=(args.alpha, args.beta),
-            percentile=percentile,
-            divisor=divisor,
-        )
-        if delta_est is not None:
-            args.delta = delta_est
+        use_log_tnv = getattr(args, "use_log_tnv", False)
+
+        if use_log_tnv:
+            # For log TNV: use fixed relative smoothing parameter
+            # The log transform normalizes dynamic range, making delta scale-invariant
+            divisor = getattr(args, "delta_divisor", 10.0)
+            args.delta = 1.0 / divisor
             logging.info(
-                "Auto-set delta to %.6g using %sth percentile scaled gradients / %.3g",
+                "Auto-set delta to %.6g for log-TNV (1 / %.3g divisor)",
                 args.delta,
-                percentile,
                 divisor,
             )
         else:
-            args.delta = (
-                min(
-                    args.alpha * initial_estimates.containers[0].max(),
-                    args.beta * initial_estimates.containers[1].max(),
-                )
-                / 1e3
-            )
-            logging.warning(
-                "Falling back to intensity heuristic for delta: %.6g", args.delta
+            # For standard TNV: estimate from scaled image intensities
+            # Delta should be ~divisor fraction of the 95th percentile of scaled intensities
+            scaled_pet = combined[0].clone()
+            scaled_spect = combined[1].clone()
+            scaled_pet *= pet_scale
+            scaled_spect *= spect_scale
+
+            # Compute weighted image intensities
+            weighted_pet = args.alpha * get_array(scaled_pet)
+            weighted_spect = args.beta * get_array(scaled_spect)
+
+            percentile = getattr(args, "delta_percentile", 99.9)
+            divisor = getattr(args, "delta_divisor", 5.0)
+
+            # Take minimum of the two weighted image scales
+            pet_val = np.percentile(weighted_pet[weighted_pet > 0], percentile)
+            spect_val = np.percentile(weighted_spect[weighted_spect > 0], percentile)
+            scale_val = min(pet_val, spect_val)
+
+            args.delta = scale_val / divisor
+            logging.info(
+                "Auto-set delta to %.6g using %sth percentile of scaled intensities / %.3g "
+                "(ratio alpha/delta=%.1f, beta/delta=%.1f)",
+                args.delta,
+                percentile,
+                divisor,
+                args.alpha / args.delta,
+                args.beta / args.delta,
             )
 
     save_args(args, "args.csv")
@@ -301,7 +331,10 @@ def main(args) -> None:
         priors_list = []
     else:
         # Set up the prior.
-        priors_list = get_prior(args, umap, combined, bo, kappas)
+        priors_list = get_prior(
+            args, umap, combined, bo, kappas,
+            pet_scale=pet_scale, spect_scale=spect_scale
+        )
         for i, p in enumerate(priors_list):
             attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
