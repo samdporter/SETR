@@ -581,9 +581,11 @@ def get_prior(
             spect_valid = spect_arr[np.isfinite(spect_arr) & (spect_arr > 0)]
 
             # Use pet_scale and spect_scale if provided, otherwise compute from percentiles
+            # NOTE: pet_scale and spect_scale are INVERSE scaling factors (1/dynamic_range)
+            # so we need to invert them to get actual dynamic ranges
             if pet_scale is not None and spect_scale is not None:
-                pet_range = pet_scale
-                spect_range = spect_scale
+                pet_range = 1.0 / pet_scale
+                spect_range = 1.0 / spect_scale
             else:
                 # Fallback: compute from images directly
                 dynamic_percentile = getattr(args, "dynamic_percentile", 95.0)
