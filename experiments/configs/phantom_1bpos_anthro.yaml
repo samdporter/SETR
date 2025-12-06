@@ -6,7 +6,7 @@ spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phant
 output_path: "/home/sam/working/synergistic_recon/output/anthro"
 
 #== Subset configuration
-num_subsets: [36, 18]  # [PET, SPECT]
+num_subsets: [18, 18]  # [PET, SPECT]
 
 #== Resolution modeling
 pet_gauss_fwhm: [5.61, 4.83, 4.93]

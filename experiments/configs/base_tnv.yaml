@@ -2,7 +2,7 @@
 # These parameters are shared across all TNV phantom experiments
 
 #== Reconstruction settings
-num_epochs: 100
+num_epochs: 25
 initial_step_size: 1.0
 relaxation_eta: 0.01
 use_scatter: true

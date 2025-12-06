@@ -6,9 +6,9 @@ experiment_type: "phantom_algorithm"  # Special type for phantom experiments
 
 # SGE resource requirements
 sge:
-  runtime: "24:00:00"  # 24 hours per experiment
-  memory: "32G"        # 32GB memory per job
-  cores: 2             # 2 cores per job
+  runtime: "48:00:00"  # 48 hours per experiment
+  memory: "60G"        # 60GB memory per job
+  cores: 1             # 1 core per job
   queue: null          # Use default queue
   gpu: true            # Enable GPU
 

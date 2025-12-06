@@ -10,19 +10,6 @@ sampling: "sequential"  # Ordered subsets
 # PET HKEM: 9 subsets
 # SPECT HKEM: 12 subsets
 
-#== Kernel operator parameters (can be overridden in algo configs)
-num_neighbours: 5
-num_non_zero_features: 1
-normalize_features: true
-normalize_kernel: true
-use_mask: false
-mask_k: null
-recalc_mask: false
-distance_weighting: false
-hybrid: true
-kernel_backend: "auto"
-only_2D: false
-
 #== Preconditioner parameters
 freeze_iter: 90  # Freeze at 90% of iterations
 

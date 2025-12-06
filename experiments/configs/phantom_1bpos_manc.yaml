@@ -6,7 +6,7 @@ spect_data_path: "/home/storage/prepared_data/phantom_data/manc_nema_phantom_dat
 output_path: "/home/sam/working/synergistic_recon/output/manc"
 
 #== Subset configuration
-num_subsets: [9, 12]  # [PET, SPECT]
+num_subsets: [18, 14]  # [PET, SPECT]
 
 #== Resolution modeling
 pet_gauss_fwhm: [5.61, 4.83, 4.93]
