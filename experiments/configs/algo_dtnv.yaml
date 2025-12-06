@@ -1,0 +1,22 @@
+# dTNV (Directional TNV) algorithm configuration
+# Uses CT anatomical guidance via gradient projection
+
+#== Prior settings
+no_prior: false
+use_tnv_prior: true
+use_modality_specific_priors: false
+
+#== TNV (vectorial) prior settings
+directional_tnv: true  # KEY: Enable CT guidance via gradient projection
+gamma_tnv: 1.0
+alpha: 0.02  # Weight for PET in TNV
+beta: 0.02   # Weight for SPECT in TNV
+use_log_tnv: false
+tnv_stencil: "18"
+tnv_max_step: 2
+tnv_both_directions: false
+tail_singular_values: null
+stable: false
+
+#== Kappa weighting (cross-modal)
+use_kappa: false

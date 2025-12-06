@@ -1,0 +1,13 @@
+# HKEM SPECT stage configuration (Stage 1: SPECT with CT guidance)
+
+#== Algorithm settings
+modality: "SPECT"
+method: "ista"
+guidance: "attenuation"  # Uses CT/umap as anatomical guidance
+num_subsets: 12  # SPECT: 12 subsets
+
+#== Kernel operator parameters (sigma values specific to SPECT)
+sigma_anatomical: 1.0
+sigma_emission: 0.1
+sigma_distance_anatomical: 5.0
+sigma_distance_emission: 5.0

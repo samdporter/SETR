@@ -1,0 +1,35 @@
+# Base configuration for HKEM algorithm
+# HKEM uses ordered subsets (SGFunction), not variance reduction
+
+#== Reconstruction settings
+num_epochs: 10  # HKEM: 10 epochs for both PET and SPECT
+step_size: 1
+sampling: "sequential"  # Ordered subsets
+
+#== Note: num_subsets is phantom-specific
+# PET HKEM: 9 subsets
+# SPECT HKEM: 12 subsets
+
+#== Kernel operator parameters (can be overridden in algo configs)
+num_neighbours: 5
+num_non_zero_features: 1
+normalize_features: true
+normalize_kernel: true
+use_mask: false
+mask_k: null
+recalc_mask: false
+distance_weighting: false
+hybrid: true
+kernel_backend: "auto"
+only_2D: false
+
+#== Preconditioner parameters
+freeze_iter: 90  # Freeze at 90% of iterations
+
+#== Forward models
+no_gpu: false
+use_scatter: true
+
+#== Miscellaneous
+seed: null
+working_path: "/home/sam/working/synergistic_recon/tmp"

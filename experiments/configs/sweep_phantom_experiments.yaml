@@ -1,0 +1,34 @@
+# Sweep configuration for phantom experiments
+# Runs all 15 combinations: 3 phantoms × 5 algorithms
+
+sweep_name: "phantom_experiments"
+experiment_type: "phantom_algorithm"  # Special type for phantom experiments
+
+# SGE resource requirements
+sge:
+  runtime: "24:00:00"  # 24 hours per experiment
+  memory: "32G"        # 32GB memory per job
+  cores: 2             # 2 cores per job
+  queue: null          # Use default queue
+  gpu: true            # Enable GPU
+
+# Phantom and algorithm combinations
+# This will create a 3x5 grid = 15 experiments
+phantoms:
+  - manc
+  - anthro
+  - nema
+
+algorithms:
+  - hkem
+  - dtnv
+  - tnv
+  - log_dtnv
+  - log_tnv
+
+# Optional overrides for all experiments
+# Uncomment and modify as needed
+config_overrides: {}
+  # num_epochs: 100
+  # alpha: 0.02
+  # beta: 0.02

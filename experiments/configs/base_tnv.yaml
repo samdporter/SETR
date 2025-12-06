@@ -1,0 +1,27 @@
+# Base configuration for TNV-based algorithms (dTNV, TNV, log variants)
+# These parameters are shared across all TNV phantom experiments
+
+#== Reconstruction settings
+num_epochs: 100
+initial_step_size: 1.0
+relaxation_eta: 0.01
+use_scatter: true
+variance_reduction: "svrg"  # SVRG for variance reduction
+
+#== Regularisation smoothing
+delta: null  # Auto-computed if not set
+dynamic_percentile: 95.0
+delta_divisor: 10.0
+epsilon_divisor: 100.0
+
+#== Forward models
+no_gpu: false
+keep_all_views_in_cache: true
+
+#== Miscellaneous
+save_images: true
+save_gradients: false
+save_preconditioners: false
+seed: null
+profile: false
+working_path: "/home/sam/working/synergistic_recon/tmp"

@@ -1,0 +1,13 @@
+# HKEM PET stage configuration (Stage 2: PET with SPECT emission guidance)
+
+#== Algorithm settings
+modality: "PET"
+method: "ista"
+guidance: "emission"  # Uses resampled SPECT as emission guidance
+num_subsets: 9  # PET: 9 subsets
+
+#== Kernel operator parameters (sigma values specific to PET)
+sigma_anatomical: 3.0
+sigma_emission: 1.0
+sigma_distance_anatomical: 5.0
+sigma_distance_emission: 5.0

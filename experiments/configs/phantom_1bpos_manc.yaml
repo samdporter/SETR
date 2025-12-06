@@ -1,0 +1,17 @@
+# Manchester NEMA phantom-specific configuration
+
+#== Data paths
+pet_data_path: "/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/PET"
+spect_data_path: "/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/SPECT"
+output_path: "/home/sam/working/synergistic_recon/output/manc"
+
+#== Subset configuration
+num_subsets: [9, 12]  # [PET, SPECT]
+
+#== Resolution modeling
+pet_gauss_fwhm: [5.61, 4.83, 4.93]
+spect_gauss_fwhm: [6.78, 6.78, 6.78]
+spect_res: [1.21, 0.027, false]
+
+#== Phantom-specific settings
+flip: true
