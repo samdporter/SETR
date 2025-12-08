@@ -186,6 +186,13 @@ class WeightedVectorialTotalVariation(Function):
         eps_sqrt = get_sqrt_epsilon(A.dtype)
         sigma_avg = torch.sqrt(sigma_avg_sq + eps_sqrt)  # stabilize
 
+        eps_floor = torch.tensor(float(self.vtv.eps), device=A.device, dtype=A.dtype)
+        sigma_safe = torch.maximum(sigma_avg, eps_floor)
+
+        # Floor by smoothing epsilon to preserve the Charbonnier/Fair limit
+        eps_floor = torch.tensor(float(self.vtv.eps), device=A.device, dtype=A.dtype)
+        sigma_safe = torch.maximum(sigma_avg, eps_floor)
+
         # Select smoothing function derivative
         if self.smoothing == "charbonnier":
             from .common import charbonnier_grad
@@ -203,8 +210,7 @@ class WeightedVectorialTotalVariation(Function):
             phi_prime = torch.ones_like(sigma_avg)
 
         # Jensen bound: ω_j = φ'(σ_avg) / (2·σ_avg)
-        eps_div = get_division_epsilon(A.dtype)
-        omega = phi_prime / (2.0 * sigma_avg + eps_div)  # (nx, ny, nz)
+        omega = phi_prime / (2.0 * sigma_safe)  # (nx, ny, nz)
 
         # Get Jacobian sensitivity: per-direction scaling factors
         S = self.jacobian.sensitivity(x_arr)  # (nx, ny, nz, M, d)
@@ -277,6 +283,9 @@ class WeightedVectorialTotalVariation(Function):
         eps_sqrt = get_sqrt_epsilon(A.dtype)
         A_frob = torch.sqrt(A_frob_sq + eps_sqrt)  # stabilize
 
+        eps_floor = torch.tensor(float(self.vtv.eps), device=A.device, dtype=A.dtype)
+        A_frob_safe = torch.maximum(A_frob, eps_floor)
+
         # Select smoothing function derivative
         if self.smoothing == "charbonnier":
             from .common import charbonnier_grad
@@ -295,8 +304,7 @@ class WeightedVectorialTotalVariation(Function):
 
         # Hessian surrogate weight: M · φ'(||A||_F) / ||A||_F
         M = A.shape[-2]  # number of modalities
-        eps_div = get_division_epsilon(A.dtype)
-        omega = M * phi_prime / (A_frob + eps_div)  # (nx, ny, nz)
+        omega = M * phi_prime / A_frob_safe  # (nx, ny, nz)
 
         # Get Jacobian sensitivity (same as fast method)
         S = self.jacobian.sensitivity(x_arr)  # (nx, ny, nz, M, d)
@@ -358,11 +366,11 @@ class WeightedVectorialTotalVariation(Function):
 
         phi1_r = phi1(r, self.vtv.eps)
         phi2_r = phi2(r, self.vtv.eps)
-        eps_div = get_division_epsilon(A.dtype)
-        alpha = phi1_r / (r + eps_div)
+        eps_floor = torch.tensor(float(self.vtv.eps), device=A.device, dtype=A.dtype)
+        r_safe = torch.maximum(r, eps_floor)
+        alpha = phi1_r / r_safe
         beta = phi2_r - alpha
-
-        frac = (A * A) / (r2.unsqueeze(-1) + eps_div)  # (..., M, d)
+        frac = (A * A) / (r_safe.unsqueeze(-1) ** 2)  # (..., M, d)
         h_dir = alpha.unsqueeze(-1) + beta.unsqueeze(-1) * frac
 
         # Sensitivity mapping
@@ -786,8 +794,7 @@ class WeightedLogVectorialTotalVariation(Function):
             phi_prime = torch.ones_like(sigma_avg)
 
         # Jensen bound: ω_j = φ'(σ_avg) / (2·σ_avg)
-        eps_div = get_division_epsilon(A.dtype)
-        omega = phi_prime / (2.0 * sigma_avg + eps_div)  # (nx, ny, nz)
+        omega = phi_prime / (2.0 * sigma_safe)  # (nx, ny, nz)
 
         # Get Jacobian sensitivity: per-direction scaling factors
         S = self.jacobian.sensitivity(v_arr)  # (nx, ny, nz, M, d)
@@ -864,6 +871,9 @@ class WeightedLogVectorialTotalVariation(Function):
         eps_sqrt = get_sqrt_epsilon(A.dtype)
         A_frob = torch.sqrt(A_frob_sq + eps_sqrt)  # stabilize
 
+        eps_floor = torch.tensor(float(self.vtv.eps), device=A.device, dtype=A.dtype)
+        A_frob_safe = torch.maximum(A_frob, eps_floor)
+
         # Select smoothing function derivative
         if self.smoothing == "charbonnier":
             from .common import charbonnier_grad
@@ -882,8 +892,7 @@ class WeightedLogVectorialTotalVariation(Function):
 
         # Hessian surrogate weight: M · φ'(||A||_F) / ||A||_F
         M = A.shape[-2]  # number of modalities
-        eps_div = get_division_epsilon(A.dtype)
-        omega = M * phi_prime / (A_frob + eps_div)  # (nx, ny, nz)
+        omega = M * phi_prime / A_frob_safe  # (nx, ny, nz)
 
         # Get Jacobian sensitivity (same as fast method)
         S = self.jacobian.sensitivity(v_arr)  # (nx, ny, nz, M, d)
@@ -947,11 +956,11 @@ class WeightedLogVectorialTotalVariation(Function):
 
         phi1_r = phi1(r, self.vtv.eps)
         phi2_r = phi2(r, self.vtv.eps)
-        eps_div = get_division_epsilon(A.dtype)
-        alpha = phi1_r / (r + eps_div)
+        eps_floor = torch.tensor(float(self.vtv.eps), device=A.device, dtype=A.dtype)
+        r_safe = torch.maximum(r, eps_floor)
+        alpha = phi1_r / r_safe
         beta = phi2_r - alpha
-
-        frac = (A * A) / (r2.unsqueeze(-1) + eps_div)  # (..., M, d)
+        frac = (A * A) / (r_safe.unsqueeze(-1) ** 2)  # (..., M, d)
         h_dir = alpha.unsqueeze(-1) + beta.unsqueeze(-1) * frac
 
         # Sensitivity mapping
