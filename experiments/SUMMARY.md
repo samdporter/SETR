@@ -87,16 +87,16 @@ experiments/
 
 ```bash
 # Test single experiment (dry-run)
-python scripts/run_phantom_experiments.py --phantom manc --algorithm hkem --dry-run
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm hkem --dry-run
 
 # Run single experiment
-python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
 
 # Run all algorithms for one phantom
-python scripts/run_phantom_experiments.py --phantom manc --all-algorithms
+python experiments/scripts/run_phantom_experiments.py --phantom manc --all-algorithms
 
 # Run all 15 experiments
-python scripts/run_phantom_experiments.py --batch-all
+python experiments/scripts/run_phantom_experiments.py --batch-all
 ```
 
 ### Validation Results

@@ -121,7 +121,9 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
     for blur_op, df in zip(pet_blur_ops, pet_dfs):
         sens_list = []
         for f in df:
-            sens = f.get_subset_sensitivity(0).maximum(0)
+            # Extract underlying function if wrapped in OperatorCompositionFunction
+            f_fn = f.function if isinstance(f, OperatorCompositionFunction) else f
+            sens = f_fn.get_subset_sensitivity(0).maximum(0)
             if blur_op is not None:
                 sens = blur_op.adjoint(sens)
             sens_list.append(sens)

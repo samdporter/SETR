@@ -217,44 +217,44 @@ experiments/configs/
 
 ### Running Experiments
 
-The master script `scripts/run_phantom_experiments.py` orchestrates all experiments.
+The master script `experiments/scripts/run_phantom_experiments.py` orchestrates all experiments.
 
 #### Single Experiment
 
 ```bash
 # Run Manchester phantom with HKEM
-python scripts/run_phantom_experiments.py --phantom manc --algorithm hkem
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm hkem
 
 # Run Anthropomorphic phantom with dTNV
-python scripts/run_phantom_experiments.py --phantom anthro --algorithm dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm dtnv
 
 # Run NEMA phantom with TNV
-python scripts/run_phantom_experiments.py --phantom nema --algorithm tnv
+python experiments/scripts/run_phantom_experiments.py --phantom nema --algorithm tnv
 ```
 
 #### All Algorithms for One Phantom
 
 ```bash
 # Run all three algorithms for Manchester phantom
-python scripts/run_phantom_experiments.py --phantom manc --all-algorithms
+python experiments/scripts/run_phantom_experiments.py --phantom manc --all-algorithms
 ```
 
 #### Batch Mode - All Combinations
 
 ```bash
 # Run all 9 experiments (3 phantoms × 3 algorithms)
-python scripts/run_phantom_experiments.py --batch-all
+python experiments/scripts/run_phantom_experiments.py --batch-all
 ```
 
 #### Parameter Overrides
 
 ```bash
 # Override regularization parameter
-python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv \
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv \
     --override alpha=0.05
 
 # Override multiple parameters
-python scripts/run_phantom_experiments.py --phantom anthro --algorithm tnv \
+python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm tnv \
     --override num_epochs=200 --override alpha=0.1
 ```
 
@@ -262,10 +262,10 @@ python scripts/run_phantom_experiments.py --phantom anthro --algorithm tnv \
 
 ```bash
 # Preview what would be run without executing
-python scripts/run_phantom_experiments.py --phantom manc --algorithm hkem --dry-run
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm hkem --dry-run
 
 # Dry run for all combinations
-python scripts/run_phantom_experiments.py --batch-all --dry-run
+python experiments/scripts/run_phantom_experiments.py --batch-all --dry-run
 ```
 
 ## Parameter Consistency
@@ -363,7 +363,7 @@ Before running experiments, validate that:
 
 2. **Config composition works**:
    ```bash
-   python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv --dry-run
+   python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv --dry-run
    ```
 
 3. **Output directories are writable**:
@@ -377,7 +377,7 @@ Test with a single short experiment first:
 
 ```bash
 # Run one experiment with reduced epochs
-python scripts/run_phantom_experiments.py --phantom manc --algorithm tnv \
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm tnv \
     --override num_epochs=2
 ```
 

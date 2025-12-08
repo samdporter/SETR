@@ -12,7 +12,7 @@ from sirf.Reg import NiftiImageData3DDisplacement
 from sirf.STIR import ImageData
 
 from setr.cil_extensions.operators import NiftyResampleOperator
-from setr.utils import get_pet_data, get_pet_data_multiple_bed_pos, get_spect_data
+from setr.utils import get_pet_data, get_pet_data_multiple_bed_pos
 from setr.utils.io import apply_overrides, load_config
 
 
@@ -55,18 +55,16 @@ def main():
         if key in cfg:
             cfg[key] = os.path.expandvars(cfg[key])
 
-    if cfg["use_2bpos"]:
+    if getattr(cfg, "use_2bpos", False):
         pet_data = get_pet_data_multiple_bed_pos(
             cfg["pet_dir"], tof=cfg["use_tof"], suffixes=["_f1b1", "_f2b1"]
         )
     else:
-        pet_data = get_pet_data(cfg["pet_dir"], tof=cfg["use_tof"])
+        pet_data = get_pet_data(cfg["pet_dir"])
     pet_template = pet_data["template_image"]
     spect_recon_path = cfg["spect_reconstruction"]
     transform_path = cfg["transform_file"]
     output_path = cfg["output_file"]
-
-    spect_data = get_spect_data(cfg["spect_dir"])
 
     logging.info(f"Loading SPECT reconstruction: {spect_recon_path}")
     spect_recon = ImageData(spect_recon_path)

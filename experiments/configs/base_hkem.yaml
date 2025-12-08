@@ -20,3 +20,9 @@ use_scatter: true
 #== Miscellaneous
 seed: null
 working_path: "/home/sam/working/synergistic_recon/tmp"
+
+#== Kernel hyperparameters (shared defaults)
+num_neighbours: 5
+num_non_zero_features: 1
+hybrid: true
+only_2D: false

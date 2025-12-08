@@ -523,10 +523,12 @@ def get_s_inv_from_objs(
         raise ValueError("adjoint_ops must match number of objective function blocks")
     for i, el in enumerate(s_inv.containers):
         for j, obj_fun in enumerate(obj_funs[i]):
+            # Extract underlying function if wrapped in OperatorCompositionFunction
+            obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
             if j == 0:
-                sens = obj_fun.get_subset_sensitivity(0)
+                sens = obj_fn.get_subset_sensitivity(0)
             else:
-                sens += obj_fun.get_subset_sensitivity(0)
+                sens += obj_fn.get_subset_sensitivity(0)
         # Compute maximum with zero (returning a new container)
         sens.maximum(0, out=sens)
         adjoint_op = adjoint_ops[i]
@@ -579,10 +581,12 @@ def get_s_inv_from_subset_objs(
     # get subset_sensitivity BDC for preconditioner
     s_inv = initial_estimate.get_uniform_copy(0)
     for j, obj_fun in enumerate(obj_funs):
+        # Extract underlying function if wrapped in OperatorCompositionFunction
+        obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
         if j == 0:
-            sens = obj_fun.get_subset_sensitivity(0)
+            sens = obj_fn.get_subset_sensitivity(0)
         else:
-            sens += obj_fun.get_subset_sensitivity(0)
+            sens += obj_fn.get_subset_sensitivity(0)
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
     if adjoint_operator is not None:
@@ -600,10 +604,12 @@ def get_s_inv_from_subset_objs(
 def get_sensitivity_from_subset_objs(obj_funs, initial_estimate, adjoint_operator=None):
     # get subset_sensitivity BDC for preconditioner
     for j, obj_fun in enumerate(obj_funs):
+        # Extract underlying function if wrapped in OperatorCompositionFunction
+        obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
         if j == 0:
-            sens = obj_fun.get_subset_sensitivity(0)
+            sens = obj_fn.get_subset_sensitivity(0)
         else:
-            sens += obj_fun.get_subset_sensitivity(0)
+            sens += obj_fn.get_subset_sensitivity(0)
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
     if adjoint_operator is not None:
@@ -615,7 +621,9 @@ def get_sensitivities_from_subset_objs(obj_funs, initial_estimate):
     # get subset_sensitivity BDC for preconditioner
     sens_list = []
     for obj_fun in obj_funs:
-        sens = obj_fun.get_subset_sensitivity(0)
+        # Extract underlying function if wrapped in OperatorCompositionFunction
+        obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
+        sens = obj_fn.get_subset_sensitivity(0)
         sens = sens.maximum(0)
         sens_list.append(sens)
     return sens

@@ -406,7 +406,7 @@ sge:
 Ensure the master script exists:
 
 ```bash
-ls -l scripts/run_phantom_experiments.py
+ls -l experiments/scripts/run_phantom_experiments.py
 ```
 
 If missing, the array job cannot run.
@@ -417,8 +417,8 @@ If missing, the array job cannot run.
 
 ```bash
 # Run each experiment one by one
-python scripts/run_phantom_experiments.py --phantom manc --algorithm hkem
-python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm hkem
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
 # ... repeat 15 times
 ```
 

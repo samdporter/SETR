@@ -22,40 +22,40 @@ See [ARRAY_JOBS.md](ARRAY_JOBS.md) for details.
 Run all 15 phantom reconstruction experiments sequentially on your local machine:
 
 ```bash
-python scripts/run_phantom_experiments.py --batch-all
+python experiments/scripts/run_phantom_experiments.py --batch-all
 ```
 
 ## Individual Experiments
 
 ```bash
 # Manchester NEMA
-python scripts/run_phantom_experiments.py --phantom manc --algorithm hkem
-python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
-python scripts/run_phantom_experiments.py --phantom manc --algorithm tnv
-python scripts/run_phantom_experiments.py --phantom manc --algorithm log_dtnv
-python scripts/run_phantom_experiments.py --phantom manc --algorithm log_tnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm hkem
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm tnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm log_dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm log_tnv
 
 # Anthropomorphic
-python scripts/run_phantom_experiments.py --phantom anthro --algorithm hkem
-python scripts/run_phantom_experiments.py --phantom anthro --algorithm dtnv
-python scripts/run_phantom_experiments.py --phantom anthro --algorithm tnv
-python scripts/run_phantom_experiments.py --phantom anthro --algorithm log_dtnv
-python scripts/run_phantom_experiments.py --phantom anthro --algorithm log_tnv
+python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm hkem
+python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm tnv
+python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm log_dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm log_tnv
 
 # NEMA
-python scripts/run_phantom_experiments.py --phantom nema --algorithm hkem
-python scripts/run_phantom_experiments.py --phantom nema --algorithm dtnv
-python scripts/run_phantom_experiments.py --phantom nema --algorithm tnv
-python scripts/run_phantom_experiments.py --phantom nema --algorithm log_dtnv
-python scripts/run_phantom_experiments.py --phantom nema --algorithm log_tnv
+python experiments/scripts/run_phantom_experiments.py --phantom nema --algorithm hkem
+python experiments/scripts/run_phantom_experiments.py --phantom nema --algorithm dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom nema --algorithm tnv
+python experiments/scripts/run_phantom_experiments.py --phantom nema --algorithm log_dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom nema --algorithm log_tnv
 ```
 
 ## Preview Before Running
 
 ```bash
 # Dry-run to see configs without executing
-python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv --dry-run
-python scripts/run_phantom_experiments.py --batch-all --dry-run
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv --dry-run
+python experiments/scripts/run_phantom_experiments.py --batch-all --dry-run
 ```
 
 ## Results Location
@@ -93,11 +93,11 @@ All dTNV/TNV variants use the same script ([run_dtnv_1bpos.py](../scripts/run_dt
 
 ```bash
 # Change regularization strength
-python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv \
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv \
     --override alpha=0.05 --override beta=0.05
 
 # Reduce epochs for testing
-python scripts/run_phantom_experiments.py --phantom anthro --algorithm tnv \
+python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm tnv \
     --override num_epochs=10
 ```
 

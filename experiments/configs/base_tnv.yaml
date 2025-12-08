@@ -11,7 +11,7 @@ variance_reduction: "svrg"  # SVRG for variance reduction
 #== Regularisation smoothing
 delta: null  # Auto-computed if not set
 dynamic_percentile: 95.0
-delta_divisor: 10.0
+delta_divisor: 20.0
 epsilon_divisor: 100.0
 
 #== Forward models

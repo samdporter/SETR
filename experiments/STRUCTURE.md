@@ -57,7 +57,7 @@ To modify algorithm settings:
 
 All experiments are run via:
 ```bash
-python scripts/run_phantom_experiments.py [options]
+python experiments/scripts/run_phantom_experiments.py [options]
 ```
 
 The script automatically:
@@ -73,10 +73,10 @@ The script automatically:
 ls experiments/configs/
 
 # 2. Preview what would run (dry-run)
-python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv --dry-run
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv --dry-run
 
 # 3. Run the experiment
-python scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
 
 # 4. Check results
 ls output/manc/dtnv/

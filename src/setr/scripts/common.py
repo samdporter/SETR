@@ -6,6 +6,7 @@ import os
 from types import MethodType
 
 from cil.optimisation.algorithms import ISTA
+from cil.optimisation.functions import OperatorCompositionFunction
 from cil.optimisation.operators import (
     BlockOperator,
     IdentityOperator,
@@ -202,10 +203,12 @@ def apply_combine_sensitivities(pet_data, per_bed_sensitivities):
 def get_sensitivity_from_subset_objs(obj_funs, adjoint_operator=None):
     # get subset_sensitivity BDC for preconditioner
     for j, obj_fun in enumerate(obj_funs):
+        # Extract underlying function if wrapped in OperatorCompositionFunction
+        obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
         if j == 0:
-            sens = obj_fun.get_subset_sensitivity(0)
+            sens = obj_fn.get_subset_sensitivity(0)
         else:
-            sens += obj_fun.get_subset_sensitivity(0)
+            sens += obj_fn.get_subset_sensitivity(0)
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
     if adjoint_operator is not None:
@@ -217,7 +220,9 @@ def get_sensitivities_from_subset_objs(obj_funs):
     # get subset_sensitivity BDC for preconditioner
     sens_list = []
     for obj_fun in obj_funs:
-        sens = obj_fun.get_subset_sensitivity(0)
+        # Extract underlying function if wrapped in OperatorCompositionFunction
+        obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
+        sens = obj_fn.get_subset_sensitivity(0)
         sens = sens.maximum(0)
         sens_list.append(sens)
     return sens_list

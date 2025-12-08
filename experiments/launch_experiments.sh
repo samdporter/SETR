@@ -177,7 +177,7 @@ PY
 
     cd "$BASE_DIR"
 
-    MASTER_SCRIPT="$BASE_DIR/scripts/run_phantom_experiments.py"
+    MASTER_SCRIPT="$SCRIPTS_DIR/run_phantom_experiments.py"
     if [ ! -f "$MASTER_SCRIPT" ]; then
         echo "Error: Master script not found: $MASTER_SCRIPT"
         exit 1

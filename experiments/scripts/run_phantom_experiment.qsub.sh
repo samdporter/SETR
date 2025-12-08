@@ -155,7 +155,7 @@ else
 fi
 
 EXPERIMENTS_DIR="$BASE_DIR/experiments"
-SCRIPTS_DIR="$BASE_DIR/scripts"
+SCRIPTS_DIR="$EXPERIMENTS_DIR/scripts"
 
 # Get sweep configuration from environment variables
 SWEEP_NAME=${SWEEP_NAME:-phantom_experiments}

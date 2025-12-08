@@ -22,9 +22,10 @@ import yaml
 
 # Script paths
 SCRIPT_DIR = Path(__file__).parent
-REPO_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
 EXPERIMENTS_DIR = REPO_ROOT / "experiments"
 CONFIG_DIR = EXPERIMENTS_DIR / "configs"
+LEGACY_SCRIPT_DIR = REPO_ROOT / "scripts"
 
 # Available phantoms and algorithms
 PHANTOMS = ["manc", "anthro", "nema"]
@@ -108,6 +109,28 @@ def compose_config(phantom: str, algorithm: str, extra_overrides: Dict = None) -
     return config
 
 
+def prepare_hkem_stage_config(config: dict, stage: str) -> dict:
+    """Populate generic HKEM fields (data_path, gauss_fwhm) for a stage."""
+    stage = stage.lower()
+    if stage == "spect":
+        data_key = "spect_data_path"
+        gauss_key = "spect_gauss_fwhm"
+    elif stage == "pet":
+        data_key = "pet_data_path"
+        gauss_key = "pet_gauss_fwhm"
+    else:
+        raise ValueError(f"Unknown HKEM stage: {stage}")
+
+    if data_key not in config:
+        raise KeyError(f"Missing {data_key} for HKEM {stage} stage")
+    config["data_path"] = config[data_key]
+
+    if gauss_key in config:
+        config["gauss_fwhm"] = config[gauss_key]
+
+    return config
+
+
 def parse_override(override_str: str) -> Dict:
     """
     Parse override string like 'alpha=0.05' or 'num_epochs=200'.
@@ -181,7 +204,7 @@ def run_dtnv_tnv(phantom: str, algorithm: str, config_path: Path, dry_run: bool 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Run dTNV script
-    script_path = SCRIPT_DIR / "run_dtnv_1bpos.py"
+    script_path = LEGACY_SCRIPT_DIR / "run_dtnv_1bpos.py"
     cmd = ["python", str(script_path), "--config", str(config_path)]
 
     run_command(cmd, f"{algorithm.upper()} reconstruction for {phantom}")
@@ -218,8 +241,8 @@ def run_hkem(phantom: str, config_spect_path: Path, config_pet_path: Path, dry_r
     resample_output_dir.mkdir(parents=True, exist_ok=True)
     pet_output_dir.mkdir(parents=True, exist_ok=True)
 
-    hkem_script = SCRIPT_DIR / "run_hkem_1bpos.py"
-    resample_script = SCRIPT_DIR / "resample_spect_to_pet.py"
+    hkem_script = LEGACY_SCRIPT_DIR / "run_hkem_1bpos.py"
+    resample_script = LEGACY_SCRIPT_DIR / "resample_spect_to_pet.py"
 
     # Stage 1: SPECT reconstruction
     logging.info("=" * 60)
@@ -234,11 +257,24 @@ def run_hkem(phantom: str, config_spect_path: Path, config_pet_path: Path, dry_r
     logging.info("HKEM Stage 2: Resampling SPECT to PET space")
     logging.info("=" * 60)
 
+    # Load the PET config to get necessary paths
+    pet_config = load_yaml(config_pet_path)
+
     # Create resample config
     resample_config = {
+        # PET data directory for template image
+        "pet_dir": pet_config["pet_data_path"],
+        "use_tof": pet_config.get("use_tof", False),
+        "use_2bpos": False,  # Single bed position for these experiments
+
+        # SPECT reconstruction input
         "spect_reconstruction": str(spect_output_dir / "reconstruction_x.hv"),
-        "output_path": str(resample_output_dir),
-        "phantom": phantom,
+
+        # Transform file path
+        "transform_file": pet_config["transform_file"],
+
+        # Output file - save directly to PET data directory as "spect.hv"
+        "output_file": str(Path(pet_config["pet_data_path"]) / "spect.hv"),
     }
 
     resample_config_path = base_output_dir / "resample_config.yaml"
@@ -285,10 +321,12 @@ def run_experiment(phantom: str, algorithm: str, overrides: List[str] = None, dr
         # Compose SPECT config
         spect_config = compose_config(phantom, "hkem_spect", extra_overrides)
         spect_config["output_path"] = str(REPO_ROOT / "output" / phantom / "hkem" / "spect")
+        spect_config = prepare_hkem_stage_config(spect_config, "spect")
 
         # Compose PET config
         pet_config = compose_config(phantom, "hkem_pet", extra_overrides)
         pet_config["output_path"] = str(REPO_ROOT / "output" / phantom / "hkem" / "pet")
+        pet_config = prepare_hkem_stage_config(pet_config, "pet")
 
         # Save temporary configs
         temp_dir = REPO_ROOT / "tmp" / "experiment_configs"

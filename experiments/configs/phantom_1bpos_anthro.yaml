@@ -4,6 +4,8 @@
 pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short"
 spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
 output_path: "/home/sam/working/synergistic_recon/output/anthro"
+transform_file: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140/spect2pet_nozoom.nii"
+use_tof: false
 
 #== Subset configuration
 num_subsets: [18, 18]  # [PET, SPECT]

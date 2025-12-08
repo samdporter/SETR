@@ -118,7 +118,9 @@ def run_ista(args, data, guidance, hyperparams):
     # Get sensitivities for preconditioner
     sensitivities = []
     for obj in objs:
-        sens = obj.get_subset_sensitivity(0)
+        # Extract underlying function if wrapped in OperatorCompositionFunction
+        obj_fn = obj.function if isinstance(obj, OperatorCompositionFunction) else obj
+        sens = obj_fn.get_subset_sensitivity(0)
         sens = sens.maximum(0)
         if blur_op is not None:
             sens = blur_op.adjoint(sens)
