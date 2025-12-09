@@ -28,7 +28,7 @@ CONFIG_DIR = EXPERIMENTS_DIR / "configs"
 LEGACY_SCRIPT_DIR = REPO_ROOT / "scripts"
 
 # Available phantoms and algorithms
-PHANTOMS = ["manc", "anthro", "nema"]
+PHANTOMS = ["manc", "manc_short", "anthro", "nema"]
 ALGORITHMS = ["hkem", "dtnv", "tnv", "log_dtnv", "log_tnv"]
 
 
@@ -394,7 +394,7 @@ Examples:
   # Dry run to preview configs
   python run_phantom_experiments.py --phantom manc --algorithm tnv --dry-run
 
-  # Batch mode - run all 9 combinations
+  # Batch mode - run all combinations
   python run_phantom_experiments.py --batch-all
         """
     )

@@ -2,7 +2,7 @@
 
 ## TL;DR - Cluster Array Jobs (Fastest)
 
-Submit all 15 experiments as parallel array jobs on the cluster:
+Submit all 20 experiments as parallel array jobs on the cluster:
 
 ```bash
 cd experiments
@@ -19,7 +19,7 @@ See [ARRAY_JOBS.md](ARRAY_JOBS.md) for details.
 
 ## TL;DR - Local Sequential (Slower)
 
-Run all 15 phantom reconstruction experiments sequentially on your local machine:
+Run all 20 phantom reconstruction experiments sequentially on your local machine:
 
 ```bash
 python experiments/scripts/run_phantom_experiments.py --batch-all
@@ -34,6 +34,13 @@ python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm
 python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm tnv
 python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm log_dtnv
 python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm log_tnv
+
+# Manchester NEMA (bootstrap)
+python experiments/scripts/run_phantom_experiments.py --phantom manc_short --algorithm hkem
+python experiments/scripts/run_phantom_experiments.py --phantom manc_short --algorithm dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc_short --algorithm tnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc_short --algorithm log_dtnv
+python experiments/scripts/run_phantom_experiments.py --phantom manc_short --algorithm log_tnv
 
 # Anthropomorphic
 python experiments/scripts/run_phantom_experiments.py --phantom anthro --algorithm hkem
@@ -63,6 +70,7 @@ python experiments/scripts/run_phantom_experiments.py --batch-all --dry-run
 ```
 output/
 ├── manc/{hkem,dtnv,tnv,log_dtnv,log_tnv}/
+├── manc_short/{hkem,dtnv,tnv,log_dtnv,log_tnv}/
 ├── anthro/{hkem,dtnv,tnv,log_dtnv,log_tnv}/
 └── nema/{hkem,dtnv,tnv,log_dtnv,log_tnv}/
 ```

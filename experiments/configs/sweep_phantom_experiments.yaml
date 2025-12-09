@@ -1,5 +1,5 @@
 # Sweep configuration for phantom experiments
-# Runs all 15 combinations: 3 phantoms × 5 algorithms
+# Runs all 20 combinations: 4 phantoms × 5 algorithms
 
 sweep_name: "phantom_experiments"
 experiment_type: "phantom_algorithm"  # Special type for phantom experiments
@@ -13,9 +13,10 @@ sge:
   gpu: true            # Enable GPU
 
 # Phantom and algorithm combinations
-# This will create a 3x5 grid = 15 experiments
+# This will create a 4x5 grid = 20 experiments
 phantoms:
   - manc
+  - manc_short
   - anthro
   - nema
 

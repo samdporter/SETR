@@ -1,14 +1,15 @@
 # Phantom Reconstruction Experiments
 
-This directory contains configuration and documentation for standardized phantom reconstruction experiments across five algorithms (HKEM, dTNV, TNV, Log-dTNV, Log-TNV) and three phantom datasets (NEMA, Manchester NEMA, Anthropomorphic).
+This directory contains configuration and documentation for standardized phantom reconstruction experiments across five algorithms (HKEM, dTNV, TNV, Log-dTNV, Log-TNV) and four phantom datasets (NEMA, Manchester NEMA, Manchester NEMA short, Anthropomorphic).
 
 ## Overview
 
-**Total Experiments**: 15 (3 phantoms × 5 algorithms)
+**Total Experiments**: 20 (4 phantoms × 5 algorithms)
 
 | Phantom | HKEM | dTNV | TNV | Log-dTNV | Log-TNV |
 |---------|------|------|-----|----------|---------|
 | Manchester NEMA | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Manchester NEMA (short) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Anthropomorphic | ✓ | ✓ | ✓ | ✓ | ✓ |
 | NEMA | ✓ | ✓ | ✓ | ✓ | ✓ |
 
@@ -134,18 +135,29 @@ output/{phantom}/log_tnv/
 
 ### Manchester NEMA
 - **Location**: `/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/`
-- **Subsets**: [9 PET, 12 SPECT]
+- **Subsets**: [14 PET, 18 SPECT]
 - **Resolution**:
   - PET: [7, 7, 7] mm FWHM
   - SPECT: [6.78, 6.78, 6.78] mm FWHM
   - Collimator: [1.21, 0.027, false]
 - **Special**: `flip: true`
 
+### Manchester NEMA (short bootstrap)
+- **Location**:
+  - PET: `/home/storage/bootstraps/prompts_nonparam_s73_sf0.0167_000`
+  - SPECT: `/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/SPECT`
+- **Subsets**: [18 PET, 14 SPECT]
+- **Resolution**:
+  - PET: [5.61, 4.83, 4.93] mm FWHM
+  - SPECT: [6.78, 6.78, 6.78] mm FWHM
+  - Collimator: [1.21, 0.027, false]
+- **Special**: Same transform file as full Manchester (`spect2pet_nozoom.nii`), `flip: true`
+
 ### Anthropomorphic
 - **Location**: `/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/`
   - PET: `PET/phantom_short`
   - SPECT: `SPECT/phantom_140`
-- **Subsets**: [36 PET, 18 SPECT]
+- **Subsets**: [18 PET, 18 SPECT]
 - **Resolution**:
   - PET: [5.61, 4.83, 4.93] mm FWHM (UCL 710 acceptance)
   - SPECT: [6.8, 6.8, 6.8] mm FWHM
@@ -153,7 +165,7 @@ output/{phantom}/log_tnv/
 
 ### NEMA
 - **Location**: `/home/storage/prepared_data/phantom_data/nema_phantom_data/`
-- **Subsets**: [9 PET, 12 SPECT]
+- **Subsets**: [18 PET, 18 SPECT]
 - **Resolution**:
   - PET: [7.3, 7.3, 7.3] mm FWHM
   - SPECT: [6.7, 6.7, 6.7] mm FWHM
@@ -201,6 +213,7 @@ experiments/configs/
 ├── base_hkem.yaml               # HKEM base (10 epochs, ordered subsets)
 ├── base_tnv.yaml                # TNV base (100 epochs, SVRG)
 ├── phantom_1bpos_manc.yaml      # Manchester NEMA
+├── phantom_1bpos_manc_short.yaml# Manchester NEMA (bootstrap)
 ├── phantom_1bpos_anthro.yaml    # Anthropomorphic
 ├── phantom_1bpos_nema.yaml      # NEMA
 ├── algo_hkem_spect.yaml         # HKEM Stage 1 (12 subsets)
@@ -235,14 +248,14 @@ python experiments/scripts/run_phantom_experiments.py --phantom nema --algorithm
 #### All Algorithms for One Phantom
 
 ```bash
-# Run all three algorithms for Manchester phantom
+# Run all five algorithms for Manchester phantom (including log variants)
 python experiments/scripts/run_phantom_experiments.py --phantom manc --all-algorithms
 ```
 
 #### Batch Mode - All Combinations
 
 ```bash
-# Run all 9 experiments (3 phantoms × 3 algorithms)
+# Run all experiments (current default: 4 phantoms × 5 algorithms = 20)
 python experiments/scripts/run_phantom_experiments.py --batch-all
 ```
 
@@ -316,22 +329,34 @@ output/
 │   │   ├── spect/
 │   │   ├── spect_resampled/
 │   │   └── pet/
+│   ├── dtnv/        # + objective.csv, image_*.hv
+│   ├── tnv/
+│   ├── log_dtnv/
+│   └── log_tnv/
+├── manc_short/
+│   ├── hkem/        # Same substructure as manc
 │   ├── dtnv/
-│   └── tnv/
+│   ├── tnv/
+│   ├── log_dtnv/
+│   └── log_tnv/
 ├── anthro/
 │   ├── hkem/
 │   │   ├── spect/
 │   │   ├── spect_resampled/
 │   │   └── pet/
 │   ├── dtnv/
-│   └── tnv/
+│   ├── tnv/
+│   ├── log_dtnv/
+│   └── log_tnv/
 └── nema/
     ├── hkem/
     │   ├── spect/
     │   ├── spect_resampled/
     │   └── pet/
     ├── dtnv/
-    └── tnv/
+    ├── tnv/
+    ├── log_dtnv/
+    └── log_tnv/
 ```
 
 ## Experiment Matrix
@@ -341,12 +366,23 @@ output/
 | 1 | manc | hkem | output/manc/hkem/ | SPECT→PET sequential |
 | 2 | manc | dtnv | output/manc/dtnv/ | Joint with CT guidance |
 | 3 | manc | tnv | output/manc/tnv/ | Joint isotropic |
-| 4 | anthro | hkem | output/anthro/hkem/ | SPECT→PET sequential |
-| 5 | anthro | dtnv | output/anthro/dtnv/ | Joint with CT guidance |
-| 6 | anthro | tnv | output/anthro/tnv/ | Joint isotropic |
-| 7 | nema | hkem | output/nema/hkem/ | SPECT→PET sequential |
-| 8 | nema | dtnv | output/nema/dtnv/ | Joint with CT guidance |
-| 9 | nema | tnv | output/nema/tnv/ | Joint isotropic |
+| 4 | manc | log_dtnv | output/manc/log_dtnv/ | Log-domain joint with CT guidance |
+| 5 | manc | log_tnv | output/manc/log_tnv/ | Log-domain joint isotropic |
+| 6 | manc_short | hkem | output/manc_short/hkem/ | SPECT→PET sequential (bootstrap PET) |
+| 7 | manc_short | dtnv | output/manc_short/dtnv/ | Joint with CT guidance |
+| 8 | manc_short | tnv | output/manc_short/tnv/ | Joint isotropic |
+| 9 | manc_short | log_dtnv | output/manc_short/log_dtnv/ | Log-domain joint with CT guidance |
+| 10 | manc_short | log_tnv | output/manc_short/log_tnv/ | Log-domain joint isotropic |
+| 11 | anthro | hkem | output/anthro/hkem/ | SPECT→PET sequential |
+| 12 | anthro | dtnv | output/anthro/dtnv/ | Joint with CT guidance |
+| 13 | anthro | tnv | output/anthro/tnv/ | Joint isotropic |
+| 14 | anthro | log_dtnv | output/anthro/log_dtnv/ | Log-domain joint with CT guidance |
+| 15 | anthro | log_tnv | output/anthro/log_tnv/ | Log-domain joint isotropic |
+| 16 | nema | hkem | output/nema/hkem/ | SPECT→PET sequential |
+| 17 | nema | dtnv | output/nema/dtnv/ | Joint with CT guidance |
+| 18 | nema | tnv | output/nema/tnv/ | Joint isotropic |
+| 19 | nema | log_dtnv | output/nema/log_dtnv/ | Log-domain joint with CT guidance |
+| 20 | nema | log_tnv | output/nema/log_tnv/ | Log-domain joint isotropic |
 
 ## Validation
 
@@ -357,6 +393,7 @@ Before running experiments, validate that:
 1. **Data paths exist**:
    ```bash
    ls /home/storage/prepared_data/phantom_data/manc_nema_phantom_data/
+   ls /home/storage/bootstraps/prompts_nonparam_s73_sf0.0167_000
    ls /home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/
    ls /home/storage/prepared_data/phantom_data/nema_phantom_data/
    ```

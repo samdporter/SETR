@@ -1,18 +1,18 @@
 # Phantom Experiments - Final Setup Summary
 
-## Complete Framework: 15 Experiments Ready to Run
+## Complete Framework: 20 Experiments Ready to Run
 
-**Total**: 3 phantoms × 5 algorithms = **15 experiments**
+**Total**: 4 phantoms × 5 algorithms = **20 experiments**
 
 ### Algorithms Configured
 
 | Algorithm | Epochs | Subsets | Variance Reduction | CT Guidance | Domain |
 |-----------|--------|---------|-------------------|-------------|--------|
 | **HKEM** | 10 | SPECT: 12, PET: 9 | None (ordered) | Kernel + Emission | Standard |
-| **dTNV** | 100 | [9, 12] | SVRG | ✓ Directional | Standard |
-| **TNV** | 100 | [9, 12] | SVRG | ✗ Isotropic | Standard |
-| **Log-dTNV** | 100 | [9, 12] | SVRG | ✓ Directional | Log |
-| **Log-TNV** | 100 | [9, 12] | SVRG | ✗ Isotropic | Log |
+| **dTNV** | 100 | Phantom-specific | SVRG | ✓ Directional | Standard |
+| **TNV** | 100 | Phantom-specific | SVRG | ✗ Isotropic | Standard |
+| **Log-dTNV** | 100 | Phantom-specific | SVRG | ✓ Directional | Log |
+| **Log-TNV** | 100 | Phantom-specific | SVRG | ✗ Isotropic | Log |
 
 ### Key Differences
 
@@ -69,6 +69,7 @@ experiments/
 │   ├── base_hkem.yaml           # HKEM: 10 epochs, ordered subsets
 │   ├── base_tnv.yaml            # TNV: 100 epochs, SVRG
 │   ├── phantom_1bpos_manc.yaml  # Manchester NEMA
+│   ├── phantom_1bpos_manc_short.yaml  # Manchester NEMA (bootstrap)
 │   ├── phantom_1bpos_anthro.yaml
 │   ├── phantom_1bpos_nema.yaml
 │   ├── algo_hkem_spect.yaml     # 12 subsets
@@ -95,7 +96,7 @@ python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm
 # Run all algorithms for one phantom
 python experiments/scripts/run_phantom_experiments.py --phantom manc --all-algorithms
 
-# Run all 15 experiments
+# Run all 20 experiments
 python experiments/scripts/run_phantom_experiments.py --batch-all
 ```
 
@@ -116,6 +117,7 @@ python experiments/scripts/run_phantom_experiments.py --batch-all
 ```
 output/
 ├── manc/{hkem,dtnv,tnv,log_dtnv,log_tnv}/
+├── manc_short/{hkem,dtnv,tnv,log_dtnv,log_tnv}/
 ├── anthro/{hkem,dtnv,tnv,log_dtnv,log_tnv}/
 └── nema/{hkem,dtnv,tnv,log_dtnv,log_tnv}/
 ```
@@ -131,7 +133,7 @@ output/
 
 **dTNV/TNV/Log variants:**
 - Epochs: 100
-- Subsets: [9 PET, 12 SPECT] (manc, nema) or [36, 18] (anthro)
+- Subsets: phantom-specific (manc [14, 18], manc_short [18, 14], anthro [18, 18], nema [18, 18])
 - Variance reduction: SVRG
 - Initial step size: 1.0
 - Relaxation eta: 0.01

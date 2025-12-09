@@ -8,7 +8,7 @@ This directory contains SGE qsub scripts for running experiments as array jobs.
 
 SGE worker script that runs individual phantom experiment tasks as part of an array job.
 
-**Purpose**: Executed by SGE for each array task (1-15 for the full sweep).
+**Purpose**: Executed by SGE for each array task (1-20 for the default sweep).
 
 **What it does**:
 1. Sets up SIRF environment
@@ -26,7 +26,7 @@ SGE worker script that runs individual phantom experiment tasks as part of an ar
 - `PHANTOMS`: Comma-separated list of phantoms
 - `ALGORITHMS`: Comma-separated list of algorithms
 - `CONFIG_OVERRIDES_JSON`: JSON string of config overrides
-- `SGE_TASK_ID`: Array task ID (1-15)
+- `SGE_TASK_ID`: Array task ID (1-20)
 
 **Task mapping**:
 ```
@@ -35,8 +35,9 @@ task_id = phantom_index * num_algorithms + algorithm_index + 1
 Examples:
   Task 1  = phantoms[0] + algorithms[0] = manc + hkem
   Task 2  = phantoms[0] + algorithms[1] = manc + dtnv
-  Task 6  = phantoms[1] + algorithms[0] = anthro + hkem
-  Task 15 = phantoms[2] + algorithms[4] = nema + log_tnv
+  Task 6  = phantoms[1] + algorithms[0] = manc_short + hkem
+  Task 11 = phantoms[2] + algorithms[0] = anthro + hkem
+  Task 20 = phantoms[3] + algorithms[4] = nema + log_tnv
 ```
 
 **Logs**: Written to `experiments/output/<sweep_name>/_logs/`

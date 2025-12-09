@@ -8,7 +8,7 @@ This guide explains how to submit phantom experiments as SGE array jobs for para
 # Navigate to experiments directory
 cd experiments
 
-# Submit all 15 experiments (3 phantoms × 5 algorithms) as an array job
+# Submit all 20 experiments (4 phantoms × 5 algorithms) as an array job
 ./launch_experiments.sh
 
 # Test with a single job first
@@ -22,11 +22,12 @@ cd experiments
 
 The array job system allows you to submit all phantom experiments simultaneously to the cluster, with each combination running as a separate task in an SGE array job.
 
-**Total experiments**: 15 (3 phantoms × 5 algorithms)
+**Total experiments**: 20 (4 phantoms × 5 algorithms)
 
 | Phantom       | Algorithms |
 |--------------|------------|
 | Manchester NEMA (manc)   | hkem, dtnv, tnv, log_dtnv, log_tnv |
+| Manchester NEMA (manc_short) | hkem, dtnv, tnv, log_dtnv, log_tnv |
 | Anthropomorphic (anthro) | hkem, dtnv, tnv, log_dtnv, log_tnv |
 | NEMA                     | hkem, dtnv, tnv, log_dtnv, log_tnv |
 
@@ -67,6 +68,7 @@ sge:
 # Experiment combinations
 phantoms:
   - manc
+  - manc_short
   - anthro
   - nema
 
@@ -96,7 +98,7 @@ Edit [configs/sweep_phantom_experiments.yaml](configs/sweep_phantom_experiments.
 
 ### Full Mode (Default)
 
-Submit all 15 experiments as an array job:
+Submit all 20 experiments as an array job:
 
 ```bash
 ./launch_experiments.sh
@@ -104,15 +106,20 @@ Submit all 15 experiments as an array job:
 ./launch_experiments.sh sweep_phantom_experiments.yaml full
 ```
 
-This creates an SGE array job with tasks 1-15:
+This creates an SGE array job with tasks 1-20:
 - Task 1: manc + hkem
 - Task 2: manc + dtnv
 - Task 3: manc + tnv
 - Task 4: manc + log_dtnv
 - Task 5: manc + log_tnv
-- Task 6: anthro + hkem
+- Task 6: manc_short + hkem
+- Task 7: manc_short + dtnv
+- Task 8: manc_short + tnv
+- Task 9: manc_short + log_dtnv
+- Task 10: manc_short + log_tnv
+- Task 11: anthro + hkem
 - ...
-- Task 15: nema + log_tnv
+- Task 20: nema + log_tnv
 
 ### Test Mode
 
@@ -347,16 +354,21 @@ Task  Phantom  Algorithm
 3     manc     tnv
 4     manc     log_dtnv
 5     manc     log_tnv
-6     anthro   hkem
-7     anthro   dtnv
-8     anthro   tnv
-9     anthro   log_dtnv
-10    anthro   log_tnv
-11    nema     hkem
-12    nema     dtnv
-13    nema     tnv
-14    nema     log_dtnv
-15    nema     log_tnv
+6     manc_short hkem
+7     manc_short dtnv
+8     manc_short tnv
+9     manc_short log_dtnv
+10    manc_short log_tnv
+11    anthro   hkem
+12    anthro   dtnv
+13    anthro   tnv
+14    anthro   log_dtnv
+15    anthro   log_tnv
+16    nema     hkem
+17    nema     dtnv
+18    nema     tnv
+19    nema     log_dtnv
+20    nema     log_tnv
 ```
 
 Formula: `task_id = phantom_index * num_algorithms + algorithm_index + 1`
@@ -419,10 +431,10 @@ If missing, the array job cannot run.
 # Run each experiment one by one
 python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm hkem
 python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm dtnv
-# ... repeat 15 times
+# ... repeat for all 20 combinations
 ```
 
-**Time**: Sequential, ~15 × 24h = 15 days
+**Time**: Sequential, ~20 × 24h = 20 days
 
 ### Array job execution
 
@@ -431,7 +443,7 @@ python experiments/scripts/run_phantom_experiments.py --phantom manc --algorithm
 ./launch_experiments.sh
 ```
 
-**Time**: Parallel, ~24h (assuming 15 nodes available)
+**Time**: Parallel, ~24h (assuming 20 nodes available)
 
 ## Notes
 

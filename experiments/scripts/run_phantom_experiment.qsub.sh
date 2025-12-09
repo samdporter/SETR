@@ -159,7 +159,7 @@ SCRIPTS_DIR="$EXPERIMENTS_DIR/scripts"
 
 # Get sweep configuration from environment variables
 SWEEP_NAME=${SWEEP_NAME:-phantom_experiments}
-PHANTOMS_STR=${PHANTOMS:-"manc,anthro,nema"}
+PHANTOMS_STR=${PHANTOMS:-"manc,manc_short,anthro,nema"}
 ALGORITHMS_STR=${ALGORITHMS:-"hkem,dtnv,tnv,log_dtnv,log_tnv"}
 
 # Parse comma-separated lists into arrays
