@@ -6,6 +6,9 @@ Tests different combinations of:
 - Subset organization (paired vs separate)
 - Prior update frequency (always vs as subset)
 - Preconditioner types (BSREM vs VTV variants)
+
+This script reuses code from run_dtnv_1bpos.py and shared modules,
+keeping only the experimental logic isolated here.
 """
 
 import logging
@@ -14,26 +17,24 @@ import os
 from types import SimpleNamespace
 
 import numpy as np
-from cil.optimisation.functions import OperatorCompositionFunction, SAGAFunction, SumFunction, SVRGFunction
+from cil.optimisation.functions import OperatorCompositionFunction, SumFunction
 from cil.optimisation.operators import (
     BlockOperator,
     CompositionOperator,
     IdentityOperator,
     ZeroOperator,
 )
-from cil.optimisation.utilities import Sampler
 from sirf.contrib.partitioner import partitioner
-from sirf.STIR import ImageData
+from sirf.STIR import ImageData, SeparableGaussianImageFilter
 
-from setr.cil_extensions.callbacks import ComputeMetricsCallback
 from setr.cil_extensions.framework.framework import EnhancedBlockDataContainer
+from setr.cil_extensions.operators import FlipOperator
+from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.cil_extensions.preconditioners import (
     BSREMPreconditioner,
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
 )
-from setr.cil_extensions.operators import FlipOperator, TruncationOperator
-from setr.cil_extensions.utilities import LinearDecayStepSizeRule
 from setr.scripts.common import (
     attach_prior_hessian,
     configure_logging,
@@ -43,33 +44,40 @@ from setr.scripts.common import (
 )
 from setr.scripts.dtnv_common import (
     apply_dynamic_range_scaling,
+    build_variance_reduced_function,
+    dynamic_range_scale_sirf,
     get_algorithm,
     get_block_objective,
     get_callbacks,
     get_kappa_squareds,
     get_prior,
-    dynamic_range_scale_sirf,
     normalise_kappa_squares,
 )
 from setr.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from setr.utils.io import apply_overrides, load_config, parse_cli, save_args
-from setr.utils.metrics import create_mask_from_threshold
 from setr.utils.sirf import get_array, get_filters, get_s_inv_from_objs
 from setr.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
 def prepare_data(args):
-    """Prepare CT, PET and SPECT data."""
+    """
+    Prepare the CT image, PET and SPECT data, and initial estimates.
+
+    This is adapted from run_dtnv_1bpos.py with minor adjustments.
+    """
     # Get guidance image
     ct = ImageData(os.path.join(args.pet_data_path, "umap_zoomed.hv"))
     ct += (-ct).max()
     ct /= ct.max()
+    ct_smooth = SeparableGaussianImageFilter()
+    ct_smooth.set_fwhms((0.5, 0.5, 0.5))
+    ct_smooth.apply(ct)
 
     pet_data = get_pet_data(args.pet_data_path)
     spect_data = get_spect_data(args.spect_data_path)
 
     # Apply filters to initial images
-    cyl, gauss = get_filters()
+    cyl, gauss = get_filters(fwhms=(20, 20, 20))
     gauss.apply(spect_data["initial_image"])
     gauss.apply(pet_data["initial_image"])
     cyl.apply(pet_data["initial_image"])
@@ -79,14 +87,27 @@ def prepare_data(args):
         if np.isnan(get_array(data)).any():
             logging.warning("An image contains NaNs")
             break
+    for data in [
+        pet_data["acquisition_data"],
+        spect_data["acquisition_data"],
+        pet_data["normalisation"],
+        pet_data["additive"],
+        spect_data["additive"],
+    ]:
+        if np.isnan(get_array(data)).any():
+            logging.warning("A ProjData contains NaNs")
+            break
 
     return ct, pet_data, spect_data
 
 
 def get_data_fidelity_separate(args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets):
     """
-    Set up data fidelity with SEPARATE PET and SPECT subsets.
+    EXPERIMENTAL: Set up data fidelity with SEPARATE PET and SPECT subsets.
+
     Returns list: [pet_subset_0, ..., pet_subset_N, spect_subset_0, ..., spect_subset_M]
+
+    This is the experimental subset organization mode.
     """
     _, _, pet_obj_funs = partitioner.data_partition(
         pet_data["acquisition_data"],
@@ -111,7 +132,6 @@ def get_data_fidelity_separate(args, pet_data, spect_data, get_pet_am, get_spect
         obj_fun.set_up(spect_data["initial_image"])
 
     # Create Gaussian blurring operator for PET only
-    # SPECT uses image_data_processor which works correctly for SPECT projectors
     pet_blur_op = create_gaussian_blur_operator(args.pet_gauss_fwhm, pet_data["initial_image"])
 
     # Get sensitivity
@@ -128,7 +148,7 @@ def get_data_fidelity_separate(args, pet_data, spect_data, get_pet_am, get_spect
             for obj_fun in pet_obj_funs
         ]
 
-    # Get kappas if needed
+    # Get kappas if needed (using shared function from dtnv_common)
     if args.use_kappa:
         kappa = get_kappa_squareds(
             [pet_obj_funs, spect_obj_funs],
@@ -140,7 +160,7 @@ def get_data_fidelity_separate(args, pet_data, spect_data, get_pet_am, get_spect
     else:
         kappa = None
 
-    # Wrap as block objectives
+    # Wrap as block objectives (using shared function from dtnv_common)
     pet_obj_funs = [
         get_block_objective(
             pet_data["initial_image"],
@@ -167,8 +187,11 @@ def get_data_fidelity_separate(args, pet_data, spect_data, get_pet_am, get_spect
 
 def get_data_fidelity_paired(args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets):
     """
-    Set up data fidelity with PAIRED PET+SPECT subsets.
+    EXPERIMENTAL: Set up data fidelity with PAIRED PET+SPECT subsets.
+
     Returns list: [SumFunction(pet_subset_i, spect_subset_i) for i in range(N)]
+
+    This is the experimental subset organization mode.
     """
     _, _, pet_obj_funs = partitioner.data_partition(
         pet_data["acquisition_data"],
@@ -193,7 +216,6 @@ def get_data_fidelity_paired(args, pet_data, spect_data, get_pet_am, get_spect_a
         obj_fun.set_up(spect_data["initial_image"])
 
     # Create Gaussian blurring operator for PET only
-    # SPECT uses image_data_processor which works correctly for SPECT projectors
     pet_blur_op = create_gaussian_blur_operator(args.pet_gauss_fwhm, pet_data["initial_image"])
 
     # Get sensitivity
@@ -210,7 +232,7 @@ def get_data_fidelity_paired(args, pet_data, spect_data, get_pet_am, get_spect_a
             for obj_fun in pet_obj_funs
         ]
 
-    # Get kappas if needed
+    # Get kappas if needed (using shared function from dtnv_common)
     if args.use_kappa:
         kappa = get_kappa_squareds(
             [pet_obj_funs, spect_obj_funs],
@@ -222,7 +244,7 @@ def get_data_fidelity_paired(args, pet_data, spect_data, get_pet_am, get_spect_a
     else:
         kappa = None
 
-    # Wrap as block objectives
+    # Wrap as block objectives (using shared function from dtnv_common)
     pet_obj_funs_block = [
         get_block_objective(
             pet_data["initial_image"],
@@ -258,10 +280,14 @@ def get_data_fidelity_paired(args, pet_data, spect_data, get_pet_am, get_spect_a
 
 def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, initial_estimates):
     """
-    Create preconditioner based on precond_type parameter.
+    EXPERIMENTAL: Create preconditioner based on precond_type parameter.
 
-    Args:
-        args: Namespace with precond_type in {"bsrem", "vtv_svd_principal_alpha", "vtv_frobenius_surrogate_pd"}
+    Supports:
+    - "bsrem": BSREM preconditioner only
+    - "vtv_svd_principal_alpha": BSREM + VTV Hessian (SVD principal alpha variant)
+    - "vtv_frobenius_surrogate_pd": BSREM + VTV Hessian (Frobenius surrogate PD variant)
+
+    This is the experimental preconditioner variant logic.
     """
     precond_type = getattr(args, "precond_type", "bsrem")
 
@@ -293,13 +319,10 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
         return bsrem_precond
 
     # Re-create priors with specified hessian type for preconditioner
-    # (objective always uses fast hessian)
     logging.info(f"Creating prior preconditioners with hessian_type={hessian_type}")
 
     # CRITICAL: Use max_value to cap the inverse Hessian preconditioner
     # Without this, 1/(small Hessian at FOV edges) → huge preconditioner → divergence
-    # Cap at the scale of the BSREM preconditioner to keep both on same scale
-    # BSREM scale ≈ x / sensitivity ≈ x * s_inv, so use max(x) * max(s_inv) as upper bound
     max_precond_value = 10.0 * max(
         con.max() * s_inv_con.max()
         for con, s_inv_con in zip(initial_estimates.containers, s_inv.containers)
@@ -324,62 +347,64 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
     )
 
 
-def get_probabilities_for_mode(subset_mode, prior_mode, num_data_funs, target_prior_updates=None):
+def calculate_epoch_length_and_prior_updates(subset_mode, prior_mode, num_data_funs, args):
     """
-    Calculate sampling probabilities based on subset and prior modes.
+    EXPERIMENTAL: Calculate epoch length and prior updates based on experimental modes.
 
-    Args:
-        subset_mode: "separate" or "paired"
-        prior_mode: "always" or "subset"
-        num_data_funs: Number of data fidelity functions
-        target_prior_updates: Desired prior updates per epoch (optional)
+    This translates the experimental subset_mode and prior_mode into parameters
+    that the shared build_variance_reduced_function can understand.
 
     Returns:
-        probs: List of probabilities (None if prior_mode="always")
-        prior_prob: Probability for prior (None if prior_mode="always")
+        epoch_length: Number of iterations per epoch
+        prior_updates_per_epoch: Number of prior updates per epoch (or None)
     """
+    base_epoch_length = num_data_funs
+
     if prior_mode == "always":
-        # Prior in outer SumFunction, not sampled
-        probs = [1.0 / num_data_funs] * num_data_funs
-        prior_prob = None
+        # Prior evaluated deterministically every iteration (outside sampler)
+        # Use the standard epoch length
+        epoch_length = base_epoch_length
+        prior_updates_per_epoch = None
     elif prior_mode == "subset":
-        prob_each = None
+        # Prior sampled stochastically as a subset
+        # Check if user specified custom target prior updates
+        target_prior_updates = getattr(args, "prior_updates_per_epoch", None)
+
         if target_prior_updates not in (None, False):
             try:
-                target_prior_updates = float(target_prior_updates)
+                prior_updates_per_epoch = float(target_prior_updates)
             except (TypeError, ValueError):
                 logging.warning(
-                    "Invalid prior_updates_per_epoch=%s. Falling back to default prior probability.",
+                    "Invalid prior_updates_per_epoch=%s. Using default for subset_mode=%s.",
                     target_prior_updates,
+                    subset_mode,
                 )
                 target_prior_updates = None
 
-        if target_prior_updates is not None and target_prior_updates > 0:
-            prior_prob = target_prior_updates / (num_data_funs + target_prior_updates)
-            prob_each = (1.0 - prior_prob) / num_data_funs
-        else:
+        if target_prior_updates is None or target_prior_updates is False:
+            # Use default ratios based on subset_mode
             if subset_mode == "paired":
                 # 18 pairs + 1 prior, ratio 1:2
                 # prob(prior) = 1/2, prob(each pair) = 1/2 / 18 = 1/36
-                prior_prob = 0.5
-                prob_each = 0.5 / num_data_funs
+                # Expected prior updates per epoch = 18 (when each pair is visited once)
+                prior_updates_per_epoch = base_epoch_length
             elif subset_mode == "separate":
                 # 18 PET + 18 SPECT + 1 prior, ratio 1:3
                 # prob(prior) = 1/3, prob(each data) = 2/3 / 36 = 1/54
-                prior_prob = 1.0 / 3.0
-                prob_each = (1.0 - prior_prob) / num_data_funs
+                # Expected prior updates per epoch = 18 (when each data subset is visited once)
+                prior_updates_per_epoch = base_epoch_length / 2.0
             else:
                 raise ValueError(f"Unknown subset_mode: {subset_mode}")
 
-        probs = [prob_each] * num_data_funs
+        # Calculate epoch length accounting for prior sampling
+        # When prior has probability p, expected iterations for one full epoch is:
+        # base_epoch_length / (1 - p) where p = prior_updates / (base_epoch_length + prior_updates)
+        prior_prob = prior_updates_per_epoch / (base_epoch_length + prior_updates_per_epoch)
+        epoch_length = math.ceil(base_epoch_length / (1.0 - prior_prob))
     else:
         raise ValueError(f"Unknown prior_mode: {prior_mode}")
 
-    # Verify probabilities sum correctly
-    total_prob = sum(probs) + (prior_prob if prior_prob is not None else 0)
-    assert abs(total_prob - 1.0) < 1e-10, f"Probabilities sum to {total_prob}, not 1.0"
-
-    return probs, prior_prob
+    return epoch_length, prior_updates_per_epoch
 
 
 def main(args) -> None:
@@ -404,11 +429,11 @@ def main(args) -> None:
     logging.info(f"  Gamma: {args.gamma_tnv}")
     logging.info("=" * 60)
 
-    # Data preparation
+    # Data preparation (reused from run_dtnv_1bpos.py)
     umap, pet_data, spect_data = prepare_data(args)
 
-    # Set up resampling operators
-    spect2pet = get_resampling_operators(pet_data, spect_data)
+    # Set up resampling operators (shared function)
+    spect2pet = get_resampling_operators(args, pet_data, spect_data)
 
     initial_estimates = EnhancedBlockDataContainer(
         pet_data["initial_image"], spect_data["initial_image"]
@@ -432,7 +457,7 @@ def main(args) -> None:
             attenuation=True,
         )
 
-    # Set up data fidelity based on subset mode
+    # Set up data fidelity based on EXPERIMENTAL subset mode
     num_subsets = [int(i) for i in args.num_subsets]
 
     if subset_mode == "separate":
@@ -444,31 +469,27 @@ def main(args) -> None:
             args, pet_data, spect_data, get_pet_am_with_res, get_spect_am_with_res, num_subsets
         )
 
-    if args.flip:
+    if getattr(args, "flip", False):
         spect2pet = CompositionOperator(
             spect2pet, FlipOperator(spect_data["initial_image"], axis=(0, 2))
         )
 
+    # Block operator (same as run_dtnv_1bpos.py)
     bo = BlockOperator(
-        CompositionOperator(
-            IdentityOperator(pet_data["initial_image"]),
-            TruncationOperator(pet_data["initial_image"]),
-        ),
+        IdentityOperator(pet_data["initial_image"]),
         ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
         ZeroOperator(pet_data["initial_image"]),
         spect2pet,
         shape=(2, 2),
     )
 
+    # Normalize kappas and scale images (shared functions from dtnv_common)
     kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
-    combined = bo.direct(initial_estimates)
-    pet_scale, spect_scale = dynamic_range_scale_sirf(
-        combined[0],
-        combined[1],
-    )
+    combined = EnhancedBlockDataContainer(*bo.direct(initial_estimates).containers)
+    pet_scale, spect_scale = dynamic_range_scale_sirf(combined[0], combined[1])
     apply_dynamic_range_scaling(args, pet_scale, spect_scale)
 
-    # Set delta
+    # Set delta (same as run_dtnv_1bpos.py)
     if args.delta is None:
         args.delta = (
             min(
@@ -488,131 +509,61 @@ def main(args) -> None:
     for i, el in enumerate(s_inv.containers):
         s_inv.containers[i].write(os.path.join(args.output_path, f"s_inv_{i}.hv"))
 
-    # Set up prior
+    # Set up prior (shared function from dtnv_common)
     if args.no_prior:
         prior = None
         priors_list = []
     else:
-        # Create priors with appropriate hessian type
-        # For objective, always use "fast" (default)
         priors_list = get_prior(args, umap, combined, bo, kappas)
         for i, p in enumerate(priors_list):
             attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
 
-    # Set up probabilities and stochastic objective based on prior mode
-    raw_target_prior_updates = getattr(args, "prior_updates_per_epoch", None)
-    target_prior_updates = None
-    if raw_target_prior_updates not in (None, False):
-        try:
-            target_prior_updates = float(raw_target_prior_updates)
-        except (TypeError, ValueError):
-            logging.warning(
-                "Invalid prior_updates_per_epoch=%s. Falling back to default prior probability.",
-                raw_target_prior_updates,
-            )
-    data_probs, prior_prob = get_probabilities_for_mode(
-        subset_mode, prior_mode, len(all_funs), target_prior_updates
+    # Calculate epoch length and prior updates based on EXPERIMENTAL modes
+    base_epoch_length = len(all_funs)
+    epoch_length, prior_updates_per_epoch = calculate_epoch_length_and_prior_updates(
+        subset_mode, prior_mode, base_epoch_length, args
     )
 
-    base_epoch_length = len(all_funs)
-    epoch_length = base_epoch_length
+    # Temporarily set prior_updates_per_epoch for build_variance_reduced_function
+    original_prior_updates = getattr(args, "prior_updates_per_epoch", None)
+    args.prior_updates_per_epoch = prior_updates_per_epoch
 
-    if prior_mode == "subset":
-        # Expected number of iterations required for each data subset to be
-        # visited once when the prior is sampled with probability prior_prob.
-        epoch_length = math.ceil(base_epoch_length / (1.0 - prior_prob))
+    # Build variance-reduced function (shared function from dtnv_common)
+    # This handles the prior sampling logic based on prior_updates_per_epoch
+    f_obj, probs, prior_prob, prior_in_sampler = build_variance_reduced_function(
+        args, all_funs, prior, num_subsets, epoch_length, bpos=1
+    )
 
-    ui = getattr(args, "update_interval", None)
-    update_interval = ui if ui is not None else epoch_length
+    # Restore original value
+    args.prior_updates_per_epoch = original_prior_updates
 
     variance_reduction = getattr(args, "variance_reduction", "svrg")
-    variance_reduction = str(variance_reduction).lower()
-    snapshot_factor = getattr(args, "snapshot_interval_factor", None)
+    logging.info(
+        "Variance reduction: %s | stochastic functions: %d",
+        variance_reduction,
+        getattr(f_obj, "num_functions", len(all_funs) + int(prior_in_sampler)),
+    )
 
-    def _create_sampler(num_functions, probs):
-        return Sampler.random_with_replacement(num_functions, prob=probs)
+    if prior_in_sampler and prior_prob is not None:
+        expected_updates = prior_prob * epoch_length
+        logging.info(
+            "Prior mode: subset (sampled) | prob=%.6f | expected updates/epoch≈%.3f",
+            prior_prob,
+            expected_updates,
+        )
+    elif prior is not None:
+        logging.info("Prior mode: always (evaluated deterministically each iteration)")
 
-    def _create_vr_function(functions, probs):
-        sampler = _create_sampler(len(functions), probs)
-        if variance_reduction == "svrg":
-            if snapshot_factor is None:
-                snapshot_interval = epoch_length * 2
-            else:
-                try:
-                    snapshot_interval = max(
-                        1, int(round(epoch_length * float(snapshot_factor)))
-                    )
-                except (TypeError, ValueError):
-                    logging.warning(
-                        "Invalid snapshot_interval_factor=%s; defaulting to 2 * epoch_length.",
-                        snapshot_factor,
-                    )
-                    snapshot_interval = epoch_length * 2
+    objective = -f_obj if prior_in_sampler or prior is None else -SumFunction(f_obj, prior)
 
-            return SVRGFunction(
-                functions,
-                sampler=sampler,
-                snapshot_update_interval=snapshot_interval,
-                store_gradients=True,
-            )
-        elif variance_reduction == "saga":
-            return SAGAFunction(functions, sampler=sampler)
-        else:
-            raise ValueError("variance_reduction must be 'svrg' or 'saga'")
+    # Set up EXPERIMENTAL preconditioner
+    ui = getattr(args, "update_interval", None)
+    update_interval = epoch_length if ui is None else ui
 
-    # Set up preconditioner
     precond = get_preconditioner(
         args, s_inv, all_funs, update_interval, priors_list, initial_estimates
     )
-
-    if prior_mode == "always":
-        # Prior in outer SumFunction
-        logging.info(
-            "Prior mode: always (evaluated every iteration) | variance reduction: %s",
-            variance_reduction,
-        )
-        f_obj = _create_vr_function(all_funs, data_probs)
-        objective = -SumFunction(f_obj, prior) if prior else -f_obj
-    elif prior_mode == "subset":
-        # Prior as a separate subset
-        logging.info(
-            "Prior mode: subset (prob=%.6f) | variance reduction: %s",
-            prior_prob,
-            variance_reduction,
-        )
-        if prior is None:
-            raise ValueError("Cannot use prior_mode='subset' with no_prior=True")
-
-        # Add prior to list of functions
-        all_funs_with_prior = all_funs + [prior]
-        probs_with_prior = data_probs + [prior_prob]
-
-        # epoch_length already accounts for the additional iterations needed
-        # when the prior is sampled; reuse it for logging and snapshot cadence.
-
-        logging.info(
-            f"Total functions: {len(all_funs_with_prior)} ({len(all_funs)} data + 1 prior)"
-        )
-        logging.info(f"Prior probability: {prior_prob:.4f}")
-        logging.info(f"Each data function probability: {data_probs[0]:.6f}")
-        if target_prior_updates not in (None, False) and prior_prob is not None:
-            logging.info(
-                "Target prior updates per epoch: %.3f | Expected ≈ %.3f (based on sampler).",
-                float(target_prior_updates),
-                prior_prob * epoch_length,
-            )
-        else:
-            logging.info(
-                "Expected prior updates per epoch (based on sampler): %.3f.",
-                prior_prob * epoch_length,
-            )
-
-        f_obj = _create_vr_function(
-            all_funs_with_prior,
-            probs_with_prior,
-        )
-        objective = -f_obj
 
     # Set up step size
     step_size = LinearDecayStepSizeRule(
@@ -620,64 +571,10 @@ def main(args) -> None:
         decay=args.relaxation_eta,
     )
 
-    # Set up callbacks
+    # Set up callbacks (shared function from dtnv_common)
     callbacks = get_callbacks(args, update_interval)
 
-    # Add metrics callback if reference path is provided
-    if getattr(args, "compute_metrics", False) and getattr(args, "reference_path", None):
-        logging.info("Setting up metrics computation...")
-
-        try:
-            # Load reference image (should be BlockDataContainer saved from convergence run)
-            reference_pet = ImageData(os.path.join(args.reference_path, "image_0_final.hv"))
-            reference_spect = ImageData(os.path.join(args.reference_path, "image_1_final.hv"))
-            reference = EnhancedBlockDataContainer(reference_pet, reference_spect)
-
-            # Create mask from reference if threshold specified
-            mask = None
-            mask_threshold = getattr(args, "mask_threshold", None)
-            if mask_threshold is not None and mask_threshold > 0:
-                logging.info(f"Creating mask with threshold {mask_threshold}")
-                # Create mask for each modality
-                mask_pet = create_mask_from_threshold(
-                    reference_pet,
-                    threshold=mask_threshold * float(reference_pet.max()),
-                    mode="greater",
-                )
-                mask_spect = create_mask_from_threshold(
-                    reference_spect,
-                    threshold=mask_threshold * float(reference_spect.max()),
-                    mode="greater",
-                )
-                mask = EnhancedBlockDataContainer(mask_pet, mask_spect)
-
-                # Log mask coverage
-                mask_pet_arr = get_array(mask_pet)
-                mask_spect_arr = get_array(mask_spect)
-                logging.info(
-                    f"Mask coverage: PET {100 * mask_pet_arr.sum() / mask_pet_arr.size:.1f}%, "
-                    f"SPECT {100 * mask_spect_arr.sum() / mask_spect_arr.size:.1f}%"
-                )
-
-            metrics_interval = getattr(args, "metrics_interval", None) or update_interval
-            metrics_normalization = getattr(args, "metrics_normalization", "range")
-
-            metrics_callback = ComputeMetricsCallback(
-                reference=reference,
-                filename=os.path.join(args.output_path, "metrics"),
-                interval=metrics_interval,
-                mask=mask,
-                normalization=metrics_normalization,
-                verbose=True,
-            )
-            callbacks.append(metrics_callback)
-            logging.info(f"Metrics will be computed every {metrics_interval} iterations")
-
-        except Exception as e:
-            logging.warning(f"Failed to set up metrics callback: {e}")
-            logging.warning("Continuing without metrics computation")
-
-    # Run algorithm
+    # Run algorithm (shared function from dtnv_common)
     subiterations = args.num_epochs * epoch_length
     algo = get_algorithm(
         initial_estimates,
