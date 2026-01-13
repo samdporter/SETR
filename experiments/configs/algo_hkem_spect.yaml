@@ -4,7 +4,7 @@
 modality: "SPECT"
 method: "ista"
 guidance: "attenuation"  # Uses CT/umap as anatomical guidance
-num_subsets: 12  # SPECT: 12 subsets
+num_subsets: 15  # SPECT: 15 subsets
 
 #== Kernel operator parameters (sigma values specific to SPECT)
 sigma_anatomical: 1.0

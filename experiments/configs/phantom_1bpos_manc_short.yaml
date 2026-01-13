@@ -8,7 +8,7 @@ transform_file: "/home/storage/prepared_data/phantom_data/manc_nema_phantom_data
 use_tof: false
 
 #== Subset configuration
-num_subsets: [18, 14]  # [PET, SPECT]
+num_subsets: [18, 18]  # [PET, SPECT]
 
 #== Resolution modeling
 pet_gauss_fwhm: [5.61, 4.83, 4.93]

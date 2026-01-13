@@ -2,7 +2,8 @@
 # HKEM uses ordered subsets (SGFunction), not variance reduction
 
 #== Reconstruction settings
-num_epochs: 10  # HKEM: 10 epochs for both PET and SPECT
+num_epochs_pet: 30  # HKEM: 15 epochs for both PET and SPECT
+num_epochs_spect: 15
 step_size: 1
 sampling: "sequential"  # Ordered subsets
 

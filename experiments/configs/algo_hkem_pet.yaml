@@ -4,7 +4,7 @@
 modality: "PET"
 method: "ista"
 guidance: "emission"  # Uses resampled SPECT as emission guidance
-num_subsets: 9  # PET: 9 subsets
+num_subsets: 15  # PET: 15 subsets
 
 #== Kernel operator parameters (sigma values specific to PET)
 sigma_anatomical: 3.0
