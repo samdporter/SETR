@@ -1,5 +1,44 @@
-# Preconditioner Sweep Documentation Moved
+# Preconditioner Experiments
 
-The detailed instructions for the preconditioner sweep workflow now live in
-[`docs/guides/preconditioners_cluster.md`](../../docs/guides/preconditioners_cluster.md).
-Refer to that document for setup and usage information.
+This directory contains the complete workflow for comparing preconditioner performance
+in synergistic PET/SPECT reconstruction.
+
+## Quick Start
+
+**See [WORKFLOW.md](WORKFLOW.md) for detailed instructions.**
+
+### 1. Run Baseline Reconstructions (Stage 1)
+```bash
+./launch_baseline_recons.sh config_1bpos_anthro_long.yaml 200 full
+```
+
+### 2. Run Preconditioner Sweep (Stage 2)
+```bash
+./launch_precond_sweep.sh precond_sweep_1bpos.yaml full
+```
+
+### 3. Analyze Results (Stage 3)
+```bash
+python scripts/analyze_precond_sweep.py --sweep precond_1bpos --baseline baselines_1bpos --watch
+```
+
+### 4. Check Status Anytime
+```bash
+./check_status.sh
+```
+
+## Why Two Stages?
+
+1. **Baselines**: Establish reference solutions for each alpha value using long, accurate reconstructions
+2. **Sweep**: Test different preconditioners and step sizes, measuring convergence speed to baseline
+3. **Analysis**: Compare performance, identify optimal configurations
+
+This design allows you to test which preconditioners are:
+- Fastest to converge
+- Most robust to step size selection
+- Most stable across different alpha values (prior weighting)
+
+## Documentation
+
+- **[WORKFLOW.md](WORKFLOW.md)** - Complete workflow guide
+- **[docs/guides/preconditioners_cluster.md](../../docs/guides/preconditioners_cluster.md)** - Additional cluster information

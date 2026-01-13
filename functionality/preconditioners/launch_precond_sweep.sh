@@ -14,7 +14,7 @@ PARAM_DIR="$FUNC_DIR/parameters"
 SCRIPTS_DIR="$FUNC_DIR/scripts"
 
 # Get sweep config from argument
-SWEEP_CONFIG="${1:-precond_sweep_2bpos.yaml}"
+SWEEP_CONFIG="${1:-precond_sweep_1bpos.yaml}"
 MODE="${2:-full}"
 
 show_usage() {

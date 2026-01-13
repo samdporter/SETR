@@ -1,0 +1,23 @@
+# Preconditioner comparison sweep configuration for 2 bed positions
+sweep_name: "precond_1bpos"
+base_config: "config_1bpos_anthro.yaml"
+script: "test_preconditioner_single.py"
+
+# SGE resource requirements
+sge:
+  runtime: "48:00:00"
+  memory: "95G"
+  cores: 1
+  queue: null  # Use default queue
+  gpu: true
+
+# Parameter sweep settings - 3-way combination
+parameters:
+  precond_types_file: "precond_types.csv"
+  alphas_file: "alphas.csv"
+  step_sizes_file: "step_sizes.csv"
+
+# Fixed parameters for all runs
+fixed_params:
+  num_epochs: 50
+  use_tof: true
