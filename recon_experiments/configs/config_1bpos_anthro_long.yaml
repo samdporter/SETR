@@ -1,0 +1,66 @@
+#== Reconstruction settings
+num_subsets: [36, 18]
+num_epochs: 25
+initial_step_size: 1
+update_interval: 54
+relaxation_eta: 0.01
+use_scatter: true
+variance_reduction: "svrg" # can be "svrg", "saga", or "none"
+
+#== Regularisation
+no_prior: false
+use_kappa: false
+delta: null # smoothing parameter for TNV / TV
+dynamic_percentile: 95.0  # Percentile for computing dynamic ranges
+delta_divisor: 20.0
+epsilon_divisor: 100.0  # Epsilon = dynamic_range / divisor (for log TNV)
+prior_updates_per_epoch: null
+snapshot_interval_factor: 1.0  # Update SVRG snapshot every epoch (was 2x)
+
+# TNV (vectorial) prior settings
+use_tnv_prior: true
+gamma_tnv: 1.0
+alpha: 0.02
+beta: 0.02
+tnv_stencil: "18"
+tnv_max_step: 1
+tnv_bnd_cond: "Neumann"
+directional_tnv: true
+tnv_both_directions: false
+tail_singular_values: null
+stable: false
+smoothing: 'charbonnier' # can be charbonnier, fair or perona_malik
+
+# Modality-specific TV prior settings
+use_modality_specific_priors: false
+prior: "tv" # can be tv or rdp
+gamma_pet: 0.5
+gamma_spect: 0.5
+tv_stencil: "18" # can be 6, 18, or 26
+tv_max_step: 2
+tv_bnd_cond: "Neumann"
+directional_tv: true
+tv_both_directions: false
+
+#== Image processing
+pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
+spect_gauss_fwhm: [6.8, 6.8, 6.8] # FROM bremss data anyscan
+spect_res: [1.31, 0.027, false] # Analytical collimator resolution for SPECT
+use_zoom_registration: false
+
+#== Forward models
+no_gpu: false
+keep_all_views_in_cache: true
+use_tof: false
+
+pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom"
+spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+output_path: "/home/sam/working/synergistic_recon/output/test_anthro"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+#== Miscellaneous
+save_images: true
+save_gradients: false
+save_preconditioners: false
+seed: null
+profile: false

@@ -1,0 +1,40 @@
+#== DTV Single bed position - SPECT only reconstruction  
+#== Uses directional TV prior guided by SPECT umap
+
+#== Reconstruction settings
+num_subsets: 12  # SPECT subsets
+num_epochs: 10
+initial_step_size: 0.1
+update_interval: 1
+relaxation_eta: 0.02
+use_scatter: true
+
+#== Regularisation
+no_prior: false
+use_kappa: true
+delta: null # smoothing parameter for DTV (auto-computed if null)
+
+# DTV prior weight
+gamma_spect: 5.0     # Weight for SPECT directional TV prior
+
+# SPECT DTV settings  
+spect_stencil: "6"           # Stencil connectivity: 6, 18, or 26
+spect_both_directions: false # Use bidirectional gradients
+
+#== Image processing
+spect_gauss_fwhm: [6.7, 6.7, 6.7] # SPECT resolution modeling
+spect_res: [0.81, 0.03, false]    # Analytical collimator resolution for SPECT
+
+#== Forward models
+no_gpu: false
+keep_all_views_in_cache: true
+
+#== Data paths
+spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+output_path: "/home/sam/working/synergistic_recon/output/dtv_1bpos_spect"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+#== Miscellaneous
+save_images: true
+seed: null
+profile: false

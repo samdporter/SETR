@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recon-experiments"
+version = "0.1.0"
+description = "Experiment framework and analysis tools for multimodal PET/SPECT reconstruction research"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Sam Porter", email = "sam.porter.18@ucl.ac.uk"}
+]
+maintainers = [
+    {name = "Sam Porter", email = "sam.porter.18@ucl.ac.uk"}
+]
+keywords = [
+    "PET",
+    "SPECT",
+    "nuclear-medicine",
+    "reconstruction-experiments",
+    "parameter-sweeps",
+    "image-quality-metrics",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+requires-python = ">=3.9"
+
+# Experiments package depends on core + analysis tools
+dependencies = [
+    "recon-core",  # Will be installed via path dependency in dev mode
+    "numpy>=1.21.0,<2.0.0",
+    "pandas>=1.3.0",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.11.0",  # For analysis plots
+    "pyyaml>=5.4.0",
+    "tqdm>=4.60.0",  # Progress bars for long runs
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
+    "pytest>=7.0.0",
+    "ruff>=0.6.8",
+]
+hpc = [
+    "wandb>=0.12.0",  # Optional: experiment tracking
+]
+test = [
+    "pytest>=7.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/samdporter/setr"
+Repository = "https://github.com/samdporter/setr"
+"Bug Tracker" = "https://github.com/samdporter/setr/issues"
+
+# Entry points for experiment runners
+[project.scripts]
+run-recon = "recon_experiments.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["recon_experiments", "recon_core"]
+combine-as-imports = true

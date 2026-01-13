@@ -1,0 +1,53 @@
+delta: null
+dynamic_percentile: 95.0  # Percentile for computing dynamic ranges
+delta_divisor: 10.0
+epsilon_divisor: 100.0  # Epsilon = dynamic_range / divisor (for log TNV)
+num_subsets: [9, 12]
+no_prior: false
+num_epochs: 100
+use_kappa: false
+initial_step_size: 1.0
+relaxation_eta: 0.01
+use_scatter: true
+
+# TNV (vectorial) prior settings
+use_tnv_prior: true
+gamma_tnv: 1.0
+alpha: 0.1
+beta: 0.1
+use_log_tnv: false  # Set to true to use log-domain TNV
+stencil: "26"
+tnv_max_step: 1
+tnv_both_directions: false
+directional_tnv: true
+tail_singular_values: null
+stable: false
+variance_reduction: "svrg" # can be "svrg", "saga", or "none"
+
+# Modality-specific TV prior settings
+use_modality_specific_priors: false
+prior: "rdp" # can be tv or rdp
+gamma_pet: 0.01
+gamma_spect: 0.01
+delta_tv: null  # defaults to delta if not set
+directional_tv: true
+tv_stencil: "6"
+tv_max_step: 2
+tv_both_directions: true
+
+pet_gauss_fwhm: [7,7,7] # DD paper #[5.1, 4.9, 4.9] # FROM Mediso Anyscan specifications at 10cm
+spect_gauss_fwhm: [6.78, 6.78, 6.78]
+spect_res: [1.21, 0.027, false] # Analytical collimator resolution for SPECT
+use_zoom_registration: false
+
+pet_data_path: "/home/storage/bootstraps/prompts_nonparam_s73_sf0.0167_000"
+spect_data_path: "/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/SPECT"
+output_path: "/home/sam/working/synergistic_recon/output/test"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+save_images: true
+seed: null
+no_gpu: false
+keep_all_views_in_cache: true
+profile: false
+flip: true

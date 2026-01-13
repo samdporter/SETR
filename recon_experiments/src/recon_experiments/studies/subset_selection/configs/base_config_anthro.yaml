@@ -1,0 +1,70 @@
+# Base configuration for subset selection experiments
+# Anthropomorphic phantom - single bed position
+
+# Data fidelity weights (alpha gets scaled by gradient energy scaling)
+alpha: 1
+beta: 1
+delta: null
+
+# Subset configuration
+num_subsets: [18, 18]  # [PET, SPECT]
+
+# Reconstruction parameters
+num_epochs: 100  # Will be overridden to 10000 for convergence reference
+initial_step_size: 1
+relaxation_eta: 0.01
+variance_reduction: "svrg"
+prior_updates_per_epoch: null
+
+# Kappa weighting
+use_kappa: false
+
+# TNV (vectorial) prior settings - DTNV only
+use_tnv_prior: true
+gamma_tnv: 1.0  # Will be swept: [10, 100, 1000]
+directional_tnv: true
+tail_singular_values: null
+stable: false
+tnv_both_directions: true
+tnv_stencil: "18"
+tnv_max_step: 1
+tnv_bnd_cond: "Periodic"
+hessian_type: "slow"
+
+# No modality-specific priors for these experiments
+use_modality_specific_priors: false
+no_prior: false
+
+# Resolution modeling
+pet_gauss_fwhm: [5.1, 4.9, 4.9]  # Mediso Anyscan at 10cm
+spect_gauss_fwhm: [6.7, 6.7, 6.7]
+spect_res: [0.81, 0.03, false]  # Analytical collimator resolution
+
+# Data paths
+pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short"
+spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+output_path: "/home/sam/working/synergistic_recon/functionality/subset_selection/output/test"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+# Runtime settings
+save_images: false  # Don't save all images - use metrics instead
+save_gradients: false
+save_preconditioners: false
+seed: 42  # Fixed seed for reproducibility
+no_gpu: false
+keep_all_views_in_cache: true
+profile: false
+flip: false
+use_scatter: true
+
+# Metrics computation (for convergence comparison)
+compute_metrics: true  # Compute metrics vs convergence reference
+metrics_interval: null  # Compute every N iterations (null = same as update_interval)
+reference_path: null  # Path to convergence reference image (will be set per gamma)
+mask_threshold: 0.01  # Create mask from reference (voxels > threshold * max)
+metrics_normalization: "range"  # Normalization for NRMSE/NMAE
+
+# Experimental parameters (set by sweep)
+# subset_mode: "separate" or "paired"
+# prior_mode: "always" or "subset"
+# precond_type: "bsrem", "vtv_svd_principal_alpha", or "vtv_frobenius_surrogate_pd"

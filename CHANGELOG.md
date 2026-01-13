@@ -7,6 +7,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-01-13
+
+### Changed - Major Repository Restructure
+
+**Repository Split into Core Library and Experiments Package**
+
+This release represents a major restructuring of the repository to separate stable library code from research experiments.
+
+#### Package Structure
+- **Split monolithic `setr` package into two independent packages**:
+  - `recon_core` (v0.2.0) - Stable reconstruction library with minimal dependencies
+  - `recon_experiments` (v0.1.0) - Experiment runners, sweeps, and analysis tools
+- **Adopted src-layout** for both packages with modern `pyproject.toml` configuration
+- **Established clean API boundaries** with comprehensive public API in `recon_core.__init__`
+- **Enabled independent versioning** and release cycles for each package
+
+#### Import Changes
+- **Core library imports**: `setr.*` → `recon_core.*` (e.g., `from setr.priors import WeightedVectorialTotalVariation` → `from recon_core.priors import WeightedVectorialTotalVariation`)
+- **Experiment helpers**: `setr.scripts.*` → `recon_experiments.runners.*` (e.g., `from setr.scripts.common import init_run_env` → `from recon_experiments.runners.common import init_run_env`)
+- **Updated 500+ import statements** across 100+ Python files
+- **Preserved numerical behaviour** - all algorithms produce identical results
+
+#### Directory Migration
+- **Core library** (`recon_core/src/recon_core/`):
+  - `src/setr/cil_extensions/` → Extensions to CIL framework
+  - `src/setr/core/` → Core gradient computations
+  - `src/setr/kernel/` → Low-level EM kernels
+  - `src/setr/priors/` → Regularisation functions (VTV, RDP, MI)
+  - `src/setr/utils/` → Utility functions (SIRF, CIL, IO, NiftyReg)
+  - `tests/` → Test suite (17 test files, 169 tests)
+  - `data/` → Test data files
+
+- **Experiments package** (`recon_experiments/src/recon_experiments/`):
+  - `src/setr/scripts/` + `scripts/` → `runners/scripts/` (40 reconstruction scripts)
+  - `experiments/` → `experiments/` (22 files, experiment orchestration)
+  - `functionality/` → `studies/` (81 files, organised research studies)
+  - `sweeps/` → `sweeps/` (7 files, parameter sweep framework)
+  - `configs/` → Top-level config files (25 YAML files)
+  - `*.ipynb` → `notebooks/` (analysis notebooks)
+
+#### Dependency Management
+- **Core library dependencies** (minimal):
+  - torch >= 2.0.0
+  - numba >= 0.58.0
+  - numpy >= 1.21.0, < 2.0.0
+  - matplotlib >= 3.5.0
+  - pandas >= 1.3.0
+  - pyyaml >= 5.4.0
+  - External: SIRF, CIL, STIR (documented separately)
+
+- **Experiments package dependencies**:
+  - Depends on `recon-core`
+  - Added: seaborn, tqdm for analysis and progress tracking
+  - Optional: jupyter for notebooks
+
+- **Removed from core**: wandb, seaborn, jupyter (moved to experiments)
+
+### Added
+
+#### Documentation
+- **Comprehensive documentation reorganisation**:
+  - New `docs/index.md` - Central documentation hub with organised sections
+  - New `docs/cluster-usage.md` - 400+ line comprehensive HPC/cluster guide covering:
+    - Job submission basics (SGE templates)
+    - Bootstrap reconstruction workflows (DTNV, HKEM)
+    - Parameter sweep framework
+    - Preconditioner comparison studies
+    - Monitoring and debugging procedures
+    - Resource requirements and troubleshooting
+  - `docs/migration.md` - Complete migration guide with import mapping tables
+  - `docs/architecture/repository-split.md` - Detailed refactoring documentation
+  - `docs/architecture/vtv_hessian_diagonals.md` - Technical reference (relocated)
+
+#### Package Documentation
+- `recon_core/README.md` - Complete library documentation with API reference
+- `recon_core/CHANGELOG.md` - Core library version history
+- `recon_experiments/README.md` - Experiments framework guide
+- Root `README.md` - Updated monorepo overview with quick start
+- Multiple README files in experiment subdirectories for specific workflows
+
+#### Tooling
+- `validate_split.sh` - Automated validation script to verify repository structure
+- Shell scripts for cluster job submission (13 .sh and .qsub.sh files)
+
+### Changed
+
+#### Repository Structure
+- **Removed duplicate directories** after verification:
+  - Old `src/setr/` package (merged into recon_core and recon_experiments)
+  - Root `tests/` and `data/` (moved to recon_core/)
+  - Root `scripts/`, `experiments/`, `functionality/`, `sweeps/`, `configs/` (moved to recon_experiments/)
+  - Build artifacts in `dist/`
+
+- **Cleaned up documentation**:
+  - `README.md` - Now main entry point (was ROOT_README.md)
+  - Removed duplicate/outdated READMEs
+  - Fixed broken documentation references
+  - Consolidated cluster guides into comprehensive `docs/cluster-usage.md`
+  - Created `docs/architecture/` for design documentation
+
+#### Configuration
+- **Updated all config files** to reference new package structure
+- **Updated .gitignore** for new package structure (dist/, build/ for both packages)
+
+### Removed
+
+- Old `setr` package from `src/`
+- Duplicate `ROOT_README.md` (merged into README.md)
+- Temporary `README.md.old` backup file
+- Build artifacts directory `dist/`
+- Old `docs/reference/` directory (consolidated into `docs/architecture/`)
+
+### Migration Notes
+
+**For existing users**, see `docs/migration.md` for:
+- Complete import mapping table (old → new)
+- Step-by-step migration instructions
+- Example code updates
+- Testing and validation procedures
+
+**Key changes**:
+1. Install both packages: `pip install -e recon_core/ && pip install -e recon_experiments/`
+2. Update imports from `setr.*` to `recon_core.*` for library code
+3. Update imports from `setr.scripts.*` to `recon_experiments.runners.*` for experiment helpers
+4. Update config file paths if referencing old locations
+5. Run tests to verify numerical consistency
+
+**Numerical behaviour preserved**: All reconstruction algorithms produce identical results to the previous version.
+
+## [0.1.0] - Legacy
+
 ### Added
 - Vectorial Total Variation regularization
 - GPU-accelerated gradients and Jacobians
@@ -90,7 +221,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MIT license
 - README with installation instructions
 
-[unreleased]: https://github.com/samdporter/setr/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/samdporter/setr/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/samdporter/setr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/samdporter/setr/releases/tag/v0.1.0
 
 ### Fixed

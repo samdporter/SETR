@@ -1,0 +1,41 @@
+# HKEM (Hybrid Kernelized EM) Configuration - Multiple Bed Positions
+# This configuration is for multi-bed PET reconstruction with kernel operators
+
+# Basic reconstruction parameters
+modality: "PET"
+method: "ista"   # Only ISTA supported for multi-bed reconstruction
+use_scatter: true
+
+# Data paths
+pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt4/PET"
+output_path: "/home/sam/working/synergistic_recon/results/sirt4/non_tof/hkem_pet_2bpos"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+# Algorithm parameters
+num_subsets: 9
+num_epochs: 50
+step_size: 1
+
+# Kernel operator parameters
+num_neighbours: 5
+num_non_zero_features: 1
+sigma_anatomical: 3              # Anatomical similarity parameter
+sigma_emission: 1                # Emission similarity parameter
+sigma_distance_anatomical: 5     # Distance weighting parameter for anatomical features
+sigma_distance_emission: 5       # Distance weighting parameter for emission features
+hybrid: true                     # Enable hybrid anatomical+emission kernel
+only_2D: false  # Use 2D kernels only (true = only_2D in old code)
+guidance: "emission"
+
+# Preconditioner parameters
+freeze_iter: 27  # Iteration to freeze kernel parameters (inf = never freeze)
+
+# Image processing parameters
+pet_gauss_fwhm: [5.61, 4.83, 4.93] # FROM 710 acceptance testing at UCL (10cm)
+
+# System parameters
+no_gpu: false
+use_tof: false
+seed: null
+
+profile: false

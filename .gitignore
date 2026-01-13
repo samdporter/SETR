@@ -167,3 +167,10 @@ functionality/subset_selection/configs/*.yaml
 
 # Temporary/scratch files
 xit
+
+# New package structure (post-split)
+recon_core/dist/
+recon_core/build/
+recon_experiments/dist/
+recon_experiments/build/
+recon_experiments/output/
