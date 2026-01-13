@@ -768,11 +768,9 @@ class ImageResampleOperator(LinearOperator):
 
         length = ImageResampleOperator.get_combined_length(images)
 
-        # Check if the total length is a near-integer multiple of the voxel size
-        assert abs((length / voxel_size) % 1) < 1e-3 or abs(((length / voxel_size) % 1) - 1) < 1e-3
         return int(round(length / voxel_size))
 
-    def direct(self, images: BlockDataContainer, out: BlockDataContainer = None):
+    def direct(self, images: BlockDataContainer, out: BlockDataContainer | None = None):
         """
         Resamples each image in the input BlockDataContainer to the common reference grid.
         """

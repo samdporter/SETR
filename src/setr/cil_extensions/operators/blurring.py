@@ -94,6 +94,7 @@ class GaussianBlurringOperator(LinearOperator):
             blurred = convolve(arr, self.psf, mode='reflect')
         if out is None:
             out = x.clone()
+        np.nan_to_num(blurred, copy=False)
         out.fill(blurred)
         return out
 
@@ -119,6 +120,7 @@ class GaussianBlurringOperator(LinearOperator):
             result = correlate(arr, self.psf, mode='reflect')
         if out is None:
             out = x.clone()
+        np.nan_to_num(result, copy=False)
         out.fill(result)
         return out
     

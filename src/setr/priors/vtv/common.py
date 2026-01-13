@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 
+from .numerical_constants import get_division_epsilon
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -41,8 +43,11 @@ def charbonnier(x, eps):
 
 
 def charbonnier_grad(x, eps):
-    # Add small epsilon to denominator for stability
-    return x / torch.sqrt(x**2 + eps**2)
+    # Add small epsilon to denominator for stability and zero-out tiny inputs
+    eps_div = get_division_epsilon(x.dtype)
+    eps_safe = torch.clamp(eps, min=eps_div)
+    denom = torch.sqrt(x**2 + eps_safe**2)
+    return torch.where(torch.abs(x) < eps_div, torch.zeros_like(x), x / denom)
 
 
 def charbonnier_hessian_surrogate(x, eps):

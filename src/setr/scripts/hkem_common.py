@@ -101,7 +101,18 @@ def run_kosmaposl(args, data, guidance, hyperparams):
     recon = KOSMAPOSLReconstructor()
     recon.set_objective_function(obj_fun)
     recon.set_num_subsets(args.num_subsets)
-    recon.set_num_subiterations(args.num_subsets * args.num_epochs)
+
+    # Use modality-specific epochs if available, otherwise fall back to num_epochs
+    if args.modality.upper() == "PET":
+        num_epochs = getattr(args, "num_epochs_pet", args.num_epochs)
+        logging.info(f"Using PET epochs: {num_epochs}")
+    else:  # SPECT
+        num_epochs = getattr(args, "num_epochs_spect", args.num_epochs)
+        logging.info(f"Using SPECT epochs: {num_epochs}")
+
+    num_subiterations = args.num_subsets * num_epochs
+    logging.info(f"Total subiterations: {num_subiterations} ({num_epochs} epochs × {args.num_subsets} subsets)")
+    recon.set_num_subiterations(num_subiterations)
     recon.set_anatomical_prior(guidance)
 
     # Set kernel parameters
