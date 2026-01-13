@@ -8,7 +8,7 @@ from cil.framework import BlockDataContainer
 from cil.optimisation.functions import KullbackLeibler, OperatorCompositionFunction
 from cil.optimisation.operators import BlockOperator, IdentityOperator, ZeroOperator
 from sirf.contrib import partitioner
-from sirf.Reg import NiftiImageData3DDisplacement
+from sirf.Reg import NiftiImageData3DDisplacement, AffineTransformation
 from sirf.STIR import (
     AcquisitionData,
     AcquisitionModelUsingMatrix,
@@ -228,7 +228,7 @@ def load_zoom_factors(spect_dir):
     raise ValueError("No zoom factors found in file")
 
 
-def get_spect_data(path: str, load_sinos=True) -> dict:
+def get_spect_data(path: str, load_sinos: bool = True, displacement_suffix: str = "nii") -> dict:
     """
     Load SPECT data from the given path.
 
@@ -239,29 +239,44 @@ def get_spect_data(path: str, load_sinos=True) -> dict:
 
     Args:
         path (str): Path to the data directory.
+        load_sinos (bool): Whether to load acquisition/additive sinograms.
+        displacement_suffix (str): "nii" for NIfTI displacement, otherwise treated as affine.
 
     Returns:
-        dict: A dictionary with keys: "acquisition_data", "additive", "attenuation",
-        "template_image", "initial_image", and "displacement".
+        dict: Keys may include: "acquisition_data", "additive", "attenuation",
+              "template_image", "initial_image", "displacement", "no_zoom_displacement",
+              "zoom_factors".
     """
+    def _first_existing(candidates):
+        for fn in candidates:
+            fp = os.path.join(path, fn)
+            if os.path.exists(fp):
+                return fp
+        return None
+
+    def _load_transform(fp: str):
+        if displacement_suffix == "nii":
+            return NiftiImageData3DDisplacement(fp)
+        return AffineTransformation(fp)
+
+    spect_data: dict = {}
+
+    # Sinograms
     if load_sinos:
-        spect_data = {"acquisition_data": AcquisitionData(os.path.join(path, "peak.hs"))}
+        spect_data["acquisition_data"] = AcquisitionData(os.path.join(path, "peak.hs"))
         try:
             spect_data["additive"] = AcquisitionData(os.path.join(path, "scatter_dl.hs"))
         except Exception as e_scatter:
             logging.warning("No scatter data found (%s). Using zeros.", str(e_scatter))
             spect_data["additive"] = AcquisitionData(spect_data["acquisition_data"])
             spect_data["additive"].fill(0)
-    else:
-        spect_data = {}
 
+    # Attenuation (flip x-axis due to STIR bug) IS THIS STILL NEEDED?
     spect_data["attenuation"] = ImageData(os.path.join(path, "umap_zoomed.hv"))
-    # Flip the attenuation image on the x-axis due to bug in STIR.
-    attn_arr = spect_data["attenuation"].as_array()
-    attn_arr = np.flip(attn_arr, axis=-1)
+    attn_arr = np.flip(spect_data["attenuation"].as_array(), axis=-1)
     spect_data["attenuation"].fill(attn_arr)
 
-    # Always load the template image.
+    # Template image (required)
     template_img_path = os.path.join(path, "template_image.hv")
     try:
         spect_data["template_image"] = ImageData(template_img_path)
@@ -269,7 +284,7 @@ def get_spect_data(path: str, load_sinos=True) -> dict:
         logging.error("Failed to load SPECT template image (%s)", str(e_template))
         raise RuntimeError("Unable to load SPECT template image.") from e_template
 
-    # Try to load the initial image.
+    # Initial image (optional -> uniform template)
     initial_img_path = os.path.join(path, "initial_image.hv")
     try:
         spect_data["initial_image"] = ImageData(initial_img_path).maximum(0)
@@ -280,60 +295,51 @@ def get_spect_data(path: str, load_sinos=True) -> dict:
         )
         spect_data["initial_image"] = spect_data["template_image"].get_uniform_copy(1)
 
-    # Load displacement field for SPECT to PET registration
-    displacement_files = [
-        "spect2pet_zoom_nonrigid.nii",
-        "spect2pet_zoom_rigid.nii",
-        "spect2pet.nii",
+    # Displacement fields (zoom)
+    displacement_candidates = [
+        f"spect2pet_zoom_nonrigid.{displacement_suffix}",
+        f"spect2pet_zoom_rigid.{displacement_suffix}",
+        f"spect2pet.{displacement_suffix}",
     ]
-    displacement_path = None
-    for filename in displacement_files:
-        full_path = os.path.join(path, filename)
-        if os.path.exists(full_path):
-            displacement_path = full_path
-            break
-
+    displacement_path = _first_existing(displacement_candidates)
     if displacement_path is None:
         logging.warning("No SPECT displacement field found. Registration will not be available.")
         spect_data["displacement"] = None
     else:
         try:
-            spect_data["displacement"] = NiftiImageData3DDisplacement(displacement_path)
-        except Exception as e_displacement:
+            spect_data["displacement"] = _load_transform(displacement_path)
+        except Exception as e_disp:
             logging.warning(
                 "Failed to load SPECT displacement field from %s (%s). Registration will not be available.",
                 displacement_path,
-                str(e_displacement),
+                str(e_disp),
             )
             spect_data["displacement"] = None
-            
-    no_zoom_displacement_files = [
-        "spect2pet_nozoom_nonrigid.nii",
-        "spect2pet_nozoom_rigid.nii",
-        "spect2pet_nozoom.nii"
+
+    # Displacement fields (no-zoom)
+    no_zoom_candidates = [
+        #f"spect2pet_nozoom_nonrigid_liver.{displacement_suffix}",
+        f"spect2pet_nozoom_nonrigid.{displacement_suffix}",
+        f"spect2pet_nozoom_rigid.{displacement_suffix}",
+        f"spect2pet_nozoom.{displacement_suffix}",
     ]
-
-    no_zoom_displacement_path = None
-    for filename in no_zoom_displacement_files:
-        full_path = os.path.join(path, filename)
-        if os.path.exists(full_path):
-            no_zoom_displacement_path = full_path
-            break
-
-    if no_zoom_displacement_path is None:
+    no_zoom_path = _first_existing(no_zoom_candidates)
+    if no_zoom_path is None:
         logging.warning("No SPECT no-zoom displacement field found. Registration will not be available.")
         spect_data["no_zoom_displacement"] = None
     else:
         try:
-            spect_data["no_zoom_displacement"] = NiftiImageData3DDisplacement(no_zoom_displacement_path)
+            spect_data["no_zoom_displacement"] = _load_transform(no_zoom_path)
+            print(f"Used no-zoom displacement field from {no_zoom_path}")
         except Exception as e_no_zoom:
             logging.warning(
                 "Failed to load SPECT no-zoom displacement field from %s (%s). Registration will not be available.",
-                no_zoom_displacement_path,
+                no_zoom_path,
                 str(e_no_zoom),
             )
             spect_data["no_zoom_displacement"] = None
 
+    # Zoom factors (optional)
     try:
         spect_data["zoom_factors"] = load_zoom_factors(path)
     except Exception as e_zoom:
@@ -344,6 +350,7 @@ def get_spect_data(path: str, load_sinos=True) -> dict:
         spect_data["zoom_factors"] = None
 
     return spect_data
+
 
 
 def create_spect_uniform_image(sinogram, origin=None, dims=None):
@@ -382,49 +389,104 @@ def create_spect_uniform_image(sinogram, origin=None, dims=None):
     return new_image
 
 
-def compute_kappa_squared_image_from_partitioned_objective(obj_funs, init_img):
-    """Compute kappa-squared weighting image from objective function Hessians.
+def get_kappa_squared(am, x, max_value=1e3):
+    """Compute kappa squared image from attenuation map using forward-backward projection.
 
-    Computes κ²(x) = Σ_i H_i(init_img) · 1 where H_i represents the Hessian
-    of each objective function component. This provides voxel-wise weighting
-    for cross-modal regularization in synergistic reconstruction.
+    This computes the sensitivity-based weighting image using:
+        kappa² = AM^T [ (AM·1) / AM·x ]
+
+    Where:
+    - AM is the attenuation-only acquisition model (no additive term)
+    - x is the initial/current image estimate
+    - Result is clamped to [0, max_value] after NaN/Inf cleaning
 
     Args:
-        obj_funs: List of objective functions that support multiply_with_Hessian method.
-        init_img: Initial image estimate used for Hessian evaluation.
+        am: SIRF AcquisitionModel (should be attenuation-only, no additive term)
+        x: SIRF ImageData - initial image estimate
+        max_value: Maximum allowed value for kappa² (default 1e3)
 
     Returns:
-        ImageData: Kappa-squared weighting image with absolute values applied.
+        SIRF ImageData: Kappa squared weighting image
+
+    Notes:
+        - This replaces the old Hessian-based kappa calculation
+        - The AM should NOT include additive terms (randoms, scatter)
+        - max_value=np.inf for SPECT (no clamping), 1e3 for PET (numerical stability)
     """
-    out = init_img.get_uniform_copy(0)  # accumulator zeros
-    ones = init_img.get_uniform_copy(1)  # vector of ones
+    import numpy as np
 
-    for obj_fun in obj_funs:
-        g = obj_fun
-        while hasattr(g, "function"):
-            g = g.function
+    # Forward project uniform image through AM
+    one_image = x.get_uniform_copy(1.0)
+    am_one = am.forward(one_image)
 
-        h1 = g.multiply_with_Hessian(init_img, ones)
-        out += h1
+    # Create uniform sinogram
+    one_data = am_one.get_uniform_copy(1.0)
 
-    out = out.abs()
-    return out
+    # Forward project actual image
+    am_x = am.forward(x)
+
+    # Compute ratio: one_data / am_x
+    ratio = one_data / am_x
+
+    # Clean NaN/Inf values
+    ratio_arr = np.nan_to_num(ratio.asarray(), nan=0.0, posinf=0.0, neginf=0.0)
+    ratio.fill(ratio_arr)
+
+    # Clamp to max_value
+    ratio = ratio.minimum(max_value)
+
+    # Backproject weighted sinogram
+    kappa2 = am.backward(ratio * am_one)
+
+    return kappa2
 
 
-def normalise_kappa_squares(kappa_block, pct=95):
+def smooth_kappa_via_inverse(kappa2, fwhm_mm=(10.0, 10.0, 10.0), save_inverse=False, output_path=None, prefix=""):
+    """Smooth kappa² image by smoothing its inverse.
+
+    This provides better noise suppression in low-sensitivity regions:
+        1. Compute 1/kappa² (with safe division)
+        2. Apply Gaussian smoothing with specified FWHM
+        3. Compute 1/(smoothed_inverse) to get smoothed kappa²
+
+    Args:
+        kappa2: SIRF ImageData - kappa squared image to smooth
+        fwhm_mm: tuple of 3 floats - FWHM in mm for (z,y,x) directions
+        save_inverse: bool - if True, save the inverse image to disk
+        output_path: str - directory to save inverse image (required if save_inverse=True)
+        prefix: str - prefix for saved inverse filename
+
+    Returns:
+        tuple: (kappa2_smoothed, kappa2_inv_smoothed) - both as SIRF ImageData
+               kappa2_inv_smoothed is the smoothed inverse image
     """
-    Scale each κ² image so its `pct` percentile == 1.
-    """
-    arrays = [get_array(im) for im in kappa_block.containers]
-    pvals = [np.percentile(a, pct) for a in arrays]
-    for im, p in zip(kappa_block.containers, pvals):
-        if p > 1e-12:
-            logging.info(
-                f"Normalising kappa image with max {im.max()} to percentile {pct} value {p}"
-            )
-            im *= 1.0 / p
-    return kappa_block
+    import numpy as np
+    import os
 
+    # Create smoother
+    im_smoother = SeparableGaussianImageFilter()
+    im_smoother.set_fwhms(fwhm_mm)
+
+    # Compute inverse with safe division
+    arr = kappa2.asarray()
+    inv_arr = np.reciprocal(arr, where=arr != 0)
+    kappa2_inv = kappa2.clone()
+    kappa2_inv.fill(inv_arr)
+
+    # Smooth the inverse
+    im_smoother.apply(kappa2_inv)
+
+    # Save smoothed inverse if requested
+    if save_inverse and output_path is not None:
+        kappa2_inv.write(os.path.join(output_path, f"{prefix}_inv_smoothed.hv"))
+
+    # Compute inverse again to get smoothed kappa²
+    inv_arr_smoothed = kappa2_inv.asarray()
+    kappa2_smoothed = kappa2.clone()
+    kappa2_arr = np.reciprocal(inv_arr_smoothed, where=inv_arr_smoothed != 0)
+    kappa2_smoothed.fill(kappa2_arr)
+
+    return kappa2_smoothed, kappa2_inv
 
 def set_up_partitioned_objectives(pet_data, spect_data, pet_obj_funs, spect_obj_funs):
     """Returns a CIL SumFunction for the partitioned objective functions"""

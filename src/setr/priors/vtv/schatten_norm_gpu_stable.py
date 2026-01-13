@@ -247,6 +247,7 @@ class GPUVectorialTotalVariation(Function):
         numpy_out=True,
         tail=None,
         use_stability_improvements=True,  # New flag to enable/disable stability features
+        grad_norm_threshold=1e-6,  # Skip gradient where ||x||_F is tiny
     ):
         # Maintain exact original parameter handling
         if eps is not None:
@@ -259,6 +260,7 @@ class GPUVectorialTotalVariation(Function):
         self.numpy_out = numpy_out
         self.tail = tail
         self.use_stability_improvements = use_stability_improvements
+        self.grad_norm_threshold = grad_norm_threshold
 
     def direct(self, x):
         # --- Function selection logic ---
@@ -343,6 +345,13 @@ class GPUVectorialTotalVariation(Function):
     def gradient(self, x):
         x = to_tensor(x)
 
+        # Early detect negligible voxels to avoid noisy gradients in background
+        x_frob_sq = torch.sum(x * x, dim=(-2, -1))  # (...,)
+        x_frob = torch.sqrt(x_frob_sq)
+        small_mask = x_frob < self.grad_norm_threshold if self.grad_norm_threshold is not None else torch.zeros_like(x_frob, dtype=torch.bool)
+        if small_mask.all():
+            return torch.zeros_like(x)
+
         # Function selection
         if self.smoothing_function == "fair":
             grad_func = fair_grad
@@ -363,12 +372,15 @@ class GPUVectorialTotalVariation(Function):
             # Nuclear norm: gradient of sum_i h(sigma_i)
             S_grad_values = grad_func(S, self.eps)
 
-            # Tailing logic
-            mask = torch.ones_like(S) if self.tail is None else get_mask(S, self.tail)
-            S_grad_values = S_grad_values * mask
+            # Tailing logic (preserve head with derivative 1 when tailing)
+            if self.tail is not None:
+                mask = get_mask(S, self.tail)
+                S_grad_final = S_grad_values * mask + (1 - mask)
+            else:
+                S_grad_final = S_grad_values
 
             # Reconstruct the gradient matrix: U diag(h'(s)) V^T
-            out = torch.matmul(U, Vh * S_grad_values[..., None])
+            out = torch.matmul(U, Vh * S_grad_final[..., None])
 
         elif self.norm == "frobenius":
             # Frobenius norm: gradient of h(||sigma||_2)
@@ -392,7 +404,66 @@ class GPUVectorialTotalVariation(Function):
         else:
             raise ValueError("Norm not defined")
 
+        # Zero out negligible voxels to prevent salt-and-pepper noise in background
+        out = torch.where(small_mask.view(*small_mask.shape, 1, 1), torch.zeros_like(out), out)
+
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+
+    def gradient_diagnostic(self, x, return_intermediates=False):
+        """Diagnostic gradient: returns gradient plus numerical stats."""
+
+        x = to_tensor(x)
+        x_frob_sq = torch.sum(x * x, dim=(-2, -1))
+        x_frob = torch.sqrt(x_frob_sq)
+
+        if self.use_stability_improvements:
+            U, S, Vh, used_eigen = safe_svd_with_fallback(x)
+        else:
+            U, S, Vh = torch.linalg.svd(x, full_matrices=False)
+            used_eigen = False
+
+        # Use same grad selection as the main path (default to charbonnier if set)
+        if self.smoothing_function == "fair":
+            grad_func = fair_grad
+        elif self.smoothing_function == "charbonnier":
+            grad_func = charbonnier_grad
+        elif self.smoothing_function == "perona_malik":
+            grad_func = perona_malik_grad
+        else:
+            grad_func = nothing_grad
+
+        S_grad_values = grad_func(S, self.eps)
+        if self.tail is not None:
+            mask = get_mask(S, self.tail)
+            S_grad_final = S_grad_values * mask + (1 - mask)
+        else:
+            S_grad_final = S_grad_values
+
+        out = torch.matmul(U, Vh * S_grad_final[..., None])
+        out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+
+        report = {
+            "input_frob_min": x_frob.min().item(),
+            "input_frob_max": x_frob.max().item(),
+            "input_frob_mean": x_frob.mean().item(),
+            "singular_value_min": S.min().item(),
+            "singular_value_max": S.max().item(),
+            "S_grad_min": S_grad_final.min().item(),
+            "S_grad_max": S_grad_final.max().item(),
+            "output_nan_count": torch.isnan(out).sum().item(),
+            "output_inf_count": torch.isinf(out).sum().item(),
+            "output_min": out.min().item(),
+            "output_max": out.max().item(),
+            "voxels_below_threshold": (x_frob < (self.grad_norm_threshold or 0.0)).sum().item()
+            if self.grad_norm_threshold is not None
+            else 0,
+            "total_voxels": x_frob.numel(),
+            "used_eigen_fallback": used_eigen,
+        }
+
+        if return_intermediates:
+            return out, report, {"x_frob": x_frob, "S": S, "S_grad": S_grad_final, "U": U, "Vh": Vh}
+        return out, report
 
     def hessian_surrogate(self, x):
         # Exact original parameter handling
