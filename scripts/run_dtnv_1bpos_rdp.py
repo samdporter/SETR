@@ -351,17 +351,11 @@ def main(args) -> None:
         else:
             # For standard TNV: estimate from scaled image intensities
             # Delta should be ~divisor fraction of the 95th percentile of scaled intensities
-            scaled_pet = combined[0].clone()
-            scaled_spect = combined[1].clone()
-            scaled_pet *= pet_scale
-            scaled_spect *= spect_scale
+            weighted_pet = args.alpha * get_array(combined[0])
+            weighted_spect = args.beta * get_array(combined[1])
 
-            # Compute weighted image intensities
-            weighted_pet = args.alpha * get_array(scaled_pet)
-            weighted_spect = args.beta * get_array(scaled_spect)
-
-            percentile = getattr(args, "delta_percentile", 99.9)
-            divisor = getattr(args, "delta_divisor", 5.0)
+            percentile = getattr(args, "delta_percentile", 99.0)
+            divisor = getattr(args, "delta_divisor", 100.0)
 
             # Take minimum of the two weighted image scales
             pet_val = np.percentile(weighted_pet[weighted_pet > 0], percentile)

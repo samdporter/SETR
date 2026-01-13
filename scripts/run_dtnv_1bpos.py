@@ -258,8 +258,10 @@ def main(args) -> None:
 
     # Apply consistent scaling to all prior weights
     # Skip this for log TNV since the log transform already normalizes dynamic range
+    # Skip this for local weighting since voxel-wise weights are applied directly
     use_log_tnv = getattr(args, "use_log_tnv", False)
-    if not use_log_tnv:
+    use_local_weighting = getattr(args, "use_local_weighting", False)
+    if not use_log_tnv and not use_local_weighting:
         apply_dynamic_range_scaling(args, pet_scale, spect_scale)
         logging.info(
             "Applied dynamic range scaling: pet_scale=%.6g, spect_scale=%.6g",
@@ -267,12 +269,20 @@ def main(args) -> None:
             spect_scale,
         )
     else:
-        logging.info(
-            "Skipping dynamic range scaling for log-TNV "
-            "(alpha=%.6g, beta=%.6g remain as configured)",
-            args.alpha,
-            args.beta,
-        )
+        if use_log_tnv:
+            logging.info(
+                "Skipping dynamic range scaling for log-TNV "
+                "(alpha=%.6g, beta=%.6g remain as configured)",
+                args.alpha,
+                args.beta,
+            )
+        if use_local_weighting:
+            logging.info(
+                "Skipping dynamic range scaling for local weighting "
+                "(alpha=%.6g, beta=%.6g will be applied voxel-wise)",
+                args.alpha,
+                args.beta,
+            )
 
     # Set delta (smoothing parameter) if not provided
     if args.delta is None:
@@ -291,17 +301,11 @@ def main(args) -> None:
         else:
             # For standard TNV: estimate from scaled image intensities
             # Delta should be ~divisor fraction of the 95th percentile of scaled intensities
-            scaled_pet = combined[0].clone()
-            scaled_spect = combined[1].clone()
-            scaled_pet *= pet_scale
-            scaled_spect *= spect_scale
+            weighted_pet = args.alpha * get_array(combined[0])
+            weighted_spect = args.beta * get_array(combined[1])
 
-            # Compute weighted image intensities
-            weighted_pet = args.alpha * get_array(scaled_pet)
-            weighted_spect = args.beta * get_array(scaled_spect)
-
-            percentile = getattr(args, "delta_percentile", 99.9)
-            divisor = getattr(args, "delta_divisor", 5.0)
+            percentile = getattr(args, "delta_percentile", 99.0)
+            divisor = getattr(args, "delta_divisor", 100.0)
 
             # Take minimum of the two weighted image scales
             pet_val = np.percentile(weighted_pet[weighted_pet > 0], percentile)

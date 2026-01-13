@@ -555,15 +555,53 @@ def get_prior(
 
     # TNV (vectorial) prior - uses alpha/beta weighting
     if getattr(args, "use_tnv_prior", True) and getattr(args, "gamma_tnv", 1.0) > 0:
-        # Create kappa weights for TNV with alpha/beta scaling
-        tnv_kappas = EnhancedBlockDataContainer(
-            initial_estimates[0].get_uniform_copy(args.alpha * args.gamma_tnv),
-            initial_estimates[1].get_uniform_copy(args.beta * args.gamma_tnv),
-        )
+        # Check for local weighting
+        use_log_tnv = getattr(args, "use_log_tnv", False)
+        use_local_weighting = getattr(args, "use_local_weighting", False)
 
-        # Apply base kappa weights
-        for i, el in enumerate(tnv_kappas.containers):
-            el.multiply(kappas.containers[i], out=el)
+        # Prevent using local weighting with log-TNV
+        if use_log_tnv and use_local_weighting:
+            logging.warning(
+                "use_local_weighting is ignored for log-TNV "
+                "(log transform already provides local weighting)"
+            )
+            use_local_weighting = False
+
+        # Create kappa weights based on weighting type
+        if use_local_weighting:
+
+            pet_osem = get_array(initial_estimates[0])
+            spect_osem = get_array(initial_estimates[1])
+            
+            # Compute small percentile-based epsilons to avoid division by zero
+            pet_eps = np.percentile(pet_osem[pet_osem > 0], 0.5)
+            spect_eps = np.percentile(spect_osem[spect_osem > 0], 0.5)
+
+            # Create voxel-wise alpha/beta weight maps
+            pet_weight_map = initial_estimates[0].clone()
+            spect_weight_map = initial_estimates[1].clone()
+
+            pet_weight_map.fill(args.alpha * args.gamma_tnv / np.maximum(pet_osem, pet_eps))
+            spect_weight_map.fill(args.beta * args.gamma_tnv / np.maximum(spect_osem, spect_eps))
+
+            # Apply local weights to existing kappas
+            tnv_kappas = kappas.clone()
+            tnv_kappas.containers[0].multiply(pet_weight_map, out=tnv_kappas.containers[0])
+            tnv_kappas.containers[1].multiply(spect_weight_map, out=tnv_kappas.containers[1])
+
+            logging.info(
+                "Using local weighting for TNV: kappa * (alpha/osem) for PET, kappa * (beta/osem) for SPECT"
+            )
+        else:
+            # Global weighting: uniform alpha/beta scaling
+            tnv_kappas = EnhancedBlockDataContainer(
+                initial_estimates[0].get_uniform_copy(args.alpha * args.gamma_tnv),
+                initial_estimates[1].get_uniform_copy(args.beta * args.gamma_tnv),
+            )
+
+            # Apply base kappa weights
+            for i, el in enumerate(tnv_kappas.containers):
+                el.multiply(kappas.containers[i], out=el)
 
         # Select TNV variant: standard or log-domain
         use_log_tnv = getattr(args, "use_log_tnv", False)
@@ -648,8 +686,8 @@ def get_prior(
     # Modality-specific TV priors
     if getattr(args, "use_modality_specific_priors", False):
         # Get gamma weights (these should already be scaled by gradient energy scaling in main())
-        gamma_pet = getattr(args, "gamma_pet", 0.0)
-        gamma_spect = getattr(args, "gamma_spect", 0.0)
+        gamma_pet = getattr(args, "alpha", 0.0)
+        gamma_spect = getattr(args, "beta", 0.0)
 
         if gamma_pet > 0 or gamma_spect > 0:
             # Create separate kappa weights for modality-specific priors using gamma weights
