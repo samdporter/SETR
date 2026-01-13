@@ -140,7 +140,16 @@ def run_ista(args, data, guidance, hyperparams):
     init_alpha = data["initial_image"].get_uniform_copy(1)
     truncate.direct(init_alpha, out=init_alpha)  # Apply truncation
 
-    num_subiterations = args.num_subsets * args.num_epochs
+    # Use modality-specific epochs if available, otherwise fall back to num_epochs
+    if args.modality.upper() == "PET":
+        num_epochs = getattr(args, "num_epochs_pet", args.num_epochs)
+        logging.info(f"Using PET epochs: {num_epochs}")
+    else:  # SPECT
+        num_epochs = getattr(args, "num_epochs_spect", args.num_epochs)
+        logging.info(f"Using SPECT epochs: {num_epochs}")
+
+    num_subiterations = args.num_subsets * num_epochs
+    logging.info(f"Total subiterations: {num_subiterations} ({num_epochs} epochs × {args.num_subsets} subsets)")
 
     # Set up algorithm
     algo = ISTA(

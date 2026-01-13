@@ -155,7 +155,7 @@ def get_data_fidelity(
         get_sensitivity_from_subset_objs(df, adjoint_operator=op)
         for df, op in zip(pet_dfs, pet_blur_ops)
     ]
-    apply_combine_sensitivities(pet_data, pet_sens)
+    #apply_combine_sensitivities(pet_data, pet_sens)
     pet_sens_combined = uncombine_op.adjoint(
         EnhancedBlockDataContainer(
             *[unshift_op.adjoint(s) for unshift_op, s in zip(unshift_ops, pet_sens)]

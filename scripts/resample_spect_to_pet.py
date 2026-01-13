@@ -55,7 +55,7 @@ def main():
         if key in cfg:
             cfg[key] = os.path.expandvars(cfg[key])
 
-    if getattr(cfg, "use_2bpos", False):
+    if cfg.get("use_2bpos", True):
         pet_data = get_pet_data_multiple_bed_pos(
             cfg["pet_dir"], tof=cfg["use_tof"], suffixes=["_f1b1", "_f2b1"]
         )

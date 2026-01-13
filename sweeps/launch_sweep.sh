@@ -146,6 +146,7 @@ show_usage() {
     echo "Modes:"
     echo "  full    - Run complete sweep (default)"
     echo "  test    - Submit only one test job"
+    echo "  local   - Run first parameter combination locally (no qsub)"
     echo ""
     echo "Available sweep configs:"
     ls -1 "$CONFIG_DIR"/*.yaml 2>/dev/null | sed 's/^/  /' || echo "  No configs found"
@@ -177,7 +178,7 @@ initialize_failed_nodes_file
 
 # Parse YAML config using Python
 CONFIG_VALUES=$(python3 -c "
-import yaml, sys
+import json, yaml, sys
 with open('$SWEEP_CONFIG_PATH', 'r') as f:
     config = yaml.safe_load(f)
 
@@ -191,6 +192,7 @@ print('SGE_MEMORY=' + config['sge']['memory'])
 print('SGE_CORES=' + str(config['sge']['cores']))
 print('SGE_QUEUE=' + (config['sge']['queue'] or 'default'))
 print('SGE_GPU=' + str(config['sge'].get('gpu', False)).lower())
+print('CONFIG_OVERRIDES_JSON=' + json.dumps(config.get('config_overrides', {})))
 ")
 
 # Source the config values
@@ -200,6 +202,20 @@ echo "Sweep name: $SWEEP_NAME"
 echo "Base config: $BASE_CONFIG"
 echo "Script: $RECON_SCRIPT"
 echo "SGE resources: $SGE_RUNTIME, $SGE_MEMORY, $SGE_CORES cores"
+
+# Parse config overrides (if any) into CLI-friendly arguments
+CONFIG_OVERRIDE_ARGS=()
+if [ -n "${CONFIG_OVERRIDES_JSON:-}" ] && [ "$CONFIG_OVERRIDES_JSON" != "{}" ]; then
+    while IFS= read -r line; do
+        CONFIG_OVERRIDE_ARGS+=("$line")
+    done < <(python3 - <<'PY' "$CONFIG_OVERRIDES_JSON"
+import json, sys
+overrides = json.loads(sys.argv[1])
+for key, value in overrides.items():
+    print(f"{key}={value!r}")
+PY
+    )
+fi
 
 # Check parameter files exist
 if [ ! -f "$PARAM_DIR/$ALPHA_FILE" ]; then
@@ -228,6 +244,98 @@ fi
 SWEEP_OUT_DIR="$SWEEPS_DIR/output/$SWEEP_NAME"
 LOG_DIR="$SWEEP_OUT_DIR/_logs"
 mkdir -p "$LOG_DIR"
+
+# Handle local mode early (no qsub submission)
+if [ "$MODE" = "local" ]; then
+    echo ""
+    echo "LOCAL TEST MODE: Running first parameter combination locally"
+    echo ""
+
+    BASE_CONFIG_PATH="$BASE_DIR/configs/$BASE_CONFIG"
+    RECON_SCRIPT_PATH="$BASE_DIR/scripts/$RECON_SCRIPT"
+
+    if [ ! -f "$RECON_SCRIPT_PATH" ]; then
+        echo "Error: Reconstruction script not found: $RECON_SCRIPT_PATH"
+        exit 1
+    fi
+
+    if [ ! -f "$BASE_CONFIG_PATH" ]; then
+        echo "Error: Base config file not found: $BASE_CONFIG_PATH"
+        exit 1
+    fi
+
+    FIRST_ALPHA=$(python3 - <<'PY' "$PARAM_DIR/$ALPHA_FILE"
+import csv, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open() as f:
+    reader = csv.reader(f)
+    next(reader, None)
+    for row in reader:
+        if not row:
+            continue
+        value = row[0].strip()
+        if value:
+            print(value)
+            sys.exit(0)
+
+raise SystemExit(1)
+PY
+    ) || {
+        echo "Error: Failed to read first alpha value from $ALPHA_FILE"
+        exit 1
+    }
+
+    FIRST_BETA=$(python3 - <<'PY' "$PARAM_DIR/$BETA_FILE"
+import csv, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open() as f:
+    reader = csv.reader(f)
+    next(reader, None)
+    for row in reader:
+        if not row:
+            continue
+        value = row[0].strip()
+        if value:
+            print(value)
+            sys.exit(0)
+
+raise SystemExit(1)
+PY
+    ) || {
+        echo "Error: Failed to read first beta value from $BETA_FILE"
+        exit 1
+    }
+
+    echo "Testing alpha=$FIRST_ALPHA, beta=$FIRST_BETA"
+
+    OUTPUT_DIR="$SWEEP_OUT_DIR/local_test"
+    WORKING_DIR="$OUTPUT_DIR/tmp"
+    mkdir -p "$WORKING_DIR"
+
+    LOCAL_OVERRIDE_ARGS=(
+        "output_path=$OUTPUT_DIR"
+        "working_path=$WORKING_DIR"
+        "alpha=$FIRST_ALPHA"
+        "beta=$FIRST_BETA"
+    )
+    if [ ${#CONFIG_OVERRIDE_ARGS[@]} -gt 0 ]; then
+        LOCAL_OVERRIDE_ARGS+=("${CONFIG_OVERRIDE_ARGS[@]}")
+    fi
+
+    cd "$BASE_DIR"
+    python "$RECON_SCRIPT_PATH" \
+        --config "$BASE_CONFIG_PATH" \
+        --override "${LOCAL_OVERRIDE_ARGS[@]}"
+
+    echo ""
+    echo "Local test complete!"
+    echo "Output: $OUTPUT_DIR"
+    exit 0
+fi
 
 # Determine job range based on mode
 JOB_RANGE=""

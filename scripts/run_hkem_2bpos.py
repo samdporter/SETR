@@ -132,8 +132,13 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
     # Set up shift operators
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
 
-    bed_sens = [sum(sens_list) for sens_list in pet_sens]
-    apply_combine_sensitivities(pet_data, bed_sens)
+    bed_sens = []
+    for sens_list in pet_sens:
+        combined = sens_list[0].clone()
+        for sens in sens_list[1:]:
+            combined += sens
+        bed_sens.append(combined)
+    #apply_combine_sensitivities(pet_data, bed_sens)
 
     shift = CouchShiftOperator.get_couch_shift_from_sinogram(
         pet_data["bed_positions"]["_f2b1"]["acquisition_data"]
@@ -267,8 +272,12 @@ def run_hkem_ista(args, pet_data, guidance, hyperparams):
             ]
         )
 
-    logging.info("Running HKEM-ISTA reconstruction...")
-    num_subiterations = args.num_epochs * args.num_subsets
+    # Use PET-specific epochs if available, otherwise fall back to num_epochs
+    # run_hkem_2bpos.py is always PET (multi-bed positions)
+    num_epochs = getattr(args, "num_epochs_pet", args.num_epochs)
+    num_subiterations = num_epochs * args.num_subsets
+    logging.info(f"Running HKEM-ISTA reconstruction with PET epochs: {num_epochs}")
+    logging.info(f"Total subiterations: {num_subiterations} ({num_epochs} epochs × {args.num_subsets} subsets)")
     algo.run(num_subiterations, callbacks=callbacks, verbose=True)
 
     # Get final results
@@ -315,8 +324,7 @@ if __name__ == "__main__":
     args = SimpleNamespace(**config)
 
     # Initialize run environment
-    msg = init_run_env(args)
-
+    _ = init_run_env(args)
     if getattr(args, "profile", True):
         logging.info("Profiling is enabled. This may slow down the execution.")
         profiler = cProfile.Profile()

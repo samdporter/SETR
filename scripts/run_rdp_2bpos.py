@@ -114,7 +114,7 @@ def get_data_fidelity(args, pet_data, uncombine_op, unshift_ops, choose_ops):
         get_sensitivity_from_subset_objs(df, adjoint_operator=op)
         for df, op in zip(pet_dfs, pet_blur_ops)
     ]
-    apply_combine_sensitivities(pet_data, pet_sens)
+    #apply_combine_sensitivities(pet_data, pet_sens)
 
     # Unshift and combine PET sensitivities to common PET grid
     pet_sens_combined = uncombine_op.adjoint(
