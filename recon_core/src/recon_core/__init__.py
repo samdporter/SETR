@@ -18,6 +18,11 @@ __email__ = "sam.porter.18@ucl.ac.uk"
 # ============================================================================
 # CIL Extensions - Algorithms
 # ============================================================================
+# ============================================================================
+# Utilities
+# ============================================================================
+# Note: utils uses lazy imports via __getattr__, so we just import the module
+from recon_core import utils
 from recon_core.cil_extensions.algorithms import ista_update_step
 
 # ============================================================================
@@ -120,35 +125,21 @@ from recon_core.core.gradients import (
 # Kernels
 # ============================================================================
 from recon_core.kernel import (
-    BaseKernelOperator,
-    NumbaKernelOperator,
-    PythonKernelOperator,
     STIRKernelOperator,
-    get_kernel_operator,
 )
 
 # ============================================================================
 # Priors / Regularisers
 # ============================================================================
 from recon_core.priors import (
-    MutualInformationGradientPrior,
-    MutualInformationImagePrior,
-    RelativeDifferencePrior,
     TotalVariation,
     WeightedLogVectorialTotalVariation,
-    WeightedRDP,
     WeightedTotalVariation,
     WeightedVectorialTotalVariation,
     schatten_norm_gpu,
     schatten_norm_gpu_slow,
     schatten_norm_gpu_stable,
 )
-
-# ============================================================================
-# Utilities
-# ============================================================================
-# Note: utils uses lazy imports via __getattr__, so we just import the module
-from recon_core import utils
 
 # For convenience, also expose the most commonly used utility functions directly
 from recon_core.utils import (
@@ -239,20 +230,12 @@ __all__ = [
     "gpu_directional_op",
     "check_adjoint",
     # Kernels
-    "get_kernel_operator",
-    "BaseKernelOperator",
-    "PythonKernelOperator",
-    "NumbaKernelOperator",
     "STIRKernelOperator",
     # Priors
     "TotalVariation",
     "WeightedTotalVariation",
     "WeightedVectorialTotalVariation",
     "WeightedLogVectorialTotalVariation",
-    "MutualInformationGradientPrior",
-    "MutualInformationImagePrior",
-    "RelativeDifferencePrior",
-    "WeightedRDP",
     "schatten_norm_gpu_slow",
     "schatten_norm_gpu_stable",
     "schatten_norm_gpu",
