@@ -1,0 +1,6 @@
+# Requirements for Jupyter notebook support
+numpy>=1.20.0
+matplotlib>=3.3.0
+ipympl>=0.8.0
+pandas>=1.2.0
+jupyterlab>=3.0.0

@@ -1,0 +1,12 @@
+# Core dependency: SIRF
+# SIRF must be installed separately following SIRF installation instructions:
+# https://github.com/SyneRBI/SIRF/wiki
+# The package requires SIRF.STIR for image loading
+
+# Optional: Jupyter notebook support
+# Install with: pip install -r requirements-jupyter.txt
+# Or uncomment the lines below:
+# numpy>=1.20.0
+# matplotlib>=3.3.0
+# ipympl>=0.8.0  # For %matplotlib widget support
+# pandas>=1.2.0  # For convenient data handling in notebooks
