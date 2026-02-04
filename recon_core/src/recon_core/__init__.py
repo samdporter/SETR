@@ -3,9 +3,9 @@ RECON_CORE: Core reconstruction library for multimodal PET/SPECT/CT imaging.
 
 This package provides:
 - CIL extensions for algorithms, callbacks, operators, preconditioners
-- Regularisation priors (Vectorial Total Variation, RDP, Mutual Information)
+- Regularisation priors (Vectorial Total Variation with Schatten norms)
 - Low-level kernels for EM-based methods
-- Core gradient operators
+- Core gradient operators for directional TV
 - SIRF and CIL utility functions
 
 Public API organised by functionality.
@@ -18,11 +18,6 @@ __email__ = "sam.porter.18@ucl.ac.uk"
 # ============================================================================
 # CIL Extensions - Algorithms
 # ============================================================================
-# ============================================================================
-# Utilities
-# ============================================================================
-# Note: utils uses lazy imports via __getattr__, so we just import the module
-from recon_core import utils
 from recon_core.cil_extensions.algorithms import ista_update_step
 
 # ============================================================================
@@ -141,7 +136,10 @@ from recon_core.priors import (
     schatten_norm_gpu_stable,
 )
 
-# For convenience, also expose the most commonly used utility functions directly
+# ============================================================================
+# Utilities
+# ============================================================================
+from recon_core import utils
 from recon_core.utils import (
     BlockDataContainerToArray,
     apply_overrides,

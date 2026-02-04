@@ -2,7 +2,8 @@
 
 When use_log=True, ratio_est and its CI are on the ratio scale; interpret
 evidence by whether the CI excludes 1.0 rather than only by p-values.
-Holm adjustment is applied across the planned contrasts within each endpoint.
+Holm and Benjamini-Hochberg (BH) adjustments are provided across the planned
+contrasts within each endpoint.
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ def fit_tbr_lmm(
     n_boot: int = 1000,
     seed: int | None = 123,
     expected_methods: Iterable[str] | None = None,
-    on_incomplete: str = "filter",
+    on_incomplete: str = "keep",
     contrast_direction: str = "alt_vs_baseline",
     allow_empty_bootstrap: bool = False,
 ) -> Tuple[object, pd.DataFrame]:
@@ -61,21 +62,21 @@ def fit_tbr_lmm(
     Model: log(TBR) ~ reconstruction_type + (1|patient) + (1|patient:lesion)
 
     Inference uses patient-cluster bootstrap by default. If disabled, Wald z-tests
-    with Holm adjustment are used. For final analyses, use n_boot >= 5000.
+    with Holm/BH adjustments are used. For final analyses, use n_boot >= 5000.
 
     Output columns (use_log=True):
     - log_ratio_est: log difference vs baseline (dTNV)
     - ratio_est, ci_low, ci_high: ratio scale (exp of log estimates)
-    - p_raw, p_holm: bootstrap or Wald p-values with Holm adjustment
+    - p_raw, p_holm, p_bh: bootstrap or Wald p-values with Holm/BH adjustment
 
     Output columns (use_log=False):
     - diff_est, ci_low, ci_high: difference vs baseline (raw scale)
-    - p_raw, p_holm: bootstrap or Wald p-values with Holm adjustment
+    - p_raw, p_holm, p_bh: bootstrap or Wald p-values with Holm/BH adjustment
 
     expected_methods optionally restricts analysis to a provided list of methods.
     on_incomplete controls handling of non-complete method crossing per
-    patient_lesion: "filter" drops incomplete units with a warning; "error"
-    raises with diagnostics.
+    patient_lesion: "keep" leaves all data; "filter" drops incomplete units
+    with a warning; "error" raises with diagnostics.
     contrast_direction can be "alt_vs_baseline" (comparator/dTNV) or
     "baseline_vs_alt" (dTNV/comparator).
     """
@@ -168,7 +169,7 @@ def fit_background_cov_lmm(
     seed: int | None = 123,
     deduplicate: bool = True,
     expected_methods: Iterable[str] | None = None,
-    on_incomplete: str = "filter",
+    on_incomplete: str = "keep",
     contrast_direction: str = "alt_vs_baseline",
     allow_empty_bootstrap: bool = False,
 ) -> Tuple[object, pd.DataFrame]:
@@ -187,16 +188,16 @@ def fit_background_cov_lmm(
     Output columns (use_log=True):
     - log_ratio_est: log difference vs baseline (dTNV)
     - ratio_est, ci_low, ci_high: ratio scale (exp of log estimates)
-    - p_raw, p_holm: bootstrap or Wald p-values with Holm adjustment
+    - p_raw, p_holm, p_bh: bootstrap or Wald p-values with Holm/BH adjustment
 
     Output columns (use_log=False):
     - diff_est, ci_low, ci_high: difference vs baseline (raw scale)
-    - p_raw, p_holm: bootstrap or Wald p-values with Holm adjustment
+    - p_raw, p_holm, p_bh: bootstrap or Wald p-values with Holm/BH adjustment
 
     expected_methods optionally restricts analysis to a provided list of methods.
     on_incomplete controls handling of non-complete method crossing per
-    patient: "filter" drops incomplete patients with a warning; "error"
-    raises with diagnostics.
+    patient: "keep" leaves all data; "filter" drops incomplete patients with
+    a warning; "error" raises with diagnostics.
     contrast_direction can be "alt_vs_baseline" (comparator/dTNV) or
     "baseline_vs_alt" (dTNV/comparator).
     """
@@ -346,8 +347,8 @@ def _apply_expected_methods(
 def _enforce_complete_crossing_background(
     data: pd.DataFrame, expected_methods: List[str], on_incomplete: str
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
-    if on_incomplete not in {"filter", "error"}:
-        raise ValueError("on_incomplete must be 'filter' or 'error'.")
+    if on_incomplete not in {"keep", "filter", "error"}:
+        raise ValueError("on_incomplete must be 'keep', 'filter', or 'error'.")
     missing_by_patient: Dict[str, List[str]] = {}
     for patient, methods in data.groupby("patient")["reconstruction_type"]:
         missing = sorted(set(expected_methods) - set(methods))
@@ -358,6 +359,13 @@ def _enforce_complete_crossing_background(
         unit_label="patient",
         expected_methods=expected_methods,
     )
+    if on_incomplete == "keep":
+        keep_summary = _summarize_dropped_units(
+            {},
+            unit_label="patient",
+            expected_methods=expected_methods,
+        )
+        return data, keep_summary
     if missing_by_patient:
         msg = _format_missing_summary(
             missing_by_patient,
@@ -375,8 +383,8 @@ def _enforce_complete_crossing_background(
 def _enforce_complete_crossing_tbr(
     data: pd.DataFrame, expected_methods: List[str], on_incomplete: str
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
-    if on_incomplete not in {"filter", "error"}:
-        raise ValueError("on_incomplete must be 'filter' or 'error'.")
+    if on_incomplete not in {"keep", "filter", "error"}:
+        raise ValueError("on_incomplete must be 'keep', 'filter', or 'error'.")
     missing_by_lesion: Dict[Tuple[str, str], List[str]] = {}
     grouped = data.groupby(["patient", "lesion"])["reconstruction_type"]
     for (patient, lesion), methods in grouped:
@@ -393,6 +401,13 @@ def _enforce_complete_crossing_tbr(
         expected_methods=expected_methods,
         per_patient_counts=per_patient_counts,
     )
+    if on_incomplete == "keep":
+        keep_summary = _summarize_dropped_units(
+            {},
+            unit_label="patient_lesion",
+            expected_methods=expected_methods,
+        )
+        return data, keep_summary
     if missing_by_lesion:
         msg = _format_missing_summary(
             missing_by_lesion,
@@ -644,6 +659,7 @@ def _build_wald_results(
         )
     results_df = pd.DataFrame(rows)
     results_df["p_holm"] = _holm_adjust(results_df["p_raw"].values)
+    results_df["p_bh"] = _bh_adjust(results_df["p_raw"].values)
     results_df["baseline_recon"] = baseline_recon
     results_df["contrast_direction"] = contrast_direction
     if use_log:
@@ -668,6 +684,7 @@ def _build_bootstrap_results(
         )
     results_df = pd.DataFrame(rows)
     results_df["p_holm"] = _holm_adjust(results_df["p_raw"].values)
+    results_df["p_bh"] = _bh_adjust(results_df["p_raw"].values)
     results_df["baseline_recon"] = baseline_recon
     results_df["contrast_direction"] = contrast_direction
     if use_log:
@@ -747,6 +764,32 @@ def _holm_adjust(pvals: np.ndarray) -> np.ndarray:
             if i > 0:
                 prev = order[i - 1]
                 adjusted_vals[idx] = max(adjusted_vals[idx], adjusted_vals[prev])
+    adjusted[finite_mask] = adjusted_vals
+    return adjusted
+
+
+def _bh_adjust(pvals: np.ndarray) -> np.ndarray:
+    pvals = np.asarray(pvals, dtype=float)
+    adjusted = np.full_like(pvals, np.nan)
+    if pvals.size == 0:
+        return adjusted
+    finite_mask = np.isfinite(pvals)
+    if not finite_mask.any():
+        return adjusted
+    finite_pvals = pvals[finite_mask]
+    try:
+        from statsmodels.stats.multitest import multipletests
+
+        adjusted_vals = multipletests(finite_pvals, method="fdr_bh")[1]
+    except Exception:
+        order = np.argsort(finite_pvals)
+        m = finite_pvals.size
+        p_sorted = finite_pvals[order]
+        adj_sorted = p_sorted * m / (np.arange(m) + 1)
+        adj_sorted = np.minimum.accumulate(adj_sorted[::-1])[::-1]
+        adj_sorted = np.clip(adj_sorted, 0.0, 1.0)
+        adjusted_vals = np.empty_like(finite_pvals)
+        adjusted_vals[order] = adj_sorted
     adjusted[finite_mask] = adjusted_vals
     return adjusted
 
@@ -929,4 +972,4 @@ __all__ = [
 #     contrast_direction="alt_vs_baseline",
 #     on_incomplete="filter",
 # )
-# # Holm-adjusted p-values are in cov_results["p_holm"].
+# # Holm/BH-adjusted p-values are in cov_results["p_holm"] and cov_results["p_bh"].
