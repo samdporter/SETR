@@ -135,6 +135,253 @@ class ImageFunctionPreconditioner(PreconditionerWithInterval):
         return out
 
 
+class BlockDiagonalPriorPreconditioner(PreconditionerWithInterval):
+    """
+    Preconditioner that applies a voxel-wise 2x2 inverse-Hessian block in common space.
+
+    This is intended for `OperatorCompositionFunction(prior, bo)` where
+    `prior.function` exposes `inv_preconditioner_block(...)` returning (..., 2, 2) blocks.
+    A scalar/diagonal preconditioner (e.g. BSREM) can optionally be applied first.
+    """
+
+    def __init__(
+        self,
+        prior,
+        update_interval=1,
+        freeze_iter=np.inf,
+        epsilon=1e-8,
+        max_value=np.inf,
+        base_preconditioner: Optional[Preconditioner] = None,
+    ):
+        super().__init__(update_interval, freeze_iter)
+        self.prior = prior
+        self.epsilon = float(epsilon)
+        self.max_value = float(max_value)
+        self.base_preconditioner = base_preconditioner
+
+    def _compute_block_preconditioner(self, image: DataContainer) -> np.ndarray:
+        if not hasattr(self.prior, "operator") or not hasattr(self.prior, "function"):
+            raise AttributeError(
+                "BlockDiagonalPriorPreconditioner expects an OperatorCompositionFunction-like prior "
+                "with .operator and .function attributes."
+            )
+        if not hasattr(self.prior.function, "inv_preconditioner_block"):
+            raise AttributeError(
+                f"Prior function {type(self.prior.function)} does not expose inv_preconditioner_block()."
+            )
+
+        x_common = self.prior.operator.direct(image)
+        block = self.prior.function.inv_preconditioner_block(x_common, epsilon=self.epsilon)
+        block_arr = _to_numpy_array(block)
+        if block_arr.shape[-2:] != (2, 2):
+            raise ValueError(
+                f"Expected block preconditioner shape (..., 2, 2), got {block_arr.shape}."
+            )
+
+        block_arr = _symmetrise_blocks(block_arr.astype(np.float64, copy=False))
+        eigvals, eigvecs = np.linalg.eigh(block_arr)
+        np.maximum(eigvals, self.epsilon, out=eigvals)
+        if np.isfinite(self.max_value):
+            np.minimum(eigvals, self.max_value, out=eigvals)
+        block_arr = (eigvecs * eigvals[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
+        return _symmetrise_blocks(block_arr)
+
+    def _apply_block_preconditioner(
+        self,
+        gradient: DataContainer,
+        block_arr: np.ndarray,
+        out: Optional[DataContainer] = None,
+    ):
+        grad_common = self.prior.operator.direct(gradient)
+        grad_arr = _stack_block_container(grad_common)
+        if grad_arr.shape[-1] != 2:
+            raise ValueError(
+                f"Block preconditioner requires 2 modalities, got {grad_arr.shape[-1]}."
+            )
+        if block_arr.shape[:-2] != grad_arr.shape[:-1]:
+            raise ValueError(
+                f"Gradient/block shape mismatch: gradient {grad_arr.shape}, block {block_arr.shape}."
+            )
+
+        precond_common_arr = np.einsum("...ij,...j->...i", block_arr, grad_arr, optimize=True)
+        precond_common = _fill_block_container_from_array(grad_common, precond_common_arr)
+        ret = self.prior.operator.adjoint(precond_common)
+        if out is None:
+            return ret
+        out.fill(ret)
+        return out
+
+    def compute_preconditioner(self, algorithm, out=None):
+        block_arr = self._compute_block_preconditioner(algorithm.solution)
+        # Block preconditioners are plain arrays; `out` is ignored intentionally.
+        return block_arr
+
+    def apply(self, algorithm, gradient, out=None):
+        if algorithm.iteration < self.freeze_iter:
+            if algorithm.iteration % self.update_interval == 0 or self.precond is None:
+                self.precond = self.compute_preconditioner(algorithm)
+            current_block = self.precond
+        else:
+            if self.freeze is None:
+                self.freeze = self.compute_preconditioner(algorithm)
+            current_block = self.freeze
+
+        g = (
+            self.base_preconditioner.apply(algorithm, gradient)
+            if self.base_preconditioner is not None
+            else gradient
+        )
+        return self._apply_block_preconditioner(g, current_block, out=out)
+
+
+class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
+    """
+    Matrix Lehmer-mean blend of a block preconditioner with a scalar one.
+
+    The scalar preconditioner is converted to a per-voxel scalar field λ and blended
+    with block SPD matrix B using
+
+        L_p(B, λI) = (B^p + (λI)^p) @ (B^(p-1) + (λI)^(p-1))^{-1}
+
+    which reduces to an eigenvalue-wise Lehmer mean because B and I commute.
+    """
+
+    def __init__(
+        self,
+        block_preconditioner: BlockDiagonalPriorPreconditioner,
+        scalar_preconditioner: Preconditioner,
+        p: float = 1e-1,
+        epsilon: float = 1e-12,
+        max_value: float = np.inf,
+        update_interval=1,
+        freeze_iter=np.inf,
+        scalar_reduction: str = "mean",
+    ):
+        super().__init__(update_interval, freeze_iter)
+        self.block_preconditioner = block_preconditioner
+        self.scalar_preconditioner = scalar_preconditioner
+        self.p = float(p)
+        self.epsilon = float(epsilon)
+        self.max_value = float(max_value)
+        self.scalar_reduction = scalar_reduction
+        if scalar_reduction not in {"mean", "geometric", "diag"}:
+            raise ValueError("scalar_reduction must be one of {'mean', 'geometric', 'diag'}.")
+
+    def _compute_scalar_field(self, algorithm) -> np.ndarray:
+        scalar_precond = self.scalar_preconditioner.compute_preconditioner(algorithm)
+        if isinstance(scalar_precond, np.ndarray):
+            scalar = scalar_precond
+        elif isinstance(scalar_precond, (DataContainer, BlockDataContainer)):
+            scalar_common = self.block_preconditioner.prior.operator.direct(scalar_precond)
+            scalar_stack = _stack_block_container(scalar_common).astype(np.float64, copy=False)
+            if scalar_stack.shape[-1] != 2:
+                raise ValueError(
+                    f"Block Lehmer blend requires 2 modalities, got {scalar_stack.shape[-1]}."
+                )
+            if self.scalar_reduction == "diag":
+                scalar = np.zeros((*scalar_stack.shape[:-1], 2, 2), dtype=np.float64)
+                scalar[..., 0, 0] = scalar_stack[..., 0]
+                scalar[..., 1, 1] = scalar_stack[..., 1]
+            elif self.scalar_reduction == "mean":
+                scalar = 0.5 * (scalar_stack[..., 0] + scalar_stack[..., 1])
+            else:
+                scalar = np.sqrt(
+                    np.maximum(scalar_stack[..., 0], self.epsilon)
+                    * np.maximum(scalar_stack[..., 1], self.epsilon)
+                )
+        else:
+            raise TypeError(
+                f"Unsupported scalar preconditioner output type {type(scalar_precond)}."
+            )
+        scalar = np.maximum(scalar, self.epsilon)
+        if np.isfinite(self.max_value):
+            scalar = np.minimum(scalar, self.max_value)
+        return scalar
+
+    def _blend_block_and_scalar(self, block_arr: np.ndarray, scalar: np.ndarray) -> np.ndarray:
+        block_arr = _symmetrise_blocks(block_arr.astype(np.float64, copy=False))
+
+        # If scalar is provided as a diagonal matrix per voxel, only harmonic (p=0) is valid.
+        if scalar.ndim == block_arr.ndim:
+            if self.p != 0.0:
+                raise ValueError(
+                    "Diagonal scalar blending is only supported for harmonic mean (p=0)."
+                )
+            diag = np.diagonal(scalar, axis1=-2, axis2=-1)
+            diag = np.maximum(diag, self.epsilon)
+            scalar_inv = np.zeros_like(scalar)
+            scalar_inv[..., 0, 0] = 1.0 / diag[..., 0]
+            scalar_inv[..., 1, 1] = 1.0 / diag[..., 1]
+
+            eigvals, eigvecs = np.linalg.eigh(block_arr)
+            eigvals = np.maximum(eigvals, self.epsilon)
+            inv_eigs = 1.0 / eigvals
+            block_inv = (eigvecs * inv_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
+
+            sum_inv = _symmetrise_blocks(block_inv + scalar_inv)
+            eigvals_s, eigvecs_s = np.linalg.eigh(sum_inv)
+            eigvals_s = np.maximum(eigvals_s, self.epsilon)
+            inv_sum = (eigvecs_s * (1.0 / eigvals_s)[..., None, :]) @ np.swapaxes(
+                eigvecs_s, -1, -2
+            )
+            blended = 2.0 * inv_sum
+            blended = _symmetrise_blocks(blended)
+
+            eigvals_b, eigvecs_b = np.linalg.eigh(blended)
+            eigvals_b = np.maximum(eigvals_b, self.epsilon)
+            if np.isfinite(self.max_value):
+                eigvals_b = np.minimum(eigvals_b, self.max_value)
+            blended = (eigvecs_b * eigvals_b[..., None, :]) @ np.swapaxes(
+                eigvecs_b, -1, -2
+            )
+            return _symmetrise_blocks(blended)
+
+        eigvals, eigvecs = np.linalg.eigh(block_arr)
+        eigvals = np.maximum(eigvals, self.epsilon)
+
+        lam = np.maximum(scalar, self.epsilon)
+        lam_p = np.power(lam, self.p)[..., None]
+        lam_pm1 = np.power(lam, self.p - 1.0)[..., None]
+
+        num = np.power(eigvals, self.p) + lam_p
+        den = np.power(eigvals, self.p - 1.0) + lam_pm1
+        den = np.maximum(den, self.epsilon)
+        blended_eigs = num / den
+        blended_eigs = np.maximum(blended_eigs, self.epsilon)
+        if np.isfinite(self.max_value):
+            blended_eigs = np.minimum(blended_eigs, self.max_value)
+
+        blended = (eigvecs * blended_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
+        return _symmetrise_blocks(blended)
+
+    def compute_preconditioner(self, algorithm, out=None):
+        block_arr = self.block_preconditioner._compute_block_preconditioner(algorithm.solution)
+        scalar = self._compute_scalar_field(algorithm)
+        if scalar.ndim == block_arr.ndim:
+            if scalar.shape != block_arr.shape:
+                raise ValueError(
+                    f"Scalar/block geometry mismatch: scalar {scalar.shape}, block {block_arr.shape}."
+                )
+        elif scalar.shape != block_arr.shape[:-2]:
+            raise ValueError(
+                f"Scalar/block geometry mismatch: scalar {scalar.shape}, block {block_arr.shape}."
+            )
+        return self._blend_block_and_scalar(block_arr, scalar)
+
+    def apply(self, algorithm, gradient, out=None):
+        if algorithm.iteration < self.freeze_iter:
+            if algorithm.iteration % self.update_interval == 0 or self.precond is None:
+                self.precond = self.compute_preconditioner(algorithm)
+            current_block = self.precond
+        else:
+            if self.freeze is None:
+                self.freeze = self.compute_preconditioner(algorithm)
+            current_block = self.freeze
+        return self.block_preconditioner._apply_block_preconditioner(
+            gradient, current_block, out=out
+        )
+
+
 def _unwrap_function(obj):
     """Drill through wrappers (e.g. ScaledFunction, OperatorCompositionFunction)."""
     seen = set()
@@ -179,6 +426,41 @@ def _fill_from_array(dc: DataContainer, arr: np.ndarray) -> DataContainer:
     """Fill a DataContainer with array values and return it."""
     dc.fill(arr)
     return dc
+
+
+def _to_numpy_array(arr_like) -> np.ndarray:
+    """Convert tensor/array-like objects to a NumPy array."""
+    if hasattr(arr_like, "detach"):
+        return arr_like.detach().cpu().numpy()
+    return np.asarray(arr_like)
+
+
+def _stack_block_container(dc: BlockDataContainer) -> np.ndarray:
+    """Stack BlockDataContainer modalities along the last axis."""
+    if not isinstance(dc, BlockDataContainer):
+        raise TypeError(
+            f"Expected BlockDataContainer, got {type(dc)}. "
+            "Block preconditioning currently supports two-modality block gradients only."
+        )
+    return np.stack([get_array(c) for c in dc.containers], axis=-1)
+
+
+def _fill_block_container_from_array(template: BlockDataContainer, arr: np.ndarray) -> BlockDataContainer:
+    """Create a BlockDataContainer like template and fill each modality from arr[..., m]."""
+    if arr.shape[-1] != len(template.containers):
+        raise ValueError(
+            f"Array/modalities mismatch: arr has last dim={arr.shape[-1]}, "
+            f"template has {len(template.containers)} containers."
+        )
+    out = template.copy()
+    for m, con in enumerate(out.containers):
+        con.fill(arr[..., m])
+    return out
+
+
+def _symmetrise_blocks(blocks: np.ndarray) -> np.ndarray:
+    """Return 0.5*(B + B^T) for trailing 2x2 block matrices."""
+    return 0.5 * (blocks + np.swapaxes(blocks, -1, -2))
 
 
 def _accumulate_poisson_hessian_diag(objectives: Sequence, image: DataContainer) -> DataContainer:
@@ -574,6 +856,53 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         if out is None:
             return num / den
         num.divide(den, out=out)
+        return out
+
+
+class MaGeZPreconditioner(PreconditionerWithInterval):
+    """
+    Preconditioner from MaGeZ PETRIC entry.
+
+    Uses scaled harmonic averaging of sensitivity and prior Hessian diagonal.
+
+    P = (x + delta) / (sensitivity + prior_hessian_diag(x + delta))
+    """
+
+    def __init__(
+        self,
+        sensitivity: BlockDataContainer,
+        prior_function,
+        hessian_scale: float = 1.5,
+        delta: float = 1e-8,
+        update_interval: int = 1,
+        freeze_iter=np.inf,
+    ):
+        super().__init__(update_interval, freeze_iter)
+        self.sensitivity = sensitivity
+        self.prior_function = prior_function
+        self.hessian_scale = hessian_scale
+        self.delta = delta
+
+    def compute_preconditioner(self, algorithm, out=None):
+        x = algorithm.solution.copy()
+        x_plus_delta = x + self.delta
+
+        if hasattr(self.prior_function, "preconditioner_diag"):
+            prior_hessian_diag = self.prior_function.preconditioner_diag(x_plus_delta).abs()
+        elif hasattr(self.prior_function, "hessian_diag"):
+            prior_hessian_diag = self.prior_function.hessian_diag(x_plus_delta).abs()
+        else:
+            raise AttributeError(
+                f"Prior function {type(self.prior_function)} does not expose "
+                "preconditioner_diag() or hessian_diag()."
+            )
+        denom = self.sensitivity + self.hessian_scale * prior_hessian_diag
+        denom = denom.maximum(1e-12)
+
+        if out is None:
+            return x_plus_delta / denom
+
+        x_plus_delta.divide(denom, out=out)
         return out
 
 
