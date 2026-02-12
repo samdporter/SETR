@@ -36,11 +36,14 @@ from recon_core.cil_extensions.functions import BlockIndicatorBox
 from recon_core.cil_extensions.operators import ScalingOperator
 from recon_core.cil_extensions.preconditioners import (
     BSREMPreconditioner,
+    BlockDiagonalPriorPreconditioner,
+    BlockLehmerMeanPreconditioner,
+    HarmonicMeanPreconditioner,
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
+    MaGeZPreconditioner,
 )
 from recon_core.priors import (
-    WeightedRDP,
     WeightedTotalVariation,
     WeightedVectorialTotalVariation,
     WeightedLogVectorialTotalVariation,
@@ -58,6 +61,37 @@ from recon_core.utils.sirf import (
 )
 
 ISTA.update = ista_update_step
+
+_PRECOND_DIAG_METHODS = {"mm_diag", "mm_diag_gershgorin", "frob_diag"}
+_PRECOND_BLOCK_METHODS = {"mm_block_diag", "ls_block_diag"}
+_ALL_PRECOND_METHODS = _PRECOND_DIAG_METHODS | _PRECOND_BLOCK_METHODS
+
+
+def _canonical_preconditioner_type(precond_type: str) -> str:
+    return {
+        "bsrem": "bsrem",
+        "vtv": "mm_diag",
+        "tnv": "mm_diag",
+        "mm_diag": "mm_diag",
+        "mm_diag_gershgorin": "mm_diag_gershgorin",
+        "frob_diag": "frob_diag",
+        "mm_block_diag": "mm_block_diag",
+        "ls_block_diag": "ls_block_diag",
+    }.get(precond_type, precond_type)
+
+
+def _resolve_precond_method_from_args(args: argparse.Namespace) -> str:
+    explicit = getattr(args, "precond_method", None)
+    if explicit is not None:
+        return explicit
+    canonical = _canonical_preconditioner_type(getattr(args, "precond_type", "mm_diag"))
+    if canonical == "bsrem":
+        return "mm_diag"
+    return canonical
+
+
+def _is_block_method(method: str) -> bool:
+    return method in _PRECOND_BLOCK_METHODS
 
 
 def get_kappa_squareds(obj_funs_list, image_list, normalise=True):
@@ -146,6 +180,24 @@ def get_preconditioners(
     priors_list: Any,
     initial_estimates: EnhancedBlockDataContainer,
 ) -> Any:
+    precond_type = getattr(args, "precond_type", "mm_block_diag")
+    canonical = _canonical_preconditioner_type(precond_type)
+    precond_method = _resolve_precond_method_from_args(args)
+    if precond_method not in _ALL_PRECOND_METHODS and canonical != "bsrem":
+        raise ValueError(
+            f"Unknown preconditioner method '{precond_method}'. "
+            f"Options: {sorted(_ALL_PRECOND_METHODS)}"
+        )
+
+    combine = getattr(args, "precond_combine", "harmonic").lower()
+    lehmer_p = float(getattr(args, "lehmer_p", 0.0))
+    scalar_reduction = getattr(args, "block_scalar_reduction", "diag")
+    if scalar_reduction == "diag" and combine != "harmonic":
+        logging.warning(
+            "Diagonal scalar blending requires harmonic mean (p=0); forcing combine='harmonic'."
+        )
+        combine = "harmonic"
+
     bsrem_precond = BSREMPreconditioner(
         s_inv,
         1,
@@ -153,24 +205,106 @@ def get_preconditioners(
         epsilon=0,
         smooth=True,
     )
-    if priors_list is None:
+    if canonical == "bsrem" or priors_list is None:
         return bsrem_precond
 
-    prior_precond = [
-        ImageFunctionPreconditioner(
-            p.inv_hessian_diag,
-            1,
-            freeze_iter=np.inf,
-            epsilon=0,
-        )
-        for p in priors_list
-    ]
+    max_precond_value = 10.0 * max(
+        con.max() * s_inv_con.max()
+        for con, s_inv_con in zip(initial_estimates.containers, s_inv.containers)
+    )
 
+    if _is_block_method(precond_method):
+        block_priors = [
+            p for p in priors_list if hasattr(p.function, "inv_preconditioner_block")
+        ]
+        if not block_priors:
+            logging.warning(
+                "No block-capable prior found for precond_method=%s. Falling back to diagonal path.",
+                precond_method,
+            )
+        else:
+            epoch_update_interval = len(all_funs)
+            if len(block_priors) > 1:
+                logging.warning(
+                    "Multiple block-capable priors found; using first one (%s).",
+                    type(block_priors[0].function).__name__,
+                )
+            block_precond = BlockDiagonalPriorPreconditioner(
+                block_priors[0],
+                update_interval=epoch_update_interval,
+                freeze_iter=len(all_funs) * 10,
+                epsilon=1e-8,
+                max_value=max_precond_value,
+            )
+            if combine == "magez":
+                logging.warning(
+                    "MaGeZ averaging is diagonal-only; using harmonic block Lehmer blend instead."
+                )
+                combine = "harmonic"
+            p_val = 0.0 if combine == "harmonic" else lehmer_p
+            return BlockLehmerMeanPreconditioner(
+                block_preconditioner=block_precond,
+                scalar_preconditioner=bsrem_precond,
+                p=p_val,
+                epsilon=1e-12,
+                max_value=max_precond_value,
+                update_interval=epoch_update_interval,
+                freeze_iter=len(all_funs) * 10,
+                scalar_reduction=scalar_reduction,
+            )
+
+    # Diagonal preconditioner path (single TNV prior)
+    prior_candidates = [
+        p
+        for p in (priors_list or [])
+        if hasattr(p.function, "preconditioner_diag")
+        or hasattr(p.function, "inv_preconditioner_diag")
+        or hasattr(p.function, "hessian_diag")
+    ]
+    prior_for_precond = prior_candidates[0] if prior_candidates else None
+    if prior_for_precond is not None and len(prior_candidates) > 1:
+        logging.warning(
+            "Multiple priors found; using first one (%s) for diagonal preconditioner.",
+            type(prior_for_precond.function).__name__,
+        )
+
+    if prior_for_precond is None:
+        return bsrem_precond
+
+    epoch_update_interval = len(all_funs)
+    prior_precond = ImageFunctionPreconditioner(
+        prior_for_precond.inv_preconditioner_diag,
+        1,
+        freeze_iter=np.inf,
+        epsilon=0,
+        max_value=max_precond_value,
+    )
+
+    if combine == "magez":
+        return MaGeZPreconditioner(
+            s_inv,
+            prior_for_precond,
+            hessian_scale=getattr(args, "hessian_scale", 1.5),
+            delta=getattr(args, "magez_delta", 1e-8),
+            update_interval=epoch_update_interval,
+            freeze_iter=len(all_funs) * 10,
+        )
+
+    if combine == "harmonic":
+        return HarmonicMeanPreconditioner(
+            [bsrem_precond, prior_precond],
+            update_interval=epoch_update_interval,
+            freeze_iter=len(all_funs) * 10,
+            epsilon=1e-6,
+        )
+
+    # default Lehmer
     return LehmerMeanPreconditioner(
-        [bsrem_precond, *prior_precond],
-        update_interval=1,
+        [bsrem_precond, prior_precond],
+        update_interval=epoch_update_interval,
         freeze_iter=len(all_funs) * 10,
         epsilon=0,
+        p=lehmer_p,
     )
 
 
@@ -555,6 +689,7 @@ def get_prior(
 
     # TNV (vectorial) prior - uses alpha/beta weighting
     if getattr(args, "use_tnv_prior", True) and getattr(args, "gamma_tnv", 1.0) > 0:
+        precond_method = _resolve_precond_method_from_args(args)
         # Check for local weighting
         use_log_tnv = getattr(args, "use_log_tnv", False)
         use_local_weighting = getattr(args, "use_local_weighting", False)
@@ -646,6 +781,16 @@ def get_prior(
                 log_eps_pet, log_eps_spect, epsilon_divisor
             )
 
+            log_hessian = {
+                "mm_diag": "mm_jensen",
+                "frob_diag": "frobenius_surrogate_pd",
+            }.get(precond_method, "mm_jensen")
+            if precond_method not in {"mm_diag", "frob_diag"}:
+                logging.warning(
+                    "Log-TNV only supports Jensen/Frobenius diagonal preconditioners; "
+                    "falling back to %s.",
+                    log_hessian,
+                )
             vtv = WeightedLogVectorialTotalVariation(
                 initial_estimates,
                 tnv_kappas,
@@ -658,7 +803,7 @@ def get_prior(
                 both_directions=getattr(args, "tnv_both_directions", True),
                 stencil=getattr(args, "tnv_stencil", "6"),
                 max_step=getattr(args, "tnv_max_step", 1),
-                hessian=getattr(args, "hessian_type", "slow"),
+                hessian=log_hessian,
                 bnd_cond=getattr(args, "tnv_bnd_cond", "Periodic"),
             )
         else:
@@ -673,7 +818,7 @@ def get_prior(
                 both_directions=getattr(args, "tnv_both_directions", True),
                 stencil=getattr(args, "tnv_stencil", "6"),
                 max_step=getattr(args, "tnv_max_step", 1),
-                hessian=getattr(args, "hessian_type", "slow"),
+                precond_method=precond_method,
                 bnd_cond=getattr(args, "tnv_bnd_cond", "Periodic"),
             )
 
@@ -700,27 +845,23 @@ def get_prior(
             for i, el in enumerate(tv_kappas.containers):
                 el.multiply(kappas.containers[i], out=el)
 
-            if getattr(args, "prior", "tv") == "rdp":
-                combined_tv = WeightedRDP(
-                    initial_estimates,
-                    tv_kappas,
-                    epsilon=getattr(args, "delta"),
-                    anatomical=umap if args.directional_tv else None,
-                    stencil=getattr(args, "tv_stencil", "6"),
-                    both_directions=getattr(args, "tv_both_directions", False),
-                    max_step=getattr(args, "tv_max_step", getattr(args, "tnv_max_step", 1)),
+            prior_kind = getattr(args, "prior", "tv")
+            if prior_kind == "rdp":
+                logging.warning(
+                    "prior='rdp' requested but WeightedRDP is no longer available; "
+                    "using weighted TV instead."
                 )
-            else:
-                combined_tv = WeightedTotalVariation(
-                    initial_estimates,
-                    tv_kappas,
-                    delta=getattr(args, "delta"),
-                    anatomical=umap if args.directional_tv else None,
-                    stencil=getattr(args, "tv_stencil", "6"),
-                    both_directions=getattr(args, "tv_both_directions", False),
-                    max_step=getattr(args, "tv_max_step", getattr(args, "tnv_max_step", 1)),
-                    bnd_cond=getattr(args, "tv_bnd_cond", "Periodic"),
-                )
+
+            combined_tv = WeightedTotalVariation(
+                initial_estimates,
+                tv_kappas,
+                delta=getattr(args, "delta"),
+                anatomical=umap if args.directional_tv else None,
+                stencil=getattr(args, "tv_stencil", "6"),
+                both_directions=getattr(args, "tv_both_directions", False),
+                max_step=getattr(args, "tv_max_step", getattr(args, "tnv_max_step", 1)),
+                bnd_cond=getattr(args, "tv_bnd_cond", "Periodic"),
+            )
 
             combined_tv_prior = OperatorCompositionFunction(combined_tv, bo)
             priors.append(combined_tv_prior)

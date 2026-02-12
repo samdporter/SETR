@@ -344,6 +344,7 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
         update_interval=1,
         freeze_iter=np.inf,
         epsilon=0,
+        p=0.0,
     )
 
 

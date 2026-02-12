@@ -279,6 +279,7 @@ def main(args) -> None:
             update_interval=1,
             freeze_iter=len(obj_funs) * 10,
             epsilon=0,
+            p=0.0,
         )
     else:
         precond = bsrem_precond
