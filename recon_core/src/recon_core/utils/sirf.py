@@ -91,7 +91,7 @@ def get_spect_am(
     return spect_am
 
 
-def get_pet_data(path: str, suffix: str = "") -> dict:
+def get_pet_data(path: str, load_sinos = True, suffix: str = "") -> dict:
     """
     Load PET data from the given path.
 
@@ -108,12 +108,17 @@ def get_pet_data(path: str, suffix: str = "") -> dict:
         "normalisation", "attenuation", "template_image", "initial_image", and
         optionally "spect".
     """
-    pet_data = {
-        "acquisition_data": AcquisitionData(os.path.join(path, f"prompts{suffix}.hs")),
-        "additive": AcquisitionData(os.path.join(path, f"additive_term{suffix}.hs")),
-        "normalisation": AcquisitionData(os.path.join(path, f"mult_factors{suffix}.hs")),
-        "attenuation": ImageData(os.path.join(path, "umap_zoomed.hv")),
-    }
+    if load_sinos:
+        pet_data = {
+            "acquisition_data": AcquisitionData(os.path.join(path, f"prompts{suffix}.hs")),
+            "additive": AcquisitionData(os.path.join(path, f"additive_term{suffix}.hs")),
+            "normalisation": AcquisitionData(os.path.join(path, f"mult_factors{suffix}.hs")),
+            "attenuation": ImageData(os.path.join(path, "umap_zoomed.hv")),
+        }
+    else:
+        pet_data = {
+            "attenuation": ImageData(os.path.join(path, "umap_zoomed.hv")),
+        }
 
     # Always load the template image.
     template_img_path = os.path.join(path, "template_image.hv")
