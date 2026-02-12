@@ -41,6 +41,8 @@ from recon_core.cil_extensions.preconditioners import (
     HarmonicMeanPreconditioner,
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
+    MajorisingHessianBlockPreconditioner,
+    MajorisingHessianDiagonalPreconditioner,
     MaGeZPreconditioner,
 )
 from recon_core.priors import (
@@ -189,21 +191,57 @@ def get_preconditioners(
             f"Options: {sorted(_ALL_PRECOND_METHODS)}"
         )
 
-    combine = getattr(args, "precond_combine", "harmonic").lower()
+    combine = getattr(args, "precond_combine", "majoriser").lower()
+    valid_combines = {"harmonic", "lehmer", "magez", "majoriser"}
+    if combine not in valid_combines:
+        logging.warning(
+            "Unknown precond_combine=%s; falling back to 'majoriser'. Options: %s",
+            combine,
+            sorted(valid_combines),
+        )
+        combine = "majoriser"
+    if combine == "harmonic":
+        logging.info(
+            "precond_combine='harmonic' is equivalent to Hessian-sum inversion here; "
+            "using canonical combine='majoriser'."
+        )
+        combine = "majoriser"
     lehmer_p = float(getattr(args, "lehmer_p", 0.0))
     scalar_reduction = getattr(args, "block_scalar_reduction", "diag")
-    if scalar_reduction == "diag" and combine != "harmonic":
+    if scalar_reduction == "diag" and combine not in {"majoriser"}:
         logging.warning(
-            "Diagonal scalar blending requires harmonic mean (p=0); forcing combine='harmonic'."
+            "Diagonal scalar blending requires p=0 inverse-sum; forcing combine='majoriser'."
         )
-        combine = "harmonic"
+        combine = "majoriser"
+    precond_data_epsilon = float(getattr(args, "precond_data_epsilon", 1e-8))
+    epoch_update_interval = len(all_funs)
+    freeze_epochs = getattr(args, "precond_freeze_epochs", None)
+    if freeze_epochs is None:
+        precond_freeze_iter = np.inf
+    else:
+        try:
+            freeze_epochs = float(freeze_epochs)
+        except (TypeError, ValueError):
+            logging.warning(
+                "Invalid precond_freeze_epochs=%s; using no preconditioner freeze.",
+                freeze_epochs,
+            )
+            precond_freeze_iter = np.inf
+        else:
+            if freeze_epochs <= 0:
+                precond_freeze_iter = np.inf
+            else:
+                precond_freeze_iter = max(
+                    epoch_update_interval,
+                    int(round(freeze_epochs * epoch_update_interval)),
+                )
 
     bsrem_precond = BSREMPreconditioner(
         s_inv,
         1,
         np.inf,
         epsilon=0,
-        smooth=True,
+        smooth=False,
     )
     if canonical == "bsrem" or priors_list is None:
         return bsrem_precond
@@ -223,7 +261,6 @@ def get_preconditioners(
                 precond_method,
             )
         else:
-            epoch_update_interval = len(all_funs)
             if len(block_priors) > 1:
                 logging.warning(
                     "Multiple block-capable priors found; using first one (%s).",
@@ -232,15 +269,33 @@ def get_preconditioners(
             block_precond = BlockDiagonalPriorPreconditioner(
                 block_priors[0],
                 update_interval=epoch_update_interval,
-                freeze_iter=len(all_funs) * 10,
+                freeze_iter=precond_freeze_iter,
                 epsilon=1e-8,
                 max_value=max_precond_value,
             )
+            if combine == "majoriser":
+                return MajorisingHessianBlockPreconditioner(
+                    s_inv=s_inv,
+                    prior=block_priors[0],
+                    update_interval=epoch_update_interval,
+                    freeze_iter=precond_freeze_iter,
+                    x_epsilon=precond_data_epsilon,
+                    hessian_floor=1e-8,
+                    max_value=max_precond_value,
+                )
             if combine == "magez":
                 logging.warning(
-                    "MaGeZ averaging is diagonal-only; using harmonic block Lehmer blend instead."
+                    "MaGeZ averaging is diagonal-only; using block majoriser path instead."
                 )
-                combine = "harmonic"
+                return MajorisingHessianBlockPreconditioner(
+                    s_inv=s_inv,
+                    prior=block_priors[0],
+                    update_interval=epoch_update_interval,
+                    freeze_iter=precond_freeze_iter,
+                    x_epsilon=precond_data_epsilon,
+                    hessian_floor=1e-8,
+                    max_value=max_precond_value,
+                )
             p_val = 0.0 if combine == "harmonic" else lehmer_p
             return BlockLehmerMeanPreconditioner(
                 block_preconditioner=block_precond,
@@ -249,7 +304,7 @@ def get_preconditioners(
                 epsilon=1e-12,
                 max_value=max_precond_value,
                 update_interval=epoch_update_interval,
-                freeze_iter=len(all_funs) * 10,
+                freeze_iter=precond_freeze_iter,
                 scalar_reduction=scalar_reduction,
             )
 
@@ -271,7 +326,6 @@ def get_preconditioners(
     if prior_for_precond is None:
         return bsrem_precond
 
-    epoch_update_interval = len(all_funs)
     prior_precond = ImageFunctionPreconditioner(
         prior_for_precond.inv_preconditioner_diag,
         1,
@@ -280,6 +334,17 @@ def get_preconditioners(
         max_value=max_precond_value,
     )
 
+    if combine == "majoriser":
+        return MajorisingHessianDiagonalPreconditioner(
+            s_inv=s_inv,
+            prior=prior_for_precond,
+            update_interval=epoch_update_interval,
+            freeze_iter=precond_freeze_iter,
+            x_epsilon=precond_data_epsilon,
+            hessian_floor=1e-8,
+            max_value=max_precond_value,
+        )
+
     if combine == "magez":
         return MaGeZPreconditioner(
             s_inv,
@@ -287,14 +352,14 @@ def get_preconditioners(
             hessian_scale=getattr(args, "hessian_scale", 1.5),
             delta=getattr(args, "magez_delta", 1e-8),
             update_interval=epoch_update_interval,
-            freeze_iter=len(all_funs) * 10,
+            freeze_iter=precond_freeze_iter,
         )
 
     if combine == "harmonic":
         return HarmonicMeanPreconditioner(
             [bsrem_precond, prior_precond],
             update_interval=epoch_update_interval,
-            freeze_iter=len(all_funs) * 10,
+            freeze_iter=precond_freeze_iter,
             epsilon=1e-6,
         )
 
@@ -302,7 +367,7 @@ def get_preconditioners(
     return LehmerMeanPreconditioner(
         [bsrem_precond, prior_precond],
         update_interval=epoch_update_interval,
-        freeze_iter=len(all_funs) * 10,
+        freeze_iter=precond_freeze_iter,
         epsilon=0,
         p=lehmer_p,
     )

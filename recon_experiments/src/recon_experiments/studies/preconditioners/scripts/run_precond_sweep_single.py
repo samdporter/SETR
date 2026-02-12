@@ -82,7 +82,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--alpha", type=float, required=True, help="Alpha/beta value")
     parser.add_argument("--step-size", type=float, required=True, help="Initial step size")
     parser.add_argument("--epochs", type=int, required=True, help="Number of epochs")
-    parser.add_argument("--precond-combine", default="harmonic", help="Combine mode: lehmer|harmonic|magez")
+    parser.add_argument(
+        "--precond-combine",
+        default="majoriser",
+        help="Combine mode: lehmer|harmonic|majoriser|magez",
+    )
     parser.add_argument("--lehmer-p", type=float, default=None, help="Lehmer mean p value")
     parser.add_argument(
         "--block-scalar-reduction",

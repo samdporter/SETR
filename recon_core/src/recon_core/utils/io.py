@@ -15,7 +15,8 @@ def parse_cli():
         "--override",
         "-o",
         type=str,
-        nargs="*",
+        nargs="+",
+        action="append",
         help="Override YAML keys, e.g. alpha=0.5 beta=2",
     )
     return p.parse_args()
@@ -95,7 +96,14 @@ def apply_overrides(cfg: dict, overrides: list[str]) -> dict:
     Given overrides like ["alpha=0.5", "spect.gauss_fwhm=[1,2,3]"],
     apply them into cfg (supports nested keys via dots).
     """
+    flattened = []
     for ov in overrides or []:
+        if isinstance(ov, (list, tuple)):
+            flattened.extend(ov)
+        else:
+            flattened.append(ov)
+
+    for ov in flattened:
         key, val = ov.split("=", 1)
         with contextlib.suppress(Exception):
             val = ast.literal_eval(val)

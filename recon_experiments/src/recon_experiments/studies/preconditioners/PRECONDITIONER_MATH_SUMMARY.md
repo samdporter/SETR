@@ -85,7 +85,7 @@ L_p(x, y) = (x^p + y^p) / (x^{p-1} + y^{p-1})
 with **p=0** giving the **harmonic mean**:
 
 ```
-H(x, y) = 2 / (1/x + 1/y)
+H(x, y) = 1 / (1/x + 1/y)
 ```
 
 ### Block blend (block + scalar)
@@ -102,14 +102,26 @@ The scalar preconditioner comes per modality `(λ_pet, λ_spect)` and must be ma
 With `diag` reduction, the only valid blend is the **harmonic mean**:
 
 ```
-H(B, D) = 2 * (B^{-1} + D^{-1})^{-1}
+H(B, D) = (B^{-1} + D^{-1})^{-1}
 ```
 
 This preserves modality scales and yields a **block SPD** preconditioner.
 
+### Majoriser blend (Hessian-sum inverse)
+An explicit baseline option is available via `precond_combine=majoriser`:
+
+```
+H_total = H_data + H_prior
+P = H_total^{-1}
+```
+
+where:
+- `H_data` uses EM-type curvature `sensitivity / (x + eps)` (equivalently inverse of BSREM preconditioner),
+- `H_prior` uses the chosen TNV Hessian approximation (`mm_block_diag` for block mode, or the selected diagonal method).
+
 ## 6) Defaults in current experiments
 
-- `precond_combine = harmonic` (p=0)
+- `precond_combine = majoriser` (default; `harmonic` is treated as alias)
 - `block_scalar_reduction = diag`
 - `precond_type = mm_block_diag`
 

@@ -1,6 +1,6 @@
 precond_type,combine
-mm_diag,harmonic
-frob_diag,harmonic
-mm_diag_gershgorin,harmonic
-mm_block_diag,harmonic
-ls_block_diag,harmonic
+mm_diag,majoriser
+frob_diag,majoriser
+mm_diag_gershgorin,majoriser
+mm_block_diag,majoriser
+ls_block_diag,majoriser

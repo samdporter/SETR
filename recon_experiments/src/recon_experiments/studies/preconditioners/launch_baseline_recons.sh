@@ -16,7 +16,7 @@ RUNNER_DIR="$BASE_DIR/src/recon_experiments/runners/scripts"
 BASE_CONFIG="${1:-config_1bpos_anthro.yaml}"
 NUM_EPOCHS="${2:-200}"
 PRECOND_TYPE="${PRECOND_TYPE:-mm_block_diag}"
-PRECOND_COMBINE="${PRECOND_COMBINE:-harmonic}"
+PRECOND_COMBINE="${PRECOND_COMBINE:-majoriser}"
 PRECOND_SCALAR_REDUCTION="${PRECOND_SCALAR_REDUCTION:-diag}"
 # Support old interface: args 3 and 4 might be step_size and precond_type (ignored now)
 # Last arg should be mode

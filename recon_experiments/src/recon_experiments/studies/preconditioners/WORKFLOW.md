@@ -37,7 +37,7 @@ Establish reference solutions by running long reconstructions for each alpha val
 - **Alpha values**: Read from `parameters/alphas.csv`
 - **Script**: Uses the proven `run_dtnv_1bpos.py` with config overrides
 - **Preconditioner**: `mm_block_diag` by default (override via `PRECOND_TYPE`)
-- **Combine**: `harmonic` by default (override via `PRECOND_COMBINE`)
+- **Combine**: `majoriser` by default (override via `PRECOND_COMBINE`; `harmonic` is treated as alias)
 - **Block scalar reduction**: `diag` by default (override via `PRECOND_SCALAR_REDUCTION`)
 
 ### Output
@@ -235,7 +235,7 @@ All parameters are in `parameters/`:
 tail -f output/baselines_1bpos/_logs/*.o*
 
 # Test locally first
-PRECOND_TYPE=mm_block_diag ./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 local
+PRECOND_TYPE=mm_block_diag PRECOND_COMBINE=majoriser ./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 local
 ```
 
 **Analysis script errors?**
