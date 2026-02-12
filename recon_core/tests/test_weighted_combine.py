@@ -183,6 +183,13 @@ def test_weighted_overlap():
     else:
         print("✗ Adjoint test FAILED")
 
+    # Assertions for automated regression testing
+    assert abs(overlap_val_unweighted - 30.0) < 1e-3
+    assert abs(overlap_val_weighted - 15.0) < 1e-3
+    assert abs(overlap_val_nonuniform - (40.0 / 3.0)) < 1e-3
+    assert rel_diff_unweighted < 1e-6
+    assert rel_diff < 1e-6
+
     # Summary
     print("\n" + "=" * 80)
     print("SUMMARY:")
