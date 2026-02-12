@@ -33,7 +33,9 @@ def get_sqrt_epsilon(dtype=torch.float32):
         float: Appropriate epsilon value for the given dtype
     """
     if dtype == torch.float32:
-        return 1e-8
+        # Keep comfortably above float32 machine epsilon to avoid
+        # amplification from near-zero gradients in background regions.
+        return 1e-6
     else:  # float64
         return 1e-12
 
@@ -54,7 +56,8 @@ def get_division_epsilon(dtype=torch.float32):
         float: Appropriate epsilon value for the given dtype
     """
     if dtype == torch.float32:
-        return 1e-9
+        # Division guard should exceed float32 machine epsilon.
+        return 1e-6
     else:  # float64
         return 1e-14
 
@@ -75,6 +78,7 @@ def get_gradient_floor(dtype=torch.float32):
         float: Appropriate floor value for the given dtype
     """
     if dtype == torch.float32:
-        return 1e-9
+        # Minimum meaningful gradient magnitude for stable normalization.
+        return 1e-6
     else:  # float64
         return 1e-14

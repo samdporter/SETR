@@ -1,5 +1,6 @@
 import logging
 
+import numpy as np
 import pandas as pd
 from cil.framework import BlockDataContainer
 from cil.optimisation.utilities import callbacks
@@ -154,17 +155,34 @@ class SavePreconditionerCallback(Callback):
     def __init__(self, filename, interval, **kwargs):
         super().__init__(interval, **kwargs)
         self.filename = filename
+        self._warned_block_precond = False
 
     def __call__(self, algo):
-        preconditioner = algo.solution.copy()
-        algo.preconditioner.compute_preconditioner(algo, preconditioner)
         if self.skip_iteration(algo):
             return
+        if algo.preconditioner is None:
+            return
+
+        preconditioner = algo.preconditioner.compute_preconditioner(algo)
+
+        if isinstance(preconditioner, np.ndarray):
+            if not self._warned_block_precond:
+                logging.warning(
+                    "SavePreconditionerCallback: block/array preconditioners are not serialised to .hv; skipping save."
+                )
+                self._warned_block_precond = True
+            return
+
         if isinstance(preconditioner, ImageData):
             preconditioner.write(f"{self.filename}_{algo.iteration}.hv")
         elif isinstance(preconditioner, BlockDataContainer):
             for i, el in enumerate(preconditioner.containers):
                 el.write(f"{self.filename}_{i}_{algo.iteration}.hv")
+        else:
+            logging.warning(
+                "SavePreconditionerCallback: unsupported preconditioner type %s; skipping save.",
+                type(preconditioner).__name__,
+            )
 
 
 class SubsetValueCallback(Callback):

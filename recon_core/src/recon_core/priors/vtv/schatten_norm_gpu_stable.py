@@ -247,7 +247,7 @@ class GPUVectorialTotalVariation(Function):
         numpy_out=True,
         tail=None,
         use_stability_improvements=True,  # New flag to enable/disable stability features
-        grad_norm_threshold=1e-6,  # Skip gradient where ||x||_F is tiny
+        grad_norm_threshold=None,  # Optional: flatten tiny-gradient regions in value+gradient paths
     ):
         # Maintain exact original parameter handling
         if eps is not None:
@@ -297,6 +297,14 @@ class GPUVectorialTotalVariation(Function):
         else:
             raise ValueError("Norm not defined")
 
+        if self.grad_norm_threshold is not None:
+            x_frob = torch.sqrt(torch.sum(x * x, dim=(-2, -1)))
+            out = torch.where(
+                x_frob < self.grad_norm_threshold,
+                torch.zeros_like(out),
+                out,
+            )
+
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
     def __call__(self, x):
@@ -345,12 +353,13 @@ class GPUVectorialTotalVariation(Function):
     def gradient(self, x):
         x = to_tensor(x)
 
-        # Early detect negligible voxels to avoid noisy gradients in background
-        x_frob_sq = torch.sum(x * x, dim=(-2, -1))  # (...,)
-        x_frob = torch.sqrt(x_frob_sq)
-        small_mask = x_frob < self.grad_norm_threshold if self.grad_norm_threshold is not None else torch.zeros_like(x_frob, dtype=torch.bool)
-        if small_mask.all():
-            return torch.zeros_like(x)
+        if self.grad_norm_threshold is not None:
+            x_frob = torch.sqrt(torch.sum(x * x, dim=(-2, -1)))
+            small_mask = x_frob < self.grad_norm_threshold
+            if small_mask.all():
+                return torch.zeros_like(x)
+        else:
+            small_mask = None
 
         # Function selection
         if self.smoothing_function == "fair":
@@ -405,7 +414,8 @@ class GPUVectorialTotalVariation(Function):
             raise ValueError("Norm not defined")
 
         # Zero out negligible voxels to prevent salt-and-pepper noise in background
-        out = torch.where(small_mask.view(*small_mask.shape, 1, 1), torch.zeros_like(out), out)
+        if small_mask is not None:
+            out = torch.where(small_mask.view(*small_mask.shape, 1, 1), torch.zeros_like(out), out)
 
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
