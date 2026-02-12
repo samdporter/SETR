@@ -1,8 +1,9 @@
 #== Reconstruction settings
-num_subsets: [36, 18]
+num_subsets: [18, 18]
 num_epochs: 25
 initial_step_size: 1
-update_interval: 54
+update_interval: 36
+precond_type: "mm_block_diag"
 relaxation_eta: 0.01
 use_scatter: true
 variance_reduction: "svrg" # can be "svrg", "saga", or "none"
@@ -22,7 +23,7 @@ use_tnv_prior: true
 gamma_tnv: 1.0
 alpha: 0.02
 beta: 0.02
-tnv_stencil: "18"
+tnv_stencil: "6"
 tnv_max_step: 1
 tnv_bnd_cond: "Neumann"
 directional_tnv: true
@@ -36,8 +37,8 @@ use_modality_specific_priors: false
 prior: "tv" # can be tv or rdp
 gamma_pet: 0.5
 gamma_spect: 0.5
-tv_stencil: "18" # can be 6, 18, or 26
-tv_max_step: 2
+tv_stencil: "6" # can be 6, 18, or 26
+tv_max_step: 1
 tv_bnd_cond: "Neumann"
 directional_tv: true
 tv_both_directions: false
@@ -61,6 +62,6 @@ working_path: "/home/sam/working/synergistic_recon/tmp"
 #== Miscellaneous
 save_images: true
 save_gradients: false
-save_preconditioners: false
+save_preconditioners: true
 seed: null
 profile: false

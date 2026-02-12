@@ -7,7 +7,7 @@ set -euo pipefail
 
 # Auto-detect base directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-BASE_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 FUNC_DIR="$SCRIPT_DIR"
 CONFIG_DIR="$FUNC_DIR/configs"
 PARAM_DIR="$FUNC_DIR/parameters"
@@ -53,6 +53,11 @@ CONFIG_VALUES=$(python3 -c "
 import yaml
 with open('$SWEEP_CONFIG_PATH', 'r') as f:
     config = yaml.safe_load(f)
+fixed = config.get('fixed_params', {}) or {}
+num_epochs = fixed.get('num_epochs', 50)
+fixed_overrides = [
+    f\"{k}={repr(v)}\" for k, v in fixed.items() if k != 'num_epochs'
+]
 
 print('SWEEP_NAME=' + config['sweep_name'])
 print('BASE_CONFIG=' + config['base_config'])
@@ -65,7 +70,8 @@ print('SGE_MEMORY=' + config['sge']['memory'])
 print('SGE_CORES=' + str(config['sge']['cores']))
 print('SGE_QUEUE=' + (config['sge']['queue'] or 'default'))
 print('SGE_GPU=' + str(config['sge'].get('gpu', False)).lower())
-print('NUM_EPOCHS=' + str(config['fixed_params'].get('num_epochs', 50)))
+print('NUM_EPOCHS=' + str(num_epochs))
+print('FIXED_OVERRIDES=' + ';'.join(fixed_overrides))
 ")
 
 # Source the config values
@@ -119,22 +125,40 @@ case "$MODE" in
 
         # Read first parameter combination
         PRECOND_TYPE=$(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | head -1 | awk -F, '{gsub(/^[ \t]+|[ \t]+$/,"",$1); print $1}')
+        PRECOND_COMBINE=$(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | head -1 | awk -F, '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}')
         ALPHA=$(tail -n +2 "$PARAM_DIR/$ALPHAS_FILE" | head -1 | awk -F, '{gsub(/^[ \t]+|[ \t]+$/,"",$1); print $1}')
         STEP_SIZE=$(tail -n +2 "$PARAM_DIR/$STEP_SIZES_FILE" | head -1 | awk -F, '{gsub(/^[ \t]+|[ \t]+$/,"",$1); print $1}')
 
-        echo "Testing: precond_type=$PRECOND_TYPE, alpha=$ALPHA, step_size=$STEP_SIZE"
+        echo "Testing: precond_type=$PRECOND_TYPE, combine=$PRECOND_COMBINE, alpha=$ALPHA, step_size=$STEP_SIZE"
 
-        OUTPUT_DIR="$SWEEP_OUT_DIR/local_test"
+        if [ -n "$PRECOND_COMBINE" ]; then
+            OUTPUT_DIR="$SWEEP_OUT_DIR/precond_${PRECOND_TYPE}_combine_${PRECOND_COMBINE}_alpha_${ALPHA}_step_${STEP_SIZE}_local"
+        else
+            OUTPUT_DIR="$SWEEP_OUT_DIR/precond_${PRECOND_TYPE}_alpha_${ALPHA}_step_${STEP_SIZE}_local"
+        fi
         mkdir -p "$OUTPUT_DIR"
 
         cd "$BASE_DIR"
-        python scripts/test_preconditioner_single.py \
+        OVERRIDE_ARGS=()
+        if [ -n "${FIXED_OVERRIDES:-}" ]; then
+            IFS=';' read -ra FIXED_LIST <<< "$FIXED_OVERRIDES"
+            for ov in "${FIXED_LIST[@]}"; do
+                [ -n "$ov" ] && OVERRIDE_ARGS+=(--override "$ov")
+            done
+        fi
+        COMBINE_ARGS=()
+        if [ -n "$PRECOND_COMBINE" ]; then
+            COMBINE_ARGS=(--precond-combine "$PRECOND_COMBINE")
+        fi
+        python "$SCRIPTS_DIR/$RECON_SCRIPT" \
             --config "configs/$BASE_CONFIG" \
             --output "$OUTPUT_DIR" \
             --precond-type "$PRECOND_TYPE" \
             --alpha "$ALPHA" \
             --step-size "$STEP_SIZE" \
-            --epochs "$NUM_EPOCHS"
+            --epochs "$NUM_EPOCHS" \
+            "${COMBINE_ARGS[@]}" \
+            "${OVERRIDE_ARGS[@]}"
 
         echo ""
         echo "Local test complete!"
@@ -179,7 +203,7 @@ case "$MODE" in
           -N "precond_${SWEEP_NAME}_test" \
           -o "$LOG_DIR" \
           -e "$LOG_DIR" \
-          -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BASE_CONFIG,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE,ALPHAS_FILE=$ALPHAS_FILE,STEP_SIZES_FILE=$STEP_SIZES_FILE,NUM_EPOCHS=$NUM_EPOCHS" \
+          -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BASE_CONFIG,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE,ALPHAS_FILE=$ALPHAS_FILE,STEP_SIZES_FILE=$STEP_SIZES_FILE,NUM_EPOCHS=$NUM_EPOCHS,RECON_SCRIPT=$RECON_SCRIPT,FIXED_OVERRIDES=$FIXED_OVERRIDES" \
           "$QSUB_SCRIPT"
 
         echo ""
@@ -232,7 +256,7 @@ case "$MODE" in
           -N "precond_${SWEEP_NAME}" \
           -o "$LOG_DIR" \
           -e "$LOG_DIR" \
-          -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BASE_CONFIG,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE,ALPHAS_FILE=$ALPHAS_FILE,STEP_SIZES_FILE=$STEP_SIZES_FILE,NUM_EPOCHS=$NUM_EPOCHS" \
+          -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BASE_CONFIG,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE,ALPHAS_FILE=$ALPHAS_FILE,STEP_SIZES_FILE=$STEP_SIZES_FILE,NUM_EPOCHS=$NUM_EPOCHS,RECON_SCRIPT=$RECON_SCRIPT,FIXED_OVERRIDES=$FIXED_OVERRIDES" \
           "$QSUB_SCRIPT"
 
         echo ""

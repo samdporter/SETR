@@ -9,8 +9,10 @@ in synergistic PET/SPECT reconstruction.
 
 ### 1. Run Baseline Reconstructions (Stage 1)
 ```bash
-./launch_baseline_recons.sh config_1bpos_anthro_long.yaml 200 full
+./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full
 ```
+Baseline runs default to `mm_block_diag` with `precond_combine=harmonic` and `block_scalar_reduction=diag`
+(set `PRECOND_TYPE` / `PRECOND_COMBINE` / `PRECOND_SCALAR_REDUCTION` to override).
 
 ### 2. Run Preconditioner Sweep (Stage 2)
 ```bash

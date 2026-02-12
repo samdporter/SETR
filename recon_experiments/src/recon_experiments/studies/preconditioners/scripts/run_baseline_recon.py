@@ -2,12 +2,12 @@
 """
 Run baseline/reference reconstruction for preconditioner comparison.
 
-This script runs a long reconstruction with the most accurate (but slowest) 
-preconditioner to establish a near-optimal solution. Other preconditioner tests
+This script runs a long reconstruction with the default baseline preconditioner
+(mm_block_diag) to establish a reference solution. Other preconditioner tests
 can then be compared against this baseline to measure convergence speed.
 
 Usage:
-    python run_baseline_recon.py --config config_1bpos_anthro_long.yaml \
+    python run_baseline_recon.py --config config_1bpos_anthro.yaml \
                                    --alpha 0.005 \
                                    --epochs 200 \
                                    --output baseline_alpha_0.005
@@ -85,7 +85,7 @@ def run_baseline(
     output_dir: Path,
     num_epochs: int,
     step_size: float = 1.0,
-    precond_type: str = "vtv_svd_principal_alpha",
+    precond_type: str = "mm_block_diag",
 ) -> dict:
     """
     Run baseline reconstruction with most accurate preconditioner.
@@ -97,7 +97,7 @@ def run_baseline(
         output_dir: Where to save results
         num_epochs: Number of epochs to run (should be large, e.g., 200-500)
         step_size: Initial step size
-        precond_type: Preconditioner type (default: most accurate SVD-based)
+        precond_type: Preconditioner type (default: mm_block_diag)
     
     Returns:
         Result dictionary with metrics
@@ -115,6 +115,12 @@ def run_baseline(
     # Map precond type to hessian type
     hessian_map = {
         "bsrem": "mm_jensen",
+        "mm_block_diag": "mm_diag_gershgorin",
+        "mm_diag": "mm_diag",
+        "mm_diag_gershgorin": "mm_diag_gershgorin",
+        "frob_diag": "frob_diag",
+        "ls_block_diag": "ls_block_diag",
+        # Legacy names (if used elsewhere)
         "vtv_svd_principal_alpha": "svd_principal_alpha",
         "vtv_mm_jensen": "mm_jensen",
         "vtv_frobenius_surrogate_pd": "frobenius_surrogate_pd",
@@ -260,15 +266,34 @@ def main():
     parser.add_argument(
         "--precond-type",
         type=str,
-        default="vtv_svd_principal_alpha",
+        default="mm_block_diag",
         choices=[
             "bsrem",
+            "mm_block_diag",
+            "mm_diag",
+            "mm_diag_gershgorin",
+            "frob_diag",
+            "ls_block_diag",
             "vtv_svd_principal_alpha",
             "vtv_mm_jensen",
             "vtv_frobenius_surrogate_pd",
             "vtv_vector_tv_per_modality",
         ],
-        help="Preconditioner type (default: vtv_svd_principal_alpha, the most accurate)",
+        help="Preconditioner type (default: mm_block_diag)",
+    )
+    parser.add_argument(
+        "--precond-combine",
+        type=str,
+        default="harmonic",
+        choices=["lehmer", "harmonic", "magez"],
+        help="Combine mode for preconditioner blending (default: harmonic)",
+    )
+    parser.add_argument(
+        "--block-scalar-reduction",
+        type=str,
+        default="diag",
+        choices=["mean", "geometric", "diag"],
+        help="Scalar reduction for block blend (default: diag)",
     )
 
     test_args = parser.parse_args()
@@ -278,6 +303,8 @@ def main():
 
     # Override epochs
     args.num_epochs = test_args.epochs
+    args.precond_combine = test_args.precond_combine
+    args.block_scalar_reduction = test_args.block_scalar_reduction
 
     output_dir = Path(test_args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -289,6 +316,8 @@ def main():
     logging.info("=" * 60)
     logging.info(f"  Config: {test_args.config}")
     logging.info(f"  Preconditioner: {test_args.precond_type}")
+    logging.info(f"  Combine: {test_args.precond_combine}")
+    logging.info(f"  Block scalar reduction: {test_args.block_scalar_reduction}")
     logging.info(f"  Alpha: {test_args.alpha}")
     logging.info(f"  Step size: {test_args.step_size}")
     logging.info(f"  Epochs: {test_args.epochs}")

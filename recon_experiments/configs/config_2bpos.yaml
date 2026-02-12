@@ -16,6 +16,7 @@ delta_divisor: 5.0
 epsilon_divisor: 10.0  # Epsilon = dynamic_range / divisor (for log TNV)
 prior_updates_per_epoch: null
 snapshot_interval_factor: 1.0  # Update SVRG snapshot every epoch (was 2x)
+precond_type: "mm_block_diag"
 
 # Modality-specific TV prior settings
 use_modality_specific_priors: false
@@ -34,8 +35,8 @@ gamma_tnv: 1.0
 alpha: 0.2
 beta: 0.2
 use_log_tnv: true  # Set to true to use log-domain TNV
-tnv_stencil: "18"
-tnv_max_step: 2
+tnv_stencil: "6"
+tnv_max_step: 1
 tnv_bnd_cond: "Neumann"
 directional_tnv: true
 tnv_both_directions: false
@@ -66,4 +67,3 @@ save_gradients: true
 save_preconditioners: true
 seed: null
 profile: false
-

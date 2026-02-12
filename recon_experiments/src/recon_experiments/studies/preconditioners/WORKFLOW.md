@@ -6,7 +6,7 @@ This directory contains the complete workflow for comparing preconditioner perfo
 
 The experiment has **two stages**:
 
-1. **Baseline reconstructions**: Run long, accurate reconstructions to establish reference solutions for each alpha value
+1. **Baseline reconstructions**: Run long reconstructions (default `mm_block_diag`) to establish reference solutions for each alpha value
 2. **Preconditioner sweep**: Test different preconditioners and step sizes, comparing convergence to the baseline
 
 ## Stage 1: Baseline Reconstructions
@@ -15,7 +15,7 @@ The experiment has **two stages**:
 Establish reference solutions by running long reconstructions for each alpha value using the tested `run_dtnv_1bpos.py` script.
 
 ### Scripts
-- Uses `scripts/run_dtnv_1bpos.py` (tested production script)
+- Uses `runners/scripts/run_dtnv_1bpos.py` (tested production script)
 - `launch_baseline_recons.sh` - Launch baselines for all alpha values
 - `scripts/baseline_recon.qsub.sh` - SGE job script for cluster
 
@@ -23,19 +23,22 @@ Establish reference solutions by running long reconstructions for each alpha val
 
 **Test locally (one alpha):**
 ```bash
-./launch_baseline_recons.sh config_1bpos_anthro_long.yaml 20 local
+./launch_baseline_recons.sh config_1bpos_anthro.yaml 20 local
 ```
 
 **Submit to cluster (all alphas):**
 ```bash
-./launch_baseline_recons.sh config_1bpos_anthro_long.yaml 200 full
+./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full
 ```
 
 ### Parameters
-- **Config**: `config_1bpos_anthro_long.yaml` (uses full phantom data)
+- **Config**: `config_1bpos_anthro.yaml` (uses full phantom data)
 - **Epochs**: 200 (longer than sweep to ensure convergence)
 - **Alpha values**: Read from `parameters/alphas.csv`
 - **Script**: Uses the proven `run_dtnv_1bpos.py` with config overrides
+- **Preconditioner**: `mm_block_diag` by default (override via `PRECOND_TYPE`)
+- **Combine**: `harmonic` by default (override via `PRECOND_COMBINE`)
+- **Block scalar reduction**: `diag` by default (override via `PRECOND_SCALAR_REDUCTION`)
 
 ### Output
 ```
@@ -65,6 +68,7 @@ output/baselines_1bpos/
 Compare different preconditioners and step sizes by measuring convergence speed to the baseline solutions.
 
 ### Scripts
+- `scripts/run_precond_sweep_single.py` - Wrapper that calls `run_dtnv_1bpos.py` / `run_dtnv_2bpos.py`
 - `scripts/precond_sweep.qsub.sh` - SGE job script for each test
 - `launch_precond_sweep.sh` - Launch all sweep jobs
 
@@ -76,26 +80,25 @@ Compare different preconditioners and step sizes by measuring convergence speed 
 ```
 
 ### Current Configuration
-- **Preconditioners**: 4 types (bsrem + 3 VTV variants)
-- **Alphas**: 3 values (0.005, 0.05, 0.5)
-- **Step sizes**: 5 values (0.05, 0.1, 0.5, 1.0, 5.0)
-- **Total jobs**: 4 × 3 × 5 = **60 jobs**
+- **Preconditioners**: Defined in `parameters/precond_types.csv` (includes combine modes)
+- **Alphas**: Defined in `parameters/alphas.csv`
+- **Step sizes**: Defined in `parameters/step_sizes.csv`
 - **Epochs per job**: 50 (shorter than baseline)
 
 ### Why This Works
 
-1. **Same objective function**: All tests use identical `hessian_type="fast"` for the objective
-2. **Only preconditioner differs**: Each test uses its specified preconditioner type
+1. **Same objective function**: All tests use identical objective settings
+2. **Only preconditioner differs**: Each test uses its specified preconditioner and combine mode
 3. **Fair comparison**: Same alpha, same objective, only convergence speed varies
 4. **Alpha range**: Tests stability to prior weighting (your goal!)
 
 ### Output
 ```
 output/precond_1bpos/
-├── precond_bsrem_alpha_0.005_step_0.05/
-├── precond_bsrem_alpha_0.005_step_0.1/
+├── precond_mm_block_diag_combine_harmonic_alpha_0.005_step_0.05/
+├── precond_mm_block_diag_combine_harmonic_alpha_0.005_step_0.1/
 ├── ...
-└── precond_vtv_vector_tv_per_modality_alpha_0.5_step_5.0/
+└── precond_ls_block_diag_combine_harmonic_alpha_0.5_step_5.0/
 ```
 
 ## Stage 3: Analysis
@@ -110,7 +113,7 @@ Compare preconditioner performance against baselines to identify optimal configu
 
 **After baselines and sweep complete:**
 ```bash
-cd functionality/preconditioners
+cd recon_experiments/src/recon_experiments/studies/preconditioners
 
 # Run analysis
 python scripts/analyze_precond_sweep.py \
@@ -151,7 +154,7 @@ For each test:
 ### 1. Run Baselines (Do This First!)
 ```bash
 # Submit baseline jobs (3 alphas × 200 epochs each)
-./launch_baseline_recons.sh config_1bpos_anthro_long.yaml 200 full
+./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full
 
 # Monitor
 qstat -u $USER | grep baseline
@@ -200,14 +203,14 @@ All parameters are in `parameters/`:
 
 - **alphas.csv**: Alpha values to test (currently: 0.005, 0.05, 0.5)
 - **step_sizes.csv**: Step sizes to test (currently: 0.05, 0.1, 0.5, 1.0, 5.0)
-- **precond_types.csv**: Preconditioner types (currently: 4 types)
+- **precond_types.csv**: Preconditioner types (currently: 5 types)
 
 **DO NOT modify these** without re-running baselines!
 
 ## Configuration Files
 
 - **configs/precond_sweep_1bpos.yaml**: Sweep configuration (epochs, resources, etc.)
-- **../../configs/config_1bpos_anthro_long.yaml**: Base reconstruction config (uses full phantom data)
+- **../../configs/config_1bpos_anthro.yaml**: Base reconstruction config (uses full phantom data)
 
 ## Questions the Analysis Answers
 
@@ -232,7 +235,7 @@ All parameters are in `parameters/`:
 tail -f output/baselines_1bpos/_logs/*.o*
 
 # Test locally first
-./launch_baseline_recons.sh config_1bpos_anthro_long.yaml 200 1.0 vtv_svd_principal_alpha local
+PRECOND_TYPE=mm_block_diag ./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 local
 ```
 
 **Analysis script errors?**

@@ -6,6 +6,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 OUTPUT_DIR="$SCRIPT_DIR/output"
+ALPHAS_FILE="$SCRIPT_DIR/parameters/alphas.csv"
+PRECOND_TYPES_FILE="$SCRIPT_DIR/parameters/precond_types.csv"
+STEP_SIZES_FILE="$SCRIPT_DIR/parameters/step_sizes.csv"
 
 echo "=== Preconditioner Experiment Status ==="
 echo ""
@@ -41,7 +44,7 @@ if [ -d "$BASELINE_DIR" ]; then
     fi
 else
     echo "  ❌ No baselines found"
-    echo "      Run: ./launch_baseline_recons.sh config_1bpos_anthro_long.yaml 200 1.0 vtv_svd_principal_alpha full"
+    echo "      Run: ./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full"
 fi
 echo ""
 
@@ -62,12 +65,15 @@ if [ -d "$SWEEP_DIR" ]; then
         # Count by preconditioner type
         echo ""
         echo "  Completed by preconditioner type:"
-        for precond in bsrem vtv_svd_principal_alpha vtv_frobenius_surrogate_pd vtv_vector_tv_per_modality; do
-            count=$(find "$SWEEP_DIR" -name "result.csv" -path "*precond_${precond}_*" 2>/dev/null | wc -l)
-            if [ $count -gt 0 ]; then
-                echo "    $precond: $count"
-            fi
-        done
+        if [ -f "$PRECOND_TYPES_FILE" ]; then
+            mapfile -t PRECOND_LIST < <(tail -n +2 "$PRECOND_TYPES_FILE" | awk -F, 'NF{gsub(/^[ \t]+|[ \t]+$/,"",$1); if($1!="") print $1}' | sort -u)
+            for precond in "${PRECOND_LIST[@]}"; do
+                count=$(find "$SWEEP_DIR" -name "result.csv" -path "*precond_${precond}_*" 2>/dev/null | wc -l)
+                if [ $count -gt 0 ]; then
+                    echo "    $precond: $count"
+                fi
+            done
+        fi
     fi
     
     if [ $COMPLETED_SWEEP -lt $TOTAL_SWEEP ]; then
@@ -131,14 +137,23 @@ echo ""
 
 echo "=== Next Steps ==="
 if [ ! -d "$BASELINE_DIR" ] || [ $COMPLETED_BASELINES -eq 0 ]; then
-    echo "1. Run baselines: ./launch_baseline_recons.sh config_1bpos_anthro_long.yaml 200 1.0 vtv_svd_principal_alpha full"
-elif [ $COMPLETED_BASELINES -lt 3 ]; then
-    echo "1. Wait for all baselines to complete ($COMPLETED_BASELINES/3 done)"
-elif [ ! -d "$SWEEP_DIR" ] || [ $COMPLETED_SWEEP -eq 0 ]; then
+    echo "1. Run baselines: ./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full"
+elif [ -f "$ALPHAS_FILE" ]; then
+    EXPECTED_BASELINES=$(tail -n +2 "$ALPHAS_FILE" | wc -l)
+    if [ $COMPLETED_BASELINES -lt $EXPECTED_BASELINES ]; then
+        echo "1. Wait for all baselines to complete ($COMPLETED_BASELINES/$EXPECTED_BASELINES done)"
+    fi
+fi
+if [ ! -d "$SWEEP_DIR" ] || [ $COMPLETED_SWEEP -eq 0 ]; then
     echo "2. Run sweep: ./launch_precond_sweep.sh precond_sweep_1bpos.yaml full"
-elif [ $COMPLETED_SWEEP -lt 60 ]; then
-    echo "2. Wait for sweep to complete ($COMPLETED_SWEEP/60 done)"
-    echo "   Monitor: python scripts/analyze_precond_sweep.py --sweep precond_1bpos --baseline baselines_1bpos --watch"
+elif [ -f "$PRECOND_TYPES_FILE" ] && [ -f "$ALPHAS_FILE" ] && [ -f "$STEP_SIZES_FILE" ]; then
+    EXPECTED_SWEEP=$(( $(tail -n +2 "$PRECOND_TYPES_FILE" | wc -l) * $(tail -n +2 "$ALPHAS_FILE" | wc -l) * $(tail -n +2 "$STEP_SIZES_FILE" | wc -l) ))
+    if [ $COMPLETED_SWEEP -lt $EXPECTED_SWEEP ]; then
+        echo "2. Wait for sweep to complete ($COMPLETED_SWEEP/$EXPECTED_SWEEP done)"
+        echo "   Monitor: python scripts/analyze_precond_sweep.py --sweep precond_1bpos --baseline baselines_1bpos --watch"
+    else
+        echo "3. Review results: cat $ANALYSIS_DIR/summary_report.md"
+    fi
 else
     echo "3. Review results: cat $ANALYSIS_DIR/summary_report.md"
 fi

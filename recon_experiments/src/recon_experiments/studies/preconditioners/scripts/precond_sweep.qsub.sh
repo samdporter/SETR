@@ -30,7 +30,7 @@ report_failure() {
     # Write detailed failure info to completion file
     if [ -n "${OUTPUT_DIR:-}" ]; then
         cat > "$OUTPUT_DIR/job_completion.txt" <<EOF
-precond_type=${PRECOND_TYPE:-unknown},alpha=${ALPHA:-unknown},step_size=${STEP_SIZE:-unknown},status=failed,return_code=$exit_code,end_time=$(date),host=$HOSTNAME,failure_reason=$failure_reason,failure_type=$failure_type,start_time=$START_TIME
+precond_type=${PRECOND_TYPE:-unknown},combine=${PRECOND_COMBINE:-},alpha=${ALPHA:-unknown},step_size=${STEP_SIZE:-unknown},status=failed,return_code=$exit_code,end_time=$(date),host=$HOSTNAME,failure_reason=$failure_reason,failure_type=$failure_type,start_time=$START_TIME
 EOF
     fi
 }
@@ -100,14 +100,14 @@ if [ -n "${SETR_BASE_DIR:-}" ]; then
     BASE_DIR="$SETR_BASE_DIR"
 else
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-    BASE_DIR="$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
+    BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 fi
 
-FUNC_DIR="$BASE_DIR/functionality/preconditioners"
+FUNC_DIR="$BASE_DIR/src/recon_experiments/studies/preconditioners"
 PARAM_DIR="$FUNC_DIR/parameters"
 CONFIG_DIR="$FUNC_DIR/configs"
 OUTPUT_BASE_DIR="$FUNC_DIR/output"
-SCRIPTS_DIR="$BASE_DIR/scripts"
+SCRIPTS_DIR="$FUNC_DIR/scripts"
 
 SWEEP_NAME=${SWEEP_NAME:-precond_test}
 BASE_CONFIG_FILE=${BASE_CONFIG_FILE:-config_2bpos.yaml}
@@ -115,6 +115,7 @@ PRECOND_TYPES_FILE=${PRECOND_TYPES_FILE:-precond_types.csv}
 ALPHAS_FILE=${ALPHAS_FILE:-alphas.csv}
 STEP_SIZES_FILE=${STEP_SIZES_FILE:-step_sizes.csv}
 NUM_EPOCHS=${NUM_EPOCHS:-50}
+RECON_SCRIPT=${RECON_SCRIPT:-run_precond_sweep_single.py}
 
 log_with_timestamp "Base config: $BASE_CONFIG_FILE"
 log_with_timestamp "Epochs: $NUM_EPOCHS"
@@ -137,7 +138,7 @@ if [ ! -f "$PARAM_DIR/$STEP_SIZES_FILE" ]; then
     exit 1
 fi
 
-mapfile -t PRECOND_TYPES < <(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | awk -F, 'NF{gsub(/^[ \t]+|[ \t]+$/,"",$1); if($1!="") print $1}')
+mapfile -t PRECOND_TYPES < <(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | awk -F, 'NF{gsub(/^[ \t]+|[ \t]+$/,"",$1); gsub(/^[ \t]+|[ \t]+$/,"",$2); if($1!="") print $1 "," $2}')
 mapfile -t ALPHAS < <(tail -n +2 "$PARAM_DIR/$ALPHAS_FILE" | awk -F, 'NF{gsub(/^[ \t]+|[ \t]+$/,"",$1); if($1!="") print $1}')
 mapfile -t STEP_SIZES < <(tail -n +2 "$PARAM_DIR/$STEP_SIZES_FILE" | awk -F, 'NF{gsub(/^[ \t]+|[ \t]+$/,"",$1); if($1!="") print $1}')
 
@@ -165,14 +166,21 @@ if [ $PRECOND_TYPE_INDEX -ge $NUM_PRECOND_TYPES ]; then
     exit 0
 fi
 
-PRECOND_TYPE=${PRECOND_TYPES[$PRECOND_TYPE_INDEX]}
+PRECOND_LINE=${PRECOND_TYPES[$PRECOND_TYPE_INDEX]}
+IFS=',' read -r PRECOND_TYPE PRECOND_COMBINE <<< "$PRECOND_LINE"
+PRECOND_TYPE="${PRECOND_TYPE//[$'\t\r\n ']/}"
+PRECOND_COMBINE="${PRECOND_COMBINE//[$'\t\r\n ']/}"
 ALPHA=${ALPHAS[$ALPHA_INDEX]}
 STEP_SIZE=${STEP_SIZES[$STEP_SIZE_INDEX]}
 
-log_with_timestamp "Task $TASK_ID: precond_type=$PRECOND_TYPE, alpha=$ALPHA, step_size=$STEP_SIZE"
+log_with_timestamp "Task $TASK_ID: precond_type=$PRECOND_TYPE, combine=$PRECOND_COMBINE, alpha=$ALPHA, step_size=$STEP_SIZE"
 
 # --- Paths for this job ---
-OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/precond_${PRECOND_TYPE}_alpha_${ALPHA}_step_${STEP_SIZE}"
+if [ -n "$PRECOND_COMBINE" ]; then
+    OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/precond_${PRECOND_TYPE}_combine_${PRECOND_COMBINE}_alpha_${ALPHA}_step_${STEP_SIZE}"
+else
+    OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/precond_${PRECOND_TYPE}_alpha_${ALPHA}_step_${STEP_SIZE}"
+fi
 WORKING_DIR="$OUTPUT_DIR/tmp"
 
 log_with_timestamp "Creating output directories..."
@@ -184,8 +192,8 @@ fi
 # --- Run reconstruction ---
 cd "$BASE_DIR"
 
-if [ ! -f "$SCRIPTS_DIR/test_preconditioner_single.py" ]; then
-    report_failure 1 "Test script not found: $SCRIPTS_DIR/test_preconditioner_single.py" "config"
+if [ ! -f "$SCRIPTS_DIR/$RECON_SCRIPT" ]; then
+    report_failure 1 "Test script not found: $SCRIPTS_DIR/$RECON_SCRIPT" "config"
     exit 1
 fi
 
@@ -198,13 +206,27 @@ for attempt in $(seq 1 $MAX_RETRIES); do
     attempt_start_time=$(date '+%Y-%m-%d %H:%M:%S')
     log_with_timestamp "Starting test at: $attempt_start_time"
 
-    if python "$SCRIPTS_DIR/test_preconditioner_single.py" \
+    OVERRIDE_ARGS=()
+    if [ -n "${FIXED_OVERRIDES:-}" ]; then
+        IFS=';' read -ra FIXED_LIST <<< "$FIXED_OVERRIDES"
+        for ov in "${FIXED_LIST[@]}"; do
+            [ -n "$ov" ] && OVERRIDE_ARGS+=(--override "$ov")
+        done
+    fi
+    COMBINE_ARGS=()
+    if [ -n "$PRECOND_COMBINE" ]; then
+        COMBINE_ARGS=(--precond-combine "$PRECOND_COMBINE")
+    fi
+
+    if python "$SCRIPTS_DIR/$RECON_SCRIPT" \
         --config "$BASE_DIR/configs/$BASE_CONFIG_FILE" \
         --output "$OUTPUT_DIR" \
         --precond-type "$PRECOND_TYPE" \
         --alpha "$ALPHA" \
         --step-size "$STEP_SIZE" \
-        --epochs "$NUM_EPOCHS"; then
+        --epochs "$NUM_EPOCHS" \
+        "${COMBINE_ARGS[@]}" \
+        "${OVERRIDE_ARGS[@]}"; then
         RETURN_CODE=0
         log_with_timestamp "Test completed successfully"
         break
@@ -235,7 +257,7 @@ if [ $RETURN_CODE -eq 0 ]; then
     log_with_timestamp "Job completed successfully at: $END_TIME"
 
     cat > "$OUTPUT_DIR/job_completion.txt" <<EOF
-precond_type=$PRECOND_TYPE,alpha=$ALPHA,step_size=$STEP_SIZE,status=completed,end_time=$END_TIME,host=$HOSTNAME,start_time=$START_TIME
+precond_type=$PRECOND_TYPE,combine=$PRECOND_COMBINE,alpha=$ALPHA,step_size=$STEP_SIZE,status=completed,end_time=$END_TIME,host=$HOSTNAME,start_time=$START_TIME
 EOF
 else
     log_with_timestamp "Job failed with return code: $RETURN_CODE at: $END_TIME"

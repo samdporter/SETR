@@ -70,6 +70,12 @@ def load_sweep_result(result_dir: Path) -> Optional[Dict]:
     
     result_df = pd.read_csv(result_file)
     result = result_df.iloc[0].to_dict()
+    precond_type = result.get('precond_type', 'unknown')
+    precond_combine = result.get('precond_combine', '') or result.get('combine', '')
+    result['precond_combine'] = precond_combine
+    result['precond_label'] = (
+        f\"{precond_type}:{precond_combine}\" if precond_combine else precond_type
+    )
     
     # Load objective history
     obj_file = result_dir / "objective.csv"
@@ -196,6 +202,12 @@ def analyze_sweep(sweep_dir: Path, baseline_dir: Path, convergence_threshold: fl
         if alpha is None:
             print(f"  Skipping {result_dir.name} - no alpha value")
             continue
+
+        precond_type = sweep_result.get('precond_type', 'unknown')
+        precond_combine = sweep_result.get('precond_combine', '') or sweep_result.get('combine', '')
+        precond_label = (
+            f\"{precond_type}:{precond_combine}\" if precond_combine else precond_type
+        )
         
         # Load corresponding baseline
         baseline = load_baseline_data(baseline_dir, alpha)
@@ -203,7 +215,9 @@ def analyze_sweep(sweep_dir: Path, baseline_dir: Path, convergence_threshold: fl
             print(f"  Warning: No baseline for alpha={alpha}, skipping comparison")
             # Still record the result without comparison metrics
             results.append({
-                'precond_type': sweep_result['precond_type'],
+                'precond_type': precond_type,
+                'precond_combine': precond_combine,
+                'precond_label': precond_label,
                 'alpha': alpha,
                 'step_size': sweep_result['step_size'],
                 'final_objective': sweep_result['final_objective'],
@@ -236,7 +250,9 @@ def analyze_sweep(sweep_dir: Path, baseline_dir: Path, convergence_threshold: fl
         
         # Combine all metrics
         result_summary = {
-            'precond_type': sweep_result['precond_type'],
+            'precond_type': precond_type,
+            'precond_combine': precond_combine,
+            'precond_label': precond_label,
             'alpha': alpha,
             'step_size': sweep_result['step_size'],
             'final_objective': sweep_result['final_objective'],
@@ -307,7 +323,8 @@ def plot_convergence_curves(
         # Plot each test result
         colors = plt.cm.tab10(np.linspace(0, 1, len(results)))
         for (name, result), color in zip(results, colors):
-            label = f"{result['precond_type']}, step={result['step_size']}"
+            precond_label = result.get('precond_label', result.get('precond_type', 'unknown'))
+            label = f\"{precond_label}, step={result['step_size']}\"
             ax.plot(result['objective_history'], label=label, alpha=0.7, color=color)
         
         ax.set_xlabel('Iteration')
@@ -347,7 +364,7 @@ def generate_summary_report(df: pd.DataFrame, output_file: Path):
             if len(converged) > 0:
                 fastest = converged.nsmallest(1, 'iterations_to_convergence').iloc[0]
                 f.write(f"**Fastest convergence:**\n")
-                f.write(f"- Preconditioner: {fastest['precond_type']}\n")
+                f.write(f"- Preconditioner: {fastest.get('precond_label', fastest['precond_type'])}\n")
                 f.write(f"- Step size: {fastest['step_size']}\n")
                 f.write(f"- Iterations: {fastest['iterations_to_convergence']}\n")
                 f.write(f"- Runtime: {fastest['run_time']:.1f}s\n\n")
@@ -357,14 +374,14 @@ def generate_summary_report(df: pd.DataFrame, output_file: Path):
             if len(with_baseline) > 0:
                 most_accurate = with_baseline.nsmallest(1, 'final_obj_gap').iloc[0]
                 f.write(f"**Most accurate:**\n")
-                f.write(f"- Preconditioner: {most_accurate['precond_type']}\n")
+                f.write(f"- Preconditioner: {most_accurate.get('precond_label', most_accurate['precond_type'])}\n")
                 f.write(f"- Step size: {most_accurate['step_size']}\n")
                 f.write(f"- Objective gap: {most_accurate['final_obj_gap']:.6f}\n")
                 f.write(f"- Runtime: {most_accurate['run_time']:.1f}s\n\n")
         
         # Preconditioner comparison
         f.write("## Preconditioner Comparison\n\n")
-        precond_summary = df.groupby('precond_type').agg({
+        precond_summary = df.groupby('precond_label').agg({
             'converged': 'mean',
             'iterations_to_convergence': 'median',
             'run_time': 'median',

@@ -1,7 +1,7 @@
 # Preconditioner comparison sweep configuration for 2 bed positions
 sweep_name: "precond_1bpos"
 base_config: "config_1bpos_anthro.yaml"
-script: "test_preconditioner_single.py"
+script: "run_precond_sweep_single.py"
 
 # SGE resource requirements
 sge:

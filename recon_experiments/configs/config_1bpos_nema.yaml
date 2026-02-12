@@ -10,6 +10,7 @@ relaxation_eta: 0.02
 both_directions: false
 use_scatter: true
 update_interval: 21
+precond_type: "mm_block_diag"
 variance_reduction: "svrg" # can be "svrg", "saga", or "none"
 
 # TNV (vectorial) prior settings
@@ -35,7 +36,7 @@ tv_both_directions: false
 
 pet_gauss_fwhm: [7.3,7.3,7.3] # DD paper #[5.1, 4.9, 4.9] # FROM Mediso Anyscan specifications at 10cm
 spect_gauss_fwhm: [6.7, 6.7, 6.7]
-spect_res: [0.81, 0.03, false] # Analytical collimator resolution for SPECT
+spect_res: [1.31, 0.03, false] # Analytical collimator resolution for SPECT
 
 pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom"
 spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"

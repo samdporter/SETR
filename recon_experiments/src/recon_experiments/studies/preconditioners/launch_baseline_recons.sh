@@ -6,14 +6,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-BASE_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 FUNC_DIR="$SCRIPT_DIR"
 PARAM_DIR="$FUNC_DIR/parameters"
 SCRIPTS_DIR="$FUNC_DIR/scripts"
+RUNNER_DIR="$BASE_DIR/src/recon_experiments/runners/scripts"
 
 # Configuration
-BASE_CONFIG="${1:-config_1bpos_anthro_long.yaml}"
+BASE_CONFIG="${1:-config_1bpos_anthro.yaml}"
 NUM_EPOCHS="${2:-200}"
+PRECOND_TYPE="${PRECOND_TYPE:-mm_block_diag}"
+PRECOND_COMBINE="${PRECOND_COMBINE:-harmonic}"
+PRECOND_SCALAR_REDUCTION="${PRECOND_SCALAR_REDUCTION:-diag}"
 # Support old interface: args 3 and 4 might be step_size and precond_type (ignored now)
 # Last arg should be mode
 if [ "$#" -eq 5 ]; then
@@ -33,6 +37,9 @@ fi
 echo "=== Baseline Reconstruction Launcher ==="
 echo "Base config: $BASE_CONFIG"
 echo "Epochs: $NUM_EPOCHS"
+echo "Preconditioner: $PRECOND_TYPE"
+echo "Combine: $PRECOND_COMBINE"
+echo "Block scalar reduction: $PRECOND_SCALAR_REDUCTION"
 echo "Mode: $MODE"
 echo ""
 
@@ -64,11 +71,14 @@ case "$MODE" in
         mkdir -p "$OUTPUT_DIR"
         
         cd "$BASE_DIR"
-        python scripts/run_dtnv_1bpos.py \
+        python "$RUNNER_DIR/run_dtnv_1bpos.py" \
             --config "configs/$BASE_CONFIG" \
             --override "num_epochs=$NUM_EPOCHS" \
             --override "alpha=$ALPHA" \
             --override "beta=$ALPHA" \
+            --override "precond_type=$PRECOND_TYPE" \
+            --override "precond_combine=$PRECOND_COMBINE" \
+            --override "block_scalar_reduction=$PRECOND_SCALAR_REDUCTION" \
             --override "output_path=$OUTPUT_DIR"
         
         # Create baseline metrics file for compatibility with analysis
@@ -82,7 +92,7 @@ metrics = {
     'final_objective': float(df['final_objective'].iloc[-1]) if 'final_objective' in df else 0.0,
     'total_runtime': float(df['runtime'].iloc[-1]) if 'runtime' in df else 0.0,
     'num_epochs': $NUM_EPOCHS,
-    'precond_type': 'baseline',
+    'precond_type': '$PRECOND_TYPE',
     'status': 'success'
 }
 with open('$OUTPUT_DIR/baseline_metrics.json', 'w') as f:
@@ -95,6 +105,46 @@ with open('$OUTPUT_DIR/baseline_metrics.json', 'w') as f:
         echo "Output: $OUTPUT_DIR"
         ;;
     
+    "local_all")
+        echo "Running baselines locally for all alpha values..."
+        echo ""
+
+        cd "$BASE_DIR"
+
+        for ALPHA in "${ALPHAS[@]}"; do
+            echo "Running baseline for alpha=$ALPHA locally..."
+
+            OUTPUT_DIR="$OUTPUT_BASE/baseline_alpha_${ALPHA}"
+            mkdir -p "$OUTPUT_DIR"
+
+            python "$RUNNER_DIR/run_dtnv_1bpos.py"                 --config "configs/$BASE_CONFIG"                 --override "num_epochs=$NUM_EPOCHS"                 --override "alpha=$ALPHA"                 --override "beta=$ALPHA"                 --override "precond_type=$PRECOND_TYPE"                 --override "precond_combine=$PRECOND_COMBINE"                 --override "block_scalar_reduction=$PRECOND_SCALAR_REDUCTION"                 --override "output_path=$OUTPUT_DIR"
+
+            # Create baseline metrics file for compatibility with analysis
+            if [ -f "$OUTPUT_DIR/result.csv" ]; then
+                python3 -c "
+import json
+import pandas as pd
+df = pd.read_csv('$OUTPUT_DIR/result.csv')
+metrics = {
+    'alpha': $ALPHA,
+    'final_objective': float(df['final_objective'].iloc[-1]) if 'final_objective' in df else 0.0,
+    'total_runtime': float(df['runtime'].iloc[-1]) if 'runtime' in df else 0.0,
+    'num_epochs': $NUM_EPOCHS,
+    'precond_type': '$PRECOND_TYPE',
+    'status': 'success'
+}
+with open('$OUTPUT_DIR/baseline_metrics.json', 'w') as f:
+    json.dump(metrics, f, indent=2)
+"
+            fi
+
+            echo ""
+        done
+
+        echo "Local-all run complete!"
+        echo "Output: $OUTPUT_BASE"
+        ;;
+
     "test")
         # Submit one job to cluster
         ALPHA=${ALPHAS[0]}
@@ -114,7 +164,7 @@ with open('$OUTPUT_DIR/baseline_metrics.json', 'w') as f:
             -N "baseline_1bpos_test" \
             -o "$LOG_DIR" \
             -e "$LOG_DIR" \
-            -v "BASE_DIR=$BASE_DIR,OUTPUT_DIR=$OUTPUT_DIR,BASE_CONFIG=$BASE_CONFIG,ALPHA=$ALPHA,NUM_EPOCHS=$NUM_EPOCHS" \
+            -v "BASE_DIR=$BASE_DIR,OUTPUT_DIR=$OUTPUT_DIR,BASE_CONFIG=$BASE_CONFIG,ALPHA=$ALPHA,NUM_EPOCHS=$NUM_EPOCHS,PRECOND_TYPE=$PRECOND_TYPE,PRECOND_COMBINE=$PRECOND_COMBINE,PRECOND_SCALAR_REDUCTION=$PRECOND_SCALAR_REDUCTION" \
             "$SCRIPTS_DIR/baseline_recon.qsub.sh"
         
         echo "Test job submitted!"
@@ -149,7 +199,7 @@ with open('$OUTPUT_DIR/baseline_metrics.json', 'w') as f:
                 -N "baseline_alpha_${ALPHA}" \
                 -o "$LOG_DIR" \
                 -e "$LOG_DIR" \
-                -v "BASE_DIR=$BASE_DIR,OUTPUT_DIR=$OUTPUT_DIR,BASE_CONFIG=$BASE_CONFIG,ALPHA=$ALPHA,NUM_EPOCHS=$NUM_EPOCHS" \
+                -v "BASE_DIR=$BASE_DIR,OUTPUT_DIR=$OUTPUT_DIR,BASE_CONFIG=$BASE_CONFIG,ALPHA=$ALPHA,NUM_EPOCHS=$NUM_EPOCHS,PRECOND_TYPE=$PRECOND_TYPE,PRECOND_COMBINE=$PRECOND_COMBINE,PRECOND_SCALAR_REDUCTION=$PRECOND_SCALAR_REDUCTION" \
                 "$SCRIPTS_DIR/baseline_recon.qsub.sh"
         done
         
