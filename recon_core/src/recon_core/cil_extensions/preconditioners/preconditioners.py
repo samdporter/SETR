@@ -244,6 +244,11 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         L_p(B, λI) = (B^p + (λI)^p) @ (B^(p-1) + (λI)^(p-1))^{-1}
 
     which reduces to an eigenvalue-wise Lehmer mean because B and I commute.
+
+    Note:
+        For p=0 this implementation uses the inverse-sum blend
+            (B^{-1} + (λI)^{-1})^{-1}
+        (parallel sum), matching the intended Hessian-addition interpretation.
     """
 
     def __init__(
@@ -324,7 +329,7 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
             inv_sum = (eigvecs_s * (1.0 / eigvals_s)[..., None, :]) @ np.swapaxes(
                 eigvecs_s, -1, -2
             )
-            blended = 2.0 * inv_sum
+            blended = inv_sum
             blended = _symmetrise_blocks(blended)
 
             eigvals_b, eigvecs_b = np.linalg.eigh(blended)
@@ -340,6 +345,16 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         eigvals = np.maximum(eigvals, self.epsilon)
 
         lam = np.maximum(scalar, self.epsilon)
+        if self.p == 0.0:
+            den = (1.0 / eigvals) + (1.0 / lam)[..., None]
+            den = np.maximum(den, self.epsilon)
+            blended_eigs = 1.0 / den
+            blended_eigs = np.maximum(blended_eigs, self.epsilon)
+            if np.isfinite(self.max_value):
+                blended_eigs = np.minimum(blended_eigs, self.max_value)
+            blended = (eigvecs * blended_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
+            return _symmetrise_blocks(blended)
+
         lam_p = np.power(lam, self.p)[..., None]
         lam_pm1 = np.power(lam, self.p - 1.0)[..., None]
 
@@ -380,6 +395,194 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         return self.block_preconditioner._apply_block_preconditioner(
             gradient, current_block, out=out
         )
+
+
+class MajorisingHessianDiagonalPreconditioner(PreconditionerWithInterval):
+    """Diagonal preconditioner from inverse of summed data/prior Hessian surrogates."""
+
+    def __init__(
+        self,
+        s_inv,
+        prior,
+        update_interval=1,
+        freeze_iter=np.inf,
+        x_epsilon: float = 1e-8,
+        hessian_floor: float = 1e-8,
+        max_value: float = np.inf,
+    ):
+        super().__init__(update_interval, freeze_iter)
+        self.s_inv = s_inv
+        self.prior = prior
+        self.x_epsilon = float(x_epsilon)
+        self.hessian_floor = float(hessian_floor)
+        self.max_value = float(max_value)
+
+    def _invert_diagonal_container(self, diagonal, clamp_max: bool):
+        if isinstance(diagonal, BlockDataContainer):
+            for con in diagonal.containers:
+                arr = get_array(con).astype(np.float64, copy=False)
+                np.maximum(arr, self.hessian_floor, out=arr)
+                np.reciprocal(arr, out=arr)
+                if clamp_max and np.isfinite(self.max_value):
+                    np.minimum(arr, self.max_value, out=arr)
+                con.fill(arr)
+            return diagonal
+
+        arr = _as_array(diagonal).astype(np.float64, copy=False)
+        np.maximum(arr, self.hessian_floor, out=arr)
+        np.reciprocal(arr, out=arr)
+        if clamp_max and np.isfinite(self.max_value):
+            np.minimum(arr, self.max_value, out=arr)
+        return _fill_from_array(diagonal, arr)
+
+    def _compute_data_hessian_diag(self, image: DataContainer) -> DataContainer:
+        # EM-type Hessian surrogate: H_data ≈ sensitivity / (x + eps) = 1 / ((x + eps) * s_inv).
+        denom = image.copy()
+        denom = denom + self.x_epsilon
+        denom.multiply(self.s_inv, out=denom)
+        return self._invert_diagonal_container(denom, clamp_max=False)
+
+    def _compute_prior_hessian_diag(self, image: DataContainer) -> DataContainer:
+        if hasattr(self.prior, "preconditioner_diag"):
+            prior_h = self.prior.preconditioner_diag(image)
+        elif hasattr(self.prior, "hessian_diag"):
+            prior_h = self.prior.hessian_diag(image)
+        else:
+            raise AttributeError(
+                f"Prior {type(self.prior)} does not expose preconditioner_diag() or hessian_diag()."
+            )
+        return prior_h.abs()
+
+    def compute_preconditioner(self, algorithm, out=None):
+        image = algorithm.solution
+        data_h = self._compute_data_hessian_diag(image)
+        prior_h = self._compute_prior_hessian_diag(image)
+        total_h = data_h + prior_h
+        precond = self._invert_diagonal_container(total_h, clamp_max=True)
+
+        if out is None:
+            return precond
+        out.fill(precond)
+        return out
+
+
+class MajorisingHessianBlockPreconditioner(PreconditionerWithInterval):
+    """Block preconditioner from inverse of summed data/prior 2x2 Hessian surrogates."""
+
+    def __init__(
+        self,
+        s_inv: BlockDataContainer,
+        prior,
+        update_interval=1,
+        freeze_iter=np.inf,
+        x_epsilon: float = 1e-8,
+        hessian_floor: float = 1e-8,
+        max_value: float = np.inf,
+    ):
+        super().__init__(update_interval, freeze_iter)
+        self.s_inv = s_inv
+        self.prior = prior
+        self.x_epsilon = float(x_epsilon)
+        self.hessian_floor = float(hessian_floor)
+        self.max_value = float(max_value)
+
+    def _compute_prior_hessian_block(self, image: DataContainer) -> np.ndarray:
+        if hasattr(self.prior, "preconditioner_block"):
+            block = self.prior.preconditioner_block(image, epsilon=self.hessian_floor)
+        elif hasattr(self.prior, "hessian_block_diag"):
+            block = self.prior.hessian_block_diag(image, epsilon=self.hessian_floor)
+        elif hasattr(self.prior, "function") and hasattr(self.prior.function, "preconditioner_block"):
+            x_common = self.prior.operator.direct(image)
+            block = self.prior.function.preconditioner_block(
+                x_common, epsilon=self.hessian_floor
+            )
+        else:
+            raise AttributeError(
+                f"Prior {type(self.prior)} does not expose block Hessian helpers."
+            )
+
+        block_arr = _to_numpy_array(block).astype(np.float64, copy=False)
+        if block_arr.shape[-2:] != (2, 2):
+            raise ValueError(
+                f"Expected prior block Hessian shape (..., 2, 2), got {block_arr.shape}."
+            )
+        return _symmetrise_blocks(block_arr)
+
+    def _compute_data_hessian_block(self, image: DataContainer) -> np.ndarray:
+        x_common = self.prior.operator.direct(image)
+        s_inv_common = self.prior.operator.direct(self.s_inv)
+        x_arr = _stack_block_container(x_common).astype(np.float64, copy=False)
+        s_inv_arr = _stack_block_container(s_inv_common).astype(np.float64, copy=False)
+        if x_arr.shape[-1] != 2:
+            raise ValueError(
+                f"Block preconditioner requires exactly 2 modalities, got {x_arr.shape[-1]}."
+            )
+        if s_inv_arr.shape != x_arr.shape:
+            raise ValueError(
+                f"s_inv/common geometry mismatch: x {x_arr.shape}, s_inv {s_inv_arr.shape}."
+            )
+
+        denom = (x_arr + self.x_epsilon) * s_inv_arr
+        np.maximum(denom, self.hessian_floor, out=denom)
+        diag = 1.0 / denom
+
+        data_h = np.zeros((*diag.shape[:-1], 2, 2), dtype=np.float64)
+        data_h[..., 0, 0] = diag[..., 0]
+        data_h[..., 1, 1] = diag[..., 1]
+        return data_h
+
+    def _invert_block_hessian(self, hessian_block: np.ndarray) -> np.ndarray:
+        hessian_block = _symmetrise_blocks(hessian_block.astype(np.float64, copy=False))
+        eigvals, eigvecs = np.linalg.eigh(hessian_block)
+        np.maximum(eigvals, self.hessian_floor, out=eigvals)
+        inv_eigs = 1.0 / eigvals
+        if np.isfinite(self.max_value):
+            np.minimum(inv_eigs, self.max_value, out=inv_eigs)
+        inv_block = (eigvecs * inv_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
+        return _symmetrise_blocks(inv_block)
+
+    def _apply_block_preconditioner(
+        self,
+        gradient: DataContainer,
+        block_arr: np.ndarray,
+        out: Optional[DataContainer] = None,
+    ):
+        grad_common = self.prior.operator.direct(gradient)
+        grad_arr = _stack_block_container(grad_common)
+        if grad_arr.shape[-1] != 2:
+            raise ValueError(
+                f"Block preconditioner requires 2 modalities, got {grad_arr.shape[-1]}."
+            )
+        if block_arr.shape[:-2] != grad_arr.shape[:-1]:
+            raise ValueError(
+                f"Gradient/block shape mismatch: gradient {grad_arr.shape}, block {block_arr.shape}."
+            )
+
+        precond_common_arr = np.einsum("...ij,...j->...i", block_arr, grad_arr, optimize=True)
+        precond_common = _fill_block_container_from_array(grad_common, precond_common_arr)
+        ret = self.prior.operator.adjoint(precond_common)
+        if out is None:
+            return ret
+        out.fill(ret)
+        return out
+
+    def compute_preconditioner(self, algorithm, out=None):
+        image = algorithm.solution
+        prior_h = self._compute_prior_hessian_block(image)
+        data_h = self._compute_data_hessian_block(image)
+        total_h = prior_h + data_h
+        return self._invert_block_hessian(total_h)
+
+    def apply(self, algorithm, gradient, out=None):
+        if algorithm.iteration < self.freeze_iter:
+            if algorithm.iteration % self.update_interval == 0 or self.precond is None:
+                self.precond = self.compute_preconditioner(algorithm)
+            current_block = self.precond
+        else:
+            if self.freeze is None:
+                self.freeze = self.compute_preconditioner(algorithm)
+            current_block = self.freeze
+        return self._apply_block_preconditioner(gradient, current_block, out=out)
 
 
 def _unwrap_function(obj):
@@ -752,7 +955,7 @@ class SubsetPoissonHessianPreconditioner(PreconditionerWithInterval):
 
 
 class HarmonicMeanPreconditioner(PreconditionerWithInterval):
-    """Preconditioner that combines two preconditioners using a harmonic mean."""
+    """Preconditioner that combines two preconditioners via inverse-sum blend."""
 
     def __init__(
         self,
@@ -774,8 +977,8 @@ class HarmonicMeanPreconditioner(PreconditionerWithInterval):
             a.sapyb(self.scales[0], a, 0, out=a)
             b.sapyb(self.scales[1], b, 0, out=b)
         if out is None:
-            return 2 * a * b / (a + b + self.epsilon)
-        out.fill(2 * a * b / (a + b + self.epsilon))
+            return a * b / (a + b + self.epsilon)
+        out.fill(a * b / (a + b + self.epsilon))
         return out
 
 
@@ -787,7 +990,7 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         L_p(x_1, ..., x_n) = (Σ x_i^p) / (Σ x_i^(p-1))
 
     so that:
-        p = 0  -> harmonic mean
+        p = 0  -> inverse-sum blend (parallel sum)
         p = 1  -> arithmetic mean
         p > 1  -> biased toward max
         p < 0  -> biased toward min (not recommended here)
@@ -839,6 +1042,16 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         # 2) Apply a symmetric floor to all inputs
         #    This guarantees x >= eps everywhere for all subsequent powers.
         clamped = [v.maximum(eps) for v in values]
+
+        if p == 0.0:
+            den = clamped[0].power(-1)
+            for v in clamped[1:]:
+                den += v.power(-1)
+            den = den.maximum(eps)
+            if out is None:
+                return 1 / den
+            den.power(-1, out=out)
+            return out
 
         # 3) Lehmer numerator and denominator:
         #      num = Σ x^p
@@ -1037,65 +1250,6 @@ class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
             return algorithm.solution / adj
 
         algorithm.solution.divide(adj, out=out)
-        return out
-
-
-class DualModalitySubsetKernelisedEMPreconditioner(SubsetPreconditioner):
-    def __init__(
-        self,
-        sens_bdcs,  # list of BlockDataContainer(s1,s2), length=num_subsets
-        kernel,  # [K1, K2] kernel operators for each bed
-        uncombine_ops,  # [U1, U2] uncombine (adjoint) operators
-        num_subsets,
-        update_interval=1,
-        freeze_iter=np.inf,
-        epsilon=1e-6,
-    ):
-        super().__init__(num_subsets, update_interval, freeze_iter)
-        self.sens_bdcs = sens_bdcs
-        self.kernel = kernel
-        self.uncombine_ops = uncombine_ops
-        self.epsilon = epsilon
-        self.freeze_kernel_iter = freeze_iter
-
-    def apply(self, algorithm, gradient, out=None):
-        """
-        Apply the preconditioner, managing freezing and update intervals.
-        """
-
-        if algorithm.iteration % self.update_interval == 0 or self.precond is None:
-            self.precond = self.compute_preconditioner(algorithm).abs()
-
-        if out is None:
-            return gradient * self.precond
-
-        gradient.multiply(self.precond, out=out)
-        return out
-
-    def compute_preconditioner(self, algorithm, out=None):
-        # for the kernelised EM, we need to freeze the alpha after a certain number of iterations
-        # rather than freezing the whole preconditioner
-        if algorithm.iteration >= self.freeze_kernel_iter:
-            for k in self.kernel:
-                k.freeze_alpha = True
-
-        if isinstance(algorithm.f, ScaledFunction):
-            sg = algorithm.f.function
-        else:
-            sg = algorithm.f
-
-        k_s = self.kernel[0].adjoint(self.sens_bdc.containers[0])
-        total = self.uncombine_ops[0].adjoint(k_s)
-        for i in range(1, len(self.sens_bdc.containers)):
-            k_s = self.kernel[i].adjoint(self.sens_bdc.containers[i])
-            total += self.uncombine_ops[i].adjoint(k_s)
-        total += self.epsilon  # to avoid division by zero
-        total = total.abs()
-
-        if out is None:
-            return algorithm.solution / total
-
-        algorithm.solution.divide(total, out=out)
         return out
 
 

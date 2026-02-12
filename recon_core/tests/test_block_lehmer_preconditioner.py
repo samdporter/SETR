@@ -78,8 +78,8 @@ def test_block_lehmer_harmonic_with_diag_scalar():
     blender = _make_blender(p=0.0)
     out = blender._blend_block_and_scalar(block, scalar)
 
-    expected_00 = 2.0 / (1.0 / block[..., 0, 0] + 1.0 / scalar[..., 0, 0])
-    expected_11 = 2.0 / (1.0 / block[..., 1, 1] + 1.0 / scalar[..., 1, 1])
+    expected_00 = 1.0 / (1.0 / block[..., 0, 0] + 1.0 / scalar[..., 0, 0])
+    expected_11 = 1.0 / (1.0 / block[..., 1, 1] + 1.0 / scalar[..., 1, 1])
     assert np.allclose(out[..., 0, 0], expected_00)
     assert np.allclose(out[..., 1, 1], expected_11)
     assert np.allclose(out[..., 0, 1], 0.0)
