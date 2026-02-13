@@ -25,37 +25,47 @@ def eigenvalsh_2x2(H, eps=1e-12):
 
 
 def eigenvecsh_2x2(H, eigenvalues, eps=1e-9):
-    """Stable 2x2 eigenvector computation."""
+    """Robust 2x2 symmetric eigenvectors with ascending-eigenvalue ordering."""
+    H = 0.5 * (H + H.transpose(-1, -2))
     a = H[..., 0, 0]
     b = H[..., 0, 1]
     c = H[..., 1, 0]
     d = H[..., 1, 1]
+    bc = 0.5 * (b + c)
 
-    bc = 0.5 * (b + c)  # Enforce symmetry
-    lam1, lam2 = eigenvalues[..., 0], eigenvalues[..., 1]
+    lam_lo = eigenvalues[..., 0]
+    lam_hi = eigenvalues[..., 1]
 
-    # Check for repeated eigenvalues
-    is_repeated = torch.abs(lam1 - lam2) < eps
+    # Adaptive tolerance avoids near-degenerate float32 instabilities.
+    tol0 = torch.as_tensor(eps, device=H.device, dtype=H.dtype)
+    dyn = 32.0 * torch.finfo(H.dtype).eps * (torch.abs(a) + torch.abs(d) + 2.0 * torch.abs(bc) + 1.0)
+    tol = torch.maximum(tol0, dyn)
+    repeated = torch.abs(lam_hi - lam_lo) <= tol
+
+    # Compute eigenvector for the largest eigenvalue from the better-conditioned row.
+    cand1 = torch.stack([bc, lam_hi - a], dim=-1)
+    cand2 = torch.stack([lam_hi - d, bc], dim=-1)
+    n1 = torch.linalg.norm(cand1, dim=-1)
+    n2 = torch.linalg.norm(cand2, dim=-1)
+    v_hi = torch.where((n1 >= n2).unsqueeze(-1), cand1, cand2)
+
+    # Degenerate fallback: choose the dominant diagonal axis.
+    ones = torch.ones_like(a)
+    zeros = torch.zeros_like(a)
+    fallback_hi = torch.stack(
+        [torch.where(a >= d, ones, zeros), torch.where(a >= d, zeros, ones)],
+        dim=-1,
+    )
+    bad = torch.linalg.norm(v_hi, dim=-1) <= tol
+    v_hi = torch.where(bad.unsqueeze(-1), fallback_hi, v_hi)
+    v_hi = v_hi / torch.clamp(torch.linalg.norm(v_hi, dim=-1, keepdim=True), min=torch.finfo(H.dtype).tiny)
+
+    # Enforce exact orthogonality for the second eigenvector.
+    v_lo = torch.stack([-v_hi[..., 1], v_hi[..., 0]], dim=-1)
+    vecs = torch.stack([v_lo, v_hi], dim=-1)  # columns correspond to [lam_lo, lam_hi]
+
     identity = torch.eye(2, device=H.device, dtype=H.dtype).expand(*H.shape)
-
-    # Compute eigenvectors using most stable formulation
-    bc_abs = torch.abs(bc)
-    use_bc = bc_abs > eps
-
-    # First eigenvector
-    e1_bc = torch.stack([bc, lam1 - a], dim=-1)
-    e1_def = torch.stack([torch.ones_like(a), torch.zeros_like(a)], dim=-1)
-    e1 = torch.where(use_bc.unsqueeze(-1), e1_bc, e1_def)
-    e1 = e1 / torch.clamp(torch.linalg.norm(e1, dim=-1, keepdim=True), min=eps)
-
-    # Second eigenvector
-    e2_bc = torch.stack([bc, lam2 - a], dim=-1)
-    e2_def = torch.stack([torch.zeros_like(a), torch.ones_like(a)], dim=-1)
-    e2 = torch.where(use_bc.unsqueeze(-1), e2_bc, e2_def)
-    e2 = e2 / torch.clamp(torch.linalg.norm(e2, dim=-1, keepdim=True), min=eps)
-
-    vecs = torch.stack([e1, e2], dim=-1)
-    return torch.where(is_repeated.unsqueeze(-1).unsqueeze(-1), identity, vecs)
+    return torch.where(repeated.unsqueeze(-1).unsqueeze(-1), identity, vecs)
 
 
 def _safe_norm(v, eps=1e-30):
