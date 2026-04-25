@@ -3,7 +3,6 @@
 import argparse
 import logging
 import os
-from types import MethodType
 
 from cil.optimisation.algorithms import ISTA
 from cil.optimisation.functions import OperatorCompositionFunction
@@ -13,7 +12,7 @@ from cil.optimisation.operators import (
     ZeroOperator,
 )
 
-from recon_core.cil_extensions.operators import NiftyResampleOperator
+from recon_core.cil_extensions.operators import AdjointOperator, NiftyResampleOperator
 from recon_core.cil_extensions.framework import EnhancedBlockDataContainer
 
 
@@ -85,75 +84,21 @@ def get_resampling_operators(*inputs):
     return resampler
 
 
-def attach_prior_hessian(prior, epsilon=0) -> None:
-    """Attach Hessian helper methods to composed prior functions."""
+def get_pet_to_spect_operator(spect2pet):
+    """Return the shared-PET-grid to native-SPECT operator."""
+    return AdjointOperator(spect2pet)
 
-    def _call_diag(func_name_precond, func_name_hessian, x, out=None, epsilon=epsilon, eta=0.7):
-        if hasattr(prior.function, func_name_precond):
-            fn = getattr(prior.function, func_name_precond)
-            ret = prior.operator.adjoint(
-                fn(prior.operator.direct(x), epsilon=epsilon, eta=eta)
-            )
-        elif hasattr(prior.function, func_name_hessian):
-            fn = getattr(prior.function, func_name_hessian)
-            ret = prior.operator.adjoint(
-                fn(prior.operator.direct(x))
-            )
-        else:
-            raise AttributeError(
-                f"Prior function {type(prior.function)} does not implement {func_name_precond} "
-                f"or {func_name_hessian}."
-            )
-        return ret.abs(out=out)
 
-    def preconditioner_diag(self, x, out=None, epsilon=epsilon, eta=0.7):
-        return _call_diag("preconditioner_diag", "hessian_diag", x, out=out, epsilon=epsilon, eta=eta)
+def build_shared_initial_estimates(pet_initial, spect_initial, spect2pet):
+    """Map the SPECT initial image onto PET space and build the shared-grid state."""
+    spect_shared = spect2pet.direct(spect_initial)
+    return EnhancedBlockDataContainer(pet_initial, spect_shared)
 
-    def inv_preconditioner_diag(self, x, out=None, epsilon=epsilon, eta=0.7):
-        return _call_diag("inv_preconditioner_diag", "inv_hessian_diag", x, out=out, epsilon=epsilon, eta=eta)
 
-    def hessian_diag(self, x, out=None, epsilon=epsilon):
-        return _call_diag("preconditioner_diag", "hessian_diag", x, out=out, epsilon=epsilon)
-
-    def inv_hessian_diag(self, x, out=None, epsilon=epsilon):
-        return _call_diag("inv_preconditioner_diag", "inv_hessian_diag", x, out=out, epsilon=epsilon)
-
-    def preconditioner_block(self, x, epsilon=epsilon, eta=0.7):
-        if hasattr(prior.function, "preconditioner_block"):
-            return prior.function.preconditioner_block(prior.operator.direct(x), epsilon=epsilon, eta=eta)
-        if hasattr(prior.function, "hessian_block_diag"):
-            return prior.function.hessian_block_diag(prior.operator.direct(x), epsilon=epsilon)
-        raise AttributeError(
-            f"Prior function {type(prior.function)} does not implement preconditioner_block or hessian_block_diag."
-        )
-
-    def inv_preconditioner_block(self, x, epsilon=epsilon, eta=0.7):
-        if hasattr(prior.function, "inv_preconditioner_block"):
-            return prior.function.inv_preconditioner_block(prior.operator.direct(x), epsilon=epsilon, eta=eta)
-        if hasattr(prior.function, "inv_hessian_block_diag"):
-            return prior.function.inv_hessian_block_diag(prior.operator.direct(x), epsilon=epsilon)
-        raise AttributeError(
-            f"Prior function {type(prior.function)} does not implement inv_preconditioner_block or inv_hessian_block_diag."
-        )
-
-    def hessian_block_diag(self, x, epsilon=epsilon):
-        if hasattr(prior.function, "hessian_block_diag"):
-            return prior.function.hessian_block_diag(prior.operator.direct(x), epsilon=epsilon)
-        return preconditioner_block(self, x, epsilon=epsilon)
-
-    def inv_hessian_block_diag(self, x, epsilon=epsilon):
-        if hasattr(prior.function, "inv_hessian_block_diag"):
-            return prior.function.inv_hessian_block_diag(prior.operator.direct(x), epsilon=epsilon)
-        return inv_preconditioner_block(self, x, epsilon=epsilon)
-
-    prior.preconditioner_diag = MethodType(preconditioner_diag, prior)
-    prior.inv_preconditioner_diag = MethodType(inv_preconditioner_diag, prior)
-    prior.hessian_diag = MethodType(hessian_diag, prior)
-    prior.inv_hessian_diag = MethodType(inv_hessian_diag, prior)
-    prior.preconditioner_block = MethodType(preconditioner_block, prior)
-    prior.inv_preconditioner_block = MethodType(inv_preconditioner_block, prior)
-    prior.hessian_block_diag = MethodType(hessian_block_diag, prior)
-    prior.inv_hessian_block_diag = MethodType(inv_hessian_block_diag, prior)
+def save_native_spect_image(shared_spect, pet_to_spect, output_path):
+    """Export a PET-grid shared SPECT image back to native SPECT space."""
+    native_spect = pet_to_spect.direct(shared_spect)
+    native_spect.write(output_path)
 
 
 def get_shift_operators(pet_data, path=""):
@@ -253,14 +198,18 @@ def get_sensitivity_from_subset_objs(obj_funs, adjoint_operator=None):
     for j, obj_fun in enumerate(obj_funs):
         # Extract underlying function if wrapped in OperatorCompositionFunction
         obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
+        subset_sens = obj_fn.get_subset_sensitivity(0)
+        # SIRF can emit small negative sensitivity values; clamp on creation.
+        subset_sens.maximum(0, out=subset_sens)
         if j == 0:
-            sens = obj_fn.get_subset_sensitivity(0)
+            sens = subset_sens
         else:
-            sens += obj_fn.get_subset_sensitivity(0)
+            sens += subset_sens
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
     if adjoint_operator is not None:
         sens = adjoint_operator.adjoint(sens)
+    sens = sens.maximum(0)
     return sens
 
 

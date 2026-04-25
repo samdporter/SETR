@@ -22,15 +22,20 @@ from recon_core.cil_extensions.framework.framework import EnhancedBlockDataConta
 from recon_core.cil_extensions.operators import FlipOperator
 from recon_core.cil_extensions.utilities import LinearDecayStepSizeRule
 from recon_experiments.runners.common import (
-    attach_prior_hessian,
+    build_shared_initial_estimates,
     configure_logging,
+    get_pet_to_spect_operator,
     get_resampling_operators,
     init_run_env,
     save_results,
+    save_native_spect_image,
 )
 from recon_experiments.runners.dtnv_common import (
     apply_dynamic_range_scaling,
+    build_support_mask_from_spect_attenuation,
+    build_support_mask_from_s_inv,
     build_variance_reduced_function,
+    combine_support_masks,
     dynamic_range_scale_sirf,
     get_algorithm,
     get_block_objective,
@@ -44,6 +49,16 @@ from recon_core.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_d
 from recon_core.utils.io import apply_overrides, load_config, parse_cli, save_args
 from recon_core.utils.sirf import get_array, get_filters, get_s_inv_from_objs
 from recon_core.cil_extensions.operators.blurring import create_gaussian_blur_operator
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+    return bool(value)
 
 
 def prepare_data(args):
@@ -99,7 +114,97 @@ def prepare_data(args):
     return ct, pet_data, spect_data
 
 
-def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_subsets):
+def _load_runtime_restart_initial_estimates(args):
+    raise RuntimeError(
+        "_load_runtime_restart_initial_estimates requires geometry context; "
+        "use _load_runtime_restart_initial_estimates_shared(...)."
+    )
+
+
+def _same_image_geometry(lhs, rhs, atol: float = 1e-6) -> bool:
+    lhs_shape = tuple(lhs.shape) if hasattr(lhs, "shape") else tuple(get_array(lhs).shape)
+    rhs_shape = tuple(rhs.shape) if hasattr(rhs, "shape") else tuple(get_array(rhs).shape)
+    if lhs_shape != rhs_shape:
+        return False
+
+    lhs_voxel_sizes = getattr(lhs, "voxel_sizes", None)
+    rhs_voxel_sizes = getattr(rhs, "voxel_sizes", None)
+    if callable(lhs_voxel_sizes) and callable(rhs_voxel_sizes):
+        return np.allclose(lhs_voxel_sizes(), rhs_voxel_sizes(), atol=atol, rtol=0.0)
+    return True
+
+
+def _coerce_restart_estimates_to_shared_grid(
+    pet_override,
+    spect_override,
+    shared_pet_template,
+    native_spect_template,
+    spect2pet,
+):
+    if not _same_image_geometry(pet_override, shared_pet_template):
+        raise ValueError(
+            "PET restart image must already be on the shared PET grid."
+        )
+
+    if _same_image_geometry(spect_override, shared_pet_template):
+        spect_shared = spect_override
+        logging.info("Runtime SPECT restart image is already on the shared PET grid.")
+    elif _same_image_geometry(spect_override, native_spect_template):
+        spect_shared = spect2pet.direct(spect_override)
+        logging.info("Mapped native-space SPECT restart image onto the shared PET grid.")
+    else:
+        raise ValueError(
+            "SPECT restart image must be either native SPECT geometry or shared PET-grid geometry."
+        )
+
+    return EnhancedBlockDataContainer(pet_override, spect_shared)
+
+
+def _load_runtime_restart_initial_estimates_shared(
+    args,
+    shared_pet_template,
+    native_spect_template,
+    spect2pet,
+):
+    pet_path = getattr(args, "pet_initial_image_path", None)
+    spect_path = getattr(args, "spect_initial_image_path", None)
+
+    if not pet_path and not spect_path:
+        return None
+    if not pet_path or not spect_path:
+        raise ValueError(
+            "Both pet_initial_image_path and spect_initial_image_path must be set "
+            "when using restart initial-image injection."
+        )
+
+    try:
+        pet_override = ImageData(pet_path).maximum(0)
+        spect_override = ImageData(spect_path).maximum(0)
+    except Exception as exc:  # pragma: no cover
+        logging.error("Failed to load runtime restart initial images: %s", exc)
+        raise
+
+    logging.info("Will inject runtime PET initial image from %s", pet_path)
+    logging.info("Will inject runtime SPECT initial image from %s", spect_path)
+    return _coerce_restart_estimates_to_shared_grid(
+        pet_override,
+        spect_override,
+        shared_pet_template,
+        native_spect_template,
+        spect2pet,
+    )
+
+
+def get_data_fidelity(
+    args,
+    pet_data,
+    spect_data,
+    get_pet_am,
+    get_spect_am,
+    num_subsets,
+    shared_initial_estimates,
+    pet_to_spect,
+):
     """
     Set up data fidelity (objective) functions.
 
@@ -140,9 +245,9 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     # Get sensitivity image ^ -1 now before we complicate things
     s_inv = get_s_inv_from_objs(
         [pet_obj_funs, spect_obj_funs],
-        EnhancedBlockDataContainer(pet_data["initial_image"], spect_data["initial_image"]),
+        shared_initial_estimates,
         clamp_percentile=99.5,
-        adjoint_ops=[pet_blur_op, None],
+        adjoint_ops=[pet_blur_op, pet_to_spect],
     )
 
     for i, el in enumerate(s_inv.containers):
@@ -154,12 +259,16 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
             OperatorCompositionFunction(obj_fun, pet_blur_op)
             for obj_fun in pet_obj_funs
         ]
+    spect_obj_funs = [
+        OperatorCompositionFunction(obj_fun, pet_to_spect)
+        for obj_fun in spect_obj_funs
+    ]
 
     # Convert to block objectives
     pet_obj_funs = [
         get_block_objective(
-            pet_data["initial_image"],
-            spect_data["initial_image"],
+            shared_initial_estimates[0],
+            shared_initial_estimates[1],
             obj_fun,
             order=0,
         )
@@ -167,8 +276,8 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     ]
     spect_obj_funs = [
         get_block_objective(
-            spect_data["initial_image"],
-            pet_data["initial_image"],
+            shared_initial_estimates[1],
+            shared_initial_estimates[0],
             obj_fun,
             order=1,
         )
@@ -180,7 +289,7 @@ def get_data_fidelity(args, pet_data, spect_data, get_pet_am, get_spect_am, num_
     if args.use_kappa:
         kappa = get_kappa_squareds(
             [pet_obj_funs, spect_obj_funs],
-            [pet_data["initial_image"], spect_data["initial_image"]],
+            [shared_initial_estimates[0], shared_initial_estimates[1]],
         )
         for kappa_image in kappa.containers:
             gauss.apply(kappa_image)
@@ -202,13 +311,36 @@ def main(args) -> None:
 
     # Set up resampling operators.
     spect2pet = get_resampling_operators(args, pet_data, spect_data)
+    if getattr(args, "flip", False):
+        spect2pet = CompositionOperator(
+            spect2pet, FlipOperator(axis=(0, 2), image=["initial_image"])
+        )
+    pet_to_spect = get_pet_to_spect_operator(spect2pet)
 
-    initial_estimates = EnhancedBlockDataContainer(
-        pet_data["initial_image"], spect_data["initial_image"]
+    initial_estimates = build_shared_initial_estimates(
+        pet_data["initial_image"],
+        spect_data["initial_image"],
+        spect2pet,
     )
 
     for i, image in enumerate(initial_estimates.containers):
         image.write(os.path.join(args.output_path, f"initial_image_{i}.hv"))
+
+    runtime_initial_estimates = _load_runtime_restart_initial_estimates_shared(
+        args,
+        pet_data["initial_image"],
+        spect_data["initial_image"],
+        spect2pet,
+    )
+    if runtime_initial_estimates is not None:
+        for i, image in enumerate(runtime_initial_estimates.containers):
+            image.write(os.path.join(args.output_path, f"runtime_initial_image_{i}.hv"))
+        logging.info(
+            "Restart images will be injected at algorithm runtime only; setup/preconditioner/prior "
+            "uses default initial images."
+        )
+    else:
+        runtime_initial_estimates = initial_estimates
 
     def get_pet_am_with_res():
         return get_pet_am(
@@ -234,23 +366,12 @@ def main(args) -> None:
         get_pet_am_with_res,
         get_spect_am_with_res,
         num_subsets,
+        initial_estimates,
+        pet_to_spect,
     )
 
-    if getattr(args, "flip", False):
-        spect2pet = CompositionOperator(
-            spect2pet, FlipOperator(axis=(0, 2), image=["initial_image"])
-        )
-
-    bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),  # pet2pet
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),  # zero_spect2pet
-        ZeroOperator(pet_data["initial_image"]),  # zero_pet2pet
-        spect2pet,  # spect2pet
-        shape=(2, 2),
-    )
-
-    kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
-    combined = EnhancedBlockDataContainer(*bo.direct(initial_estimates).containers)
+    kappas = normalise_kappa_squares(kappas) if kappas is not None else None
+    combined = initial_estimates
     pet_scale, spect_scale = dynamic_range_scale_sirf(
         combined[0],
         combined[1],
@@ -336,11 +457,9 @@ def main(args) -> None:
     else:
         # Set up the prior.
         priors_list = get_prior(
-            args, umap, combined, bo, kappas,
+            args, umap, combined, kappas,
             pet_scale=pet_scale, spect_scale=spect_scale
         )
-        for i, p in enumerate(priors_list):
-            attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
 
     ui = getattr(args, "update_interval", None)
@@ -350,6 +469,41 @@ def main(args) -> None:
     precond = get_preconditioners(
         args, s_inv, all_funs, update_interval, priors_list, initial_estimates
     )
+
+    support_mask = None
+    if _as_bool(getattr(args, "support_mask_from_sensitivity", False)):
+        mask_rel = float(getattr(args, "support_mask_rel_threshold", 1e-3))
+        mask_abs = float(getattr(args, "support_mask_abs_threshold", 0.0))
+        support_mask_sens = build_support_mask_from_s_inv(
+            s_inv,
+            rel_threshold=mask_rel,
+            abs_threshold=mask_abs,
+        )
+        support_mask = combine_support_masks(support_mask, support_mask_sens)
+        logging.info(
+            "Enabled sensitivity support mask (rel_threshold=%.3g, abs_threshold=%.3g).",
+            mask_rel,
+            mask_abs,
+        )
+    if _as_bool(getattr(args, "support_mask_from_spect_attenuation", False)):
+        attn_rel = float(getattr(args, "support_mask_spect_attn_rel_threshold", 1e-3))
+        attn_abs = float(getattr(args, "support_mask_spect_attn_abs_threshold", 1e-2))
+        support_mask_attn = build_support_mask_from_spect_attenuation(
+            template=s_inv,
+            spect_attenuation=spect2pet.direct(spect_data["attenuation"]),
+            spect_index=1,
+            rel_threshold=attn_rel,
+            abs_threshold=attn_abs,
+        )
+        support_mask = combine_support_masks(support_mask, support_mask_attn)
+        logging.info(
+            "Enabled SPECT attenuation support mask (rel_threshold=%.3g, abs_threshold=%.3g).",
+            attn_rel,
+            attn_abs,
+        )
+    if support_mask is not None and _as_bool(getattr(args, "save_support_mask", False)):
+        for i, el in enumerate(support_mask.containers):
+            el.write(os.path.join(args.output_path, f"support_mask_{i}.hv"))
 
     epoch_length = len(all_funs)
 
@@ -388,21 +542,28 @@ def main(args) -> None:
     )
 
     # Set up callbacks using shared function
-    callbacks = get_callbacks(args, update_interval)
+    iteration_offset = int(getattr(args, "initial_iteration_offset", 0) or 0)
+    callbacks = get_callbacks(args, update_interval, iteration_offset=iteration_offset)
 
     # Run algorithm using shared function
     subiterations = args.num_epochs * epoch_length
     algo = get_algorithm(
-        initial_estimates,
+        runtime_initial_estimates,
         objective,
         precond,
         step_size,
         update_interval,
         subiterations,
         callbacks,
+        support_mask=support_mask,
     )
 
     save_results(algo, args)
+    save_native_spect_image(
+        algo.solution.containers[1],
+        pet_to_spect,
+        os.path.join(args.output_path, "final_image_1_native.hv"),
+    )
     logging.info("Done")
 
 
@@ -412,6 +573,12 @@ if __name__ == "__main__":
     cfg_dict = apply_overrides(cfg_dict, cli.override)
 
     args = SimpleNamespace(**cfg_dict)
+    if not hasattr(args, "pet_initial_image_path"):
+        args.pet_initial_image_path = None
+    if not hasattr(args, "spect_initial_image_path"):
+        args.spect_initial_image_path = None
+    if not hasattr(args, "initial_iteration_offset"):
+        args.initial_iteration_offset = 0
 
     msg = init_run_env(args)
 

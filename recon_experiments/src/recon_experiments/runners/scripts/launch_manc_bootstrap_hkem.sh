@@ -29,13 +29,14 @@ fi
 
 # Get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-BASE_DIR="$(dirname "$SCRIPT_DIR")"
+BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+REPO_ROOT="$(cd "$BASE_DIR/.." && pwd)"
 
 # Set paths
 SPECT_QSUB_SCRIPT="$SCRIPT_DIR/run_manc_bootstrap_hkem_spect.qsub.sh"
 RESAMPLE_QSUB_SCRIPT="$SCRIPT_DIR/run_manc_bootstrap_hkem_resample.qsub.sh"
 PET_QSUB_SCRIPT="$SCRIPT_DIR/run_manc_bootstrap_hkem_pet.qsub.sh"
-RESULTS_BASE="/home/sam/working/synergistic_recon/results/manc_bootstraps/hkem"
+RESULTS_BASE="${RESULTS_BASE:-$REPO_ROOT/results/manc_bootstraps/hkem}"
 LOG_DIR="$HOME/setr_logs"
 
 # Create directories

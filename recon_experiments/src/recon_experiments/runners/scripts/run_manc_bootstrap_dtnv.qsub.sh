@@ -156,12 +156,13 @@ if [ -n "${SETR_BASE_DIR:-}" ]; then
     BASE_DIR="$SETR_BASE_DIR"
 else
     SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-    BASE_DIR="$(dirname "$SCRIPT_DIR")"
+    BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 fi
 
-SCRIPTS_DIR="$BASE_DIR/scripts"
+SCRIPTS_DIR="$BASE_DIR/src/recon_experiments/runners/scripts"
 CONFIG_DIR="$BASE_DIR/configs"
-RESULTS_BASE="${RESULTS_BASE:-/home/sam/working/synergistic_recon/results/manc_bootstraps/dtnv}"
+REPO_ROOT="$(cd "$BASE_DIR/.." && pwd)"
+RESULTS_BASE="${RESULTS_BASE:-$REPO_ROOT/results/manc_bootstraps/dtnv}"
 
 # Bootstrap data configuration
 BOOTSTRAP_BASE_DIR="/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/PET/bootstraps/nonparametric"

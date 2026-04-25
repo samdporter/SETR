@@ -163,7 +163,15 @@ def get_data_fidelity(
     )
     s_inv = pet_sens_combined.clone()
     pet_sens_array = get_array(pet_sens_combined)
-    s_inv.fill(np.reciprocal(pet_sens_array, where=pet_sens_array != 0))
+    s_inv_array = np.zeros_like(
+        pet_sens_array, dtype=np.result_type(pet_sens_array, np.float32)
+    )
+    np.reciprocal(
+        pet_sens_array,
+        out=s_inv_array,
+        where=pet_sens_array != 0,
+    )
+    s_inv.fill(s_inv_array)
 
     cyl, gauss = get_filters()
     cyl.apply(s_inv)

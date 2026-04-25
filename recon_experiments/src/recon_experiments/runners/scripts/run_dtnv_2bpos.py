@@ -9,35 +9,36 @@ import pstats
 
 import numpy as np
 from cil.optimisation.functions import OperatorCompositionFunction, SumFunction
-from cil.optimisation.operators import (
-    BlockOperator,
-    CompositionOperator,
-    IdentityOperator,
-    ZeroOperator,
-)
+from cil.optimisation.operators import CompositionOperator
 from sirf.contrib.partitioner import partitioner
 from sirf.STIR import SeparableGaussianImageFilter
 
 from recon_core.cil_extensions.framework.framework import EnhancedBlockDataContainer
+from recon_core.cil_extensions.operators import FlipOperator
 from recon_core.cil_extensions.utilities import LinearDecayStepSizeRule
 from recon_experiments.runners.common import (
     apply_combine_sensitivities,
-    attach_prior_hessian,
+    build_shared_initial_estimates,
     configure_logging,
+    get_pet_to_spect_operator,
     get_resampling_operators,
     get_sensitivity_from_subset_objs,
     get_shift_operators,
     init_run_env,
     save_results,
+    save_native_spect_image,
 )
 from recon_experiments.runners.dtnv_common import (
     apply_dynamic_range_scaling,
+    build_support_mask_from_spect_attenuation,
+    build_support_mask_from_s_inv,
     build_variance_reduced_function,
-    compute_kappa_squared_image_from_partitioned_objective,
+    combine_support_masks,
     dynamic_range_scale_sirf,
     get_algorithm,
     get_block_objective,
     get_callbacks,
+    get_kappa_squareds,
     get_preconditioners,
     get_prior,
     normalise_kappa_squares,
@@ -51,6 +52,16 @@ from recon_core.utils import (
 from recon_core.utils.io import apply_overrides, load_config, parse_cli, save_args
 from recon_core.utils.sirf import get_array, get_filters, get_s_inv_from_subset_objs
 from recon_core.cil_extensions.operators.blurring import create_gaussian_blur_operator
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+    return bool(value)
 
 
 def prepare_data(args):
@@ -113,14 +124,16 @@ def get_data_fidelity(
     uncombine_op,
     unshift_ops,
     choose_ops,
+    shared_initial_estimates,
+    pet_to_spect,
 ):
     """
     Set up data fidelity (objective) functions.
 
     Returns:
         all_funs: list of block objective functions (PET all beds, then SPECT).
-        s_inv:    EnhancedBlockDataContainer of 1/sensitivity images (PET,SPECT).
-        kappas: EnhancedBlockDataContainer of κ² images (PET,SPECT) in common PET space.
+        s_inv: shared-space inverse sensitivity images.
+        kappas: shared-space κ² images.
     """
     # --- partition PET by bed ---
     pet_dfs = [
@@ -134,9 +147,6 @@ def get_data_fidelity(
         )[2]
         for suffix in pet_data["bed_positions"]
     ]
-
-    # keep raw copies for κ before operator wrapping
-    pet_dfs_raw = [list(df_list) for df_list in pet_dfs]
 
     # set_up subset objs on their own bed template
     for i, suffix in enumerate(pet_data["bed_positions"]):
@@ -166,33 +176,6 @@ def get_data_fidelity(
         for suffix in pet_data["bed_positions"]
     ]
 
-    # =========================
-    # κ² build *before* op wrapping
-    # =========================
-    # per-bed PET κ² in bed coords
-    pet_kappa_bed_sq = []
-    for df_list, suffix in zip(pet_dfs_raw, pet_data["bed_positions"]):
-        tmpl = pet_data["bed_positions"][suffix]["template_image"]
-        pet_kappa_bed_sq.append(
-            compute_kappa_squared_image_from_partitioned_objective(df_list, tmpl)
-        )
-
-    # add across beds (Fisher additivity)
-    pet_kappa_sq = uncombine_op.adjoint(
-        EnhancedBlockDataContainer(
-            *[unshift_op.adjoint(pet_kappa_bed_sq[i]) for i, unshift_op in enumerate(unshift_ops)]
-        )
-    )
-
-    logging.info(f"PET κ² images computed and uncombined with shape {pet_kappa_sq.shape}.")
-
-    # SPECT κ²
-    spect_kappa_sq = compute_kappa_squared_image_from_partitioned_objective(
-        spect_dfs, spect_data["initial_image"]
-    )
-
-    logging.info(f"SPECT κ² image computed with shape {spect_kappa_sq.shape}.")
-
     pet_sens = [
         get_sensitivity_from_subset_objs(df, adjoint_operator=op)
         for df, op in zip(pet_dfs, pet_blur_ops)
@@ -201,8 +184,10 @@ def get_data_fidelity(
     #apply_combine_sensitivities(pet_data, pet_sens)
 
     spect_s_inv = get_s_inv_from_subset_objs(
-        spect_dfs, spect_data["initial_image"],
+        spect_dfs,
+        shared_initial_estimates[1],
         clamp_percentile=99.5,
+        adjoint_operator=pet_to_spect,
     )
 
     # unshift+combine PET sensitivities to common PET grid
@@ -211,9 +196,19 @@ def get_data_fidelity(
             *[unshift_op.adjoint(s) for unshift_op, s in zip(unshift_ops, pet_sens)]
         )
     )
+    # Combined sensitivity can pick up tiny negatives from interpolation/adjoints.
+    pet_sens_combined.maximum(0, out=pet_sens_combined)
     pet_s_inv = pet_sens_combined.clone()
     pet_sens_array = get_array(pet_sens_combined)
-    pet_s_inv.fill(np.reciprocal(pet_sens_array, where=pet_sens_array != 0))
+    pet_s_inv_array = np.zeros_like(
+        pet_sens_array, dtype=np.result_type(pet_sens_array, np.float32)
+    )
+    np.reciprocal(
+        pet_sens_array,
+        out=pet_s_inv_array,
+        where=pet_sens_array != 0,
+    )
+    pet_s_inv.fill(pet_s_inv_array)
     cyl, _ = get_filters()
     cyl.apply(pet_s_inv)
 
@@ -246,14 +241,17 @@ def get_data_fidelity(
     # flatten beds
     pet_combined_dfs = [df for bed in pet_dfs for df in bed]
 
-    # SPECT objectives are NOT wrapped with blur operator
-    # SPECT uses image_data_processor which works correctly for SPECT projectors
+    # SPECT objectives are pulled back to the shared PET grid.
+    spect_dfs = [
+        OperatorCompositionFunction(obj_fun, pet_to_spect)
+        for obj_fun in spect_dfs
+    ]
 
     # block objectives
     pet_dfs_block = [
         get_block_objective(
-            pet_data["initial_image"],
-            spect_data["initial_image"],
+            shared_initial_estimates[0],
+            shared_initial_estimates[1],
             df,
             order=0,
         )
@@ -261,8 +259,8 @@ def get_data_fidelity(
     ]
     spect_dfs_block = [
         get_block_objective(
-            spect_data["initial_image"],
-            pet_data["initial_image"],
+            shared_initial_estimates[1],
+            shared_initial_estimates[0],
             obj_fun,
             order=1,
         )
@@ -271,8 +269,13 @@ def get_data_fidelity(
 
     all_funs = pet_dfs_block + spect_dfs_block
 
-    # bundle κ² (PET in PET space; SPECT still in SPECT space—transform later in get_prior)
-    kappas = EnhancedBlockDataContainer(pet_kappa_sq, spect_kappa_sq)
+    if args.use_kappa:
+        kappas = get_kappa_squareds(
+            [pet_dfs_block, spect_dfs_block],
+            [shared_initial_estimates[0], shared_initial_estimates[1]],
+        )
+    else:
+        kappas = None
 
     return all_funs, s_inv, kappas
 
@@ -285,7 +288,7 @@ def main(args) -> None:
     _ = init_run_env(args)
 
     # Prepare data
-    umap, pet_data, spect_data, initial_estimates = prepare_data(args)
+    umap, pet_data, spect_data, _ = prepare_data(args)
 
     # Set up operators for multiple bed positions
     uncombine_op, unshift_ops, choose_ops = get_shift_operators(pet_data)
@@ -295,6 +298,19 @@ def main(args) -> None:
         args,
         pet_data, spect_data
     )
+    if getattr(args, "flip", False):
+        spect2pet = CompositionOperator(
+            spect2pet, FlipOperator(axis=(0, 2), image=["initial_image"])
+        )
+    pet_to_spect = get_pet_to_spect_operator(spect2pet)
+    initial_estimates = build_shared_initial_estimates(
+        pet_data["initial_image"],
+        spect_data["initial_image"],
+        spect2pet,
+    )
+
+    for i, image in enumerate(initial_estimates.containers):
+        image.write(os.path.join(args.output_path, f"initial_image_{i}.hv"))
 
     def get_pet_am_with_res():
         return get_pet_am(
@@ -322,21 +338,11 @@ def main(args) -> None:
         uncombine_op,
         unshift_ops,
         choose_ops,
+        initial_estimates,
+        pet_to_spect,
     )
-
-    # Create combined block operator
-    bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
-        ZeroOperator(pet_data["initial_image"]),
-        spect2pet,
-        shape=(2, 2),
-    )
-
-    kappas = normalise_kappa_squares(bo.direct(kappas)) if kappas else None
-    combined = EnhancedBlockDataContainer(
-        *bo.direct(initial_estimates).containers
-    )
+    kappas = normalise_kappa_squares(kappas) if kappas is not None else None
+    combined = initial_estimates
 
     pet_scale, spect_scale = dynamic_range_scale_sirf(
         combined[0],
@@ -413,8 +419,9 @@ def main(args) -> None:
     save_args(args, "args.csv")
 
     # write κ² images
-    for i, image in enumerate(kappas.containers):
-        image.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
+    if kappas is not None:
+        for i, image in enumerate(kappas.containers):
+            image.write(os.path.join(args.output_path, f"kappa_sq_{i}.hv"))
 
     if args.no_prior:
         prior = None
@@ -422,11 +429,9 @@ def main(args) -> None:
     else:
         # Set up the prior.
         priors_list = get_prior(
-            args, umap, combined, bo, kappas,
+            args, umap, combined, kappas,
             pet_scale=pet_scale, spect_scale=spect_scale
         )
-        for i, p in enumerate(priors_list):
-            attach_prior_hessian(priors_list[i])
         prior = -SumFunction(*priors_list)
 
     ui = getattr(args, "update_interval", None)
@@ -436,6 +441,41 @@ def main(args) -> None:
     precond = get_preconditioners(
         args, s_inv, all_funs, update_interval, priors_list, initial_estimates
     )
+
+    support_mask = None
+    if _as_bool(getattr(args, "support_mask_from_sensitivity", False)):
+        mask_rel = float(getattr(args, "support_mask_rel_threshold", 1e-3))
+        mask_abs = float(getattr(args, "support_mask_abs_threshold", 0.0))
+        support_mask_sens = build_support_mask_from_s_inv(
+            s_inv,
+            rel_threshold=mask_rel,
+            abs_threshold=mask_abs,
+        )
+        support_mask = combine_support_masks(support_mask, support_mask_sens)
+        logging.info(
+            "Enabled sensitivity support mask (rel_threshold=%.3g, abs_threshold=%.3g).",
+            mask_rel,
+            mask_abs,
+        )
+    if _as_bool(getattr(args, "support_mask_from_spect_attenuation", False)):
+        attn_rel = float(getattr(args, "support_mask_spect_attn_rel_threshold", 1e-3))
+        attn_abs = float(getattr(args, "support_mask_spect_attn_abs_threshold", 1e-2))
+        support_mask_attn = build_support_mask_from_spect_attenuation(
+            template=s_inv,
+            spect_attenuation=spect2pet.direct(spect_data["attenuation"]),
+            spect_index=1,
+            rel_threshold=attn_rel,
+            abs_threshold=attn_abs,
+        )
+        support_mask = combine_support_masks(support_mask, support_mask_attn)
+        logging.info(
+            "Enabled SPECT attenuation support mask (rel_threshold=%.3g, abs_threshold=%.3g).",
+            attn_rel,
+            attn_abs,
+        )
+    if support_mask is not None and _as_bool(getattr(args, "save_support_mask", False)):
+        for i, el in enumerate(support_mask.containers):
+            el.write(os.path.join(args.output_path, f"support_mask_{i}.hv"))
 
     epoch_length = len(all_funs)
 
@@ -486,10 +526,16 @@ def main(args) -> None:
         update_interval,
         subiterations,
         callbacks,
+        support_mask=support_mask,
     )
 
     # Save results using shared function
     save_results(algo, args)
+    save_native_spect_image(
+        algo.solution.containers[1],
+        pet_to_spect,
+        os.path.join(args.output_path, "final_image_1_native.hv"),
+    )
 
     logging.info("Reconstruction complete")
 

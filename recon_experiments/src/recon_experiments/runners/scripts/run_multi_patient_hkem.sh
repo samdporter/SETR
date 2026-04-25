@@ -17,10 +17,12 @@ set -e
 # ================================
 
 # Base directories
-SCRIPT_DIR="/home/sam/working/synergistic_recon/scripts"
-CONFIG_DIR="/home/sam/working/synergistic_recon/configs"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+REPO_ROOT="$(cd "$BASE_DIR/.." && pwd)"
+CONFIG_DIR="$BASE_DIR/configs"
 DATA_BASE="/home/storage/prepared_data/oxford_patient_data"
-RESULTS_BASE="/home/sam/working/synergistic_recon/results"
+RESULTS_BASE="${RESULTS_BASE:-$REPO_ROOT/results}"
 
 # Config files
 SPECT_CONFIG="${CONFIG_DIR}/config_hkem_2bpos_spect.yaml"

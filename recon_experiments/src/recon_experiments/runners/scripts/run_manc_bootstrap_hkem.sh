@@ -22,10 +22,11 @@ set -e
 
 # Base directories
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-BASE_DIR="$(dirname "$SCRIPT_DIR")"
+BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+REPO_ROOT="$(cd "$BASE_DIR/.." && pwd)"
 CONFIG_DIR="$BASE_DIR/configs"
 DATA_BASE="/home/storage/prepared_data/phantom_data/manc_nema_phantom_data"
-RESULTS_BASE="/home/sam/working/synergistic_recon/results/manc_bootstraps/hkem"
+RESULTS_BASE="${RESULTS_BASE:-$REPO_ROOT/results/manc_bootstraps/hkem}"
 
 # Config files
 SPECT_CONFIG="${CONFIG_DIR}/config_manc_hkem_spect.yaml"

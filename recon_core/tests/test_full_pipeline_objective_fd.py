@@ -32,7 +32,6 @@ pytest.importorskip("recon_experiments", reason="recon_experiments package is re
 
 try:
     from cil.optimisation.functions import SumFunction
-    from cil.optimisation.operators import BlockOperator, IdentityOperator, ZeroOperator
 except Exception as exc:  # pragma: no cover - environment-dependent imports
     pytest.skip(f"CIL unavailable for pipeline FD checks: {exc}", allow_module_level=True)
 
@@ -44,7 +43,11 @@ except Exception as exc:  # pragma: no cover - environment-dependent imports
 try:
     from recon_experiments.runners.dtnv_common import get_prior
     from recon_experiments.runners.scripts.run_dtnv_1bpos import get_data_fidelity, prepare_data
-    from recon_experiments.runners.common import get_resampling_operators
+    from recon_experiments.runners.common import (
+        build_shared_initial_estimates,
+        get_pet_to_spect_operator,
+        get_resampling_operators,
+    )
 except Exception as exc:  # pragma: no cover - environment-dependent imports
     pytest.skip(f"DTNV runner utilities unavailable: {exc}", allow_module_level=True)
 
@@ -182,8 +185,11 @@ def test_full_pipeline_objective_gradient_matches_finite_difference_real_data(tm
     # Assemble the exact 1bpos DTNV objective stack as in the runner.
     umap, pet_data, spect_data = prepare_data(args)
     spect2pet = get_resampling_operators(args, pet_data, spect_data)
-    initial_estimates = EnhancedBlockDataContainer(
-        pet_data["initial_image"], spect_data["initial_image"]
+    pet_to_spect = get_pet_to_spect_operator(spect2pet)
+    initial_estimates = build_shared_initial_estimates(
+        pet_data["initial_image"],
+        spect_data["initial_image"],
+        spect2pet,
     )
 
     def get_pet_am_with_res():
@@ -206,17 +212,11 @@ def test_full_pipeline_objective_gradient_matches_finite_difference_real_data(tm
         get_pet_am_with_res,
         get_spect_am_with_res,
         num_subsets,
+        initial_estimates,
+        pet_to_spect,
     )
 
-    # Mirror composition used in run_dtnv_1bpos.py.
-    bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
-        ZeroOperator(pet_data["initial_image"]),
-        spect2pet,
-        shape=(2, 2),
-    )
-    combined = EnhancedBlockDataContainer(*bo.direct(initial_estimates).containers)
+    combined = initial_estimates
 
     pet_scale, spect_scale = dynamic_range_scale_sirf(combined[0], combined[1])
     use_log_tnv = bool(getattr(args, "use_log_tnv", False))
@@ -229,7 +229,6 @@ def test_full_pipeline_objective_gradient_matches_finite_difference_real_data(tm
         args,
         umap,
         combined,
-        bo,
         kappas,
         pet_scale=pet_scale,
         spect_scale=spect_scale,

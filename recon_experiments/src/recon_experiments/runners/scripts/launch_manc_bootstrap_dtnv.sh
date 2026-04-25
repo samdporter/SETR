@@ -51,11 +51,12 @@ fi
 
 # Get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-BASE_DIR="$(dirname "$SCRIPT_DIR")"
+BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+REPO_ROOT="$(cd "$BASE_DIR/.." && pwd)"
 
 # Set paths
 QSUB_SCRIPT="$SCRIPT_DIR/run_manc_bootstrap_dtnv.qsub.sh"
-RESULTS_BASE="/home/sam/working/synergistic_recon/results/manc_bootstraps/dtnv"
+RESULTS_BASE="${RESULTS_BASE:-$REPO_ROOT/results/manc_bootstraps/dtnv}"
 LOG_DIR="$HOME/setr_logs"
 
 # Create directories

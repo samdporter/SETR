@@ -15,10 +15,12 @@ set -e
 # CONFIGURATION
 # ================================
 
-# Directories (modify these for your setup)
-SCRIPT_DIR="/home/sam/working/synergistic_recon/scripts"
-CONFIG_DIR="/home/sam/working/synergistic_recon/configs"
-RESULTS_DIR="/home/sam/working/synergistic_recon/results"
+# Directories
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+BASE_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+REPO_ROOT="$(cd "$BASE_DIR/.." && pwd)"
+CONFIG_DIR="$BASE_DIR/configs"
+RESULTS_DIR="${RESULTS_DIR:-$REPO_ROOT/results}"
 
 # Config files
 SPECT_CONFIG="${CONFIG_DIR}/config_hkem_2bpos_spect.yaml"  # Always 1 bed position for SPECT

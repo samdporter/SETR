@@ -13,7 +13,6 @@ from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
-from cil.optimisation.operators import BlockOperator, IdentityOperator, ZeroOperator
 from sirf.STIR import ImageData, SeparableGaussianImageFilter
 
 from recon_core.cil_extensions.framework.framework import EnhancedBlockDataContainer
@@ -21,7 +20,10 @@ from recon_core.utils import get_pet_data, get_spect_data
 from recon_core.utils.dynamic_range import apply_dynamic_range_scaling, dynamic_range_scale_sirf
 from recon_core.utils.io import load_config
 from recon_core.utils.sirf import get_array, get_filters
-from recon_experiments.runners.common import attach_prior_hessian, get_resampling_operators
+from recon_experiments.runners.common import (
+    build_shared_initial_estimates,
+    get_resampling_operators,
+)
 from recon_experiments.runners.dtnv_common import get_prior
 
 try:
@@ -30,8 +32,8 @@ except ImportError:  # pragma: no cover - torch may be absent on some systems
     torch = None
 
 
-_PRECOND_DIAG_METHODS = {"mm_diag", "mm_diag_gershgorin", "frob_diag"}
-_PRECOND_BLOCK_METHODS = {"mm_block_diag", "ls_block_diag"}
+_PRECOND_DIAG_METHODS = {"mm_diag_tight", "mm_diag_gershgorin_maj"}
+_PRECOND_BLOCK_METHODS = {"mm_diag_block_maj", "mm_diag_block_tight"}
 _HESSIAN_TYPES = (
     "svd_principal_alpha",
     "mm_jensen",
@@ -66,21 +68,12 @@ def _prepare_data(args: SimpleNamespace):
 def _build_geometry(args: SimpleNamespace):
     umap, pet_data, spect_data = _prepare_data(args)
     spect2pet = get_resampling_operators(args, pet_data, spect_data)
-
-    initial_estimates = EnhancedBlockDataContainer(
-        pet_data["initial_image"], spect_data["initial_image"]
-    )
-
-    bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
-        ZeroOperator(pet_data["initial_image"]),
+    initial_estimates = build_shared_initial_estimates(
+        pet_data["initial_image"],
+        spect_data["initial_image"],
         spect2pet,
-        shape=(2, 2),
     )
-
-    combined = EnhancedBlockDataContainer(*bo.direct(initial_estimates).containers)
-    return umap, initial_estimates, combined, bo
+    return umap, initial_estimates, initial_estimates
 
 
 def _apply_scaling_and_delta(
@@ -132,7 +125,6 @@ def _build_tnv_prior(
     args: SimpleNamespace,
     umap,
     combined: EnhancedBlockDataContainer,
-    bo: BlockOperator,
     pet_scale: float,
     spect_scale: float,
 ):
@@ -144,16 +136,12 @@ def _build_tnv_prior(
         args,
         umap,
         combined,
-        bo,
         kappas=None,
         pet_scale=pet_scale,
         spect_scale=spect_scale,
     )
     if not priors:
         raise RuntimeError("No priors returned from get_prior; check config settings.")
-
-    for prior in priors:
-        attach_prior_hessian(prior)
 
     return priors[0]
 
@@ -172,15 +160,20 @@ def _resolve_methods(args: SimpleNamespace, precond_methods: str | None, hessian
     if precond_methods:
         return "precond", _parse_list(precond_methods)
     if getattr(args, "use_log_tnv", False):
-        return "precond", ["mm_diag", "frob_diag"]
-    return "precond", ["mm_diag", "frob_diag", "mm_block_diag"]
+        return "precond", ["mm_diag_tight", "mm_diag_gershgorin_maj"]
+    return "precond", [
+        "mm_diag_tight",
+        "mm_diag_gershgorin_maj",
+        "mm_diag_block_maj",
+        "mm_diag_block_tight",
+    ]
 
 
 def _canonical_hessian(prior, hessian_type: str) -> str:
-    if hasattr(prior.function, "_HESSIAN_CANONICAL"):
+    if hasattr(prior, "_HESSIAN_CANONICAL"):
         canonical = hessian_type
-        if hessian_type not in prior.function._HESSIAN_CANONICAL:
-            canonical = prior.function._HESSIAN_ALIASES.get(hessian_type, hessian_type)
+        if hessian_type not in prior._HESSIAN_CANONICAL:
+            canonical = prior._HESSIAN_ALIASES.get(hessian_type, hessian_type)
         return canonical
     return hessian_type
 
@@ -354,7 +347,7 @@ def _run_config(
 
     args.use_log_tnv = False
 
-    umap, initial_estimates, combined, bo = _build_geometry(args)
+    umap, initial_estimates, combined = _build_geometry(args)
     pet_scale, spect_scale = _apply_scaling_and_delta(args, combined)
 
     mode, methods = _resolve_methods(args, precond_methods, hessian_types)
@@ -377,13 +370,13 @@ def _run_config(
                 logging.warning("Skipping block method %s (log-TNV does not support block preconditioners).", method)
                 continue
 
-        prior = _build_tnv_prior(method_args, umap, combined, bo, pet_scale, spect_scale)
+        prior = _build_tnv_prior(method_args, umap, combined, pet_scale, spect_scale)
 
         if mode == "hessian":
-            if not hasattr(prior.function, "hessian"):
+            if not hasattr(prior, "hessian"):
                 logging.warning("Prior does not expose hessian attribute; skipping %s.", method)
                 continue
-            prior.function.hessian = _canonical_hessian(prior, method)
+            prior.hessian = _canonical_hessian(prior, method)
 
         if mode == "precond" and method in _PRECOND_BLOCK_METHODS:
             blocks = prior.inv_hessian_block_diag(initial_estimates)
