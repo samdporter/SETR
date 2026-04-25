@@ -73,7 +73,7 @@ def make_vtv_harness(J_field, S_field, weights, smoothing="fair", eps=1.0):
     vtv.jacobian = MockJacobian(J_field=J_field, S_field=S_field)
     vtv.weights = weights
     vtv.smoothing = smoothing
-    vtv.precond_method = "mm_diag"
+    vtv.precond_method = "mm_diag_tight"
     vtv.vtv = VTVSlowBackend(
         eps=eps,
         norm="nuclear",

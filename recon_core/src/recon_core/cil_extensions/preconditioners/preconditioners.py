@@ -139,8 +139,7 @@ class BlockDiagonalPriorPreconditioner(PreconditionerWithInterval):
     """
     Preconditioner that applies a voxel-wise 2x2 inverse-Hessian block in common space.
 
-    This is intended for `OperatorCompositionFunction(prior, bo)` where
-    `prior.function` exposes `inv_preconditioner_block(...)` returning (..., 2, 2) blocks.
+    This applies a direct prior's voxel-wise 2x2 inverse-Hessian block in shared space.
     A scalar/diagonal preconditioner (e.g. BSREM) can optionally be applied first.
     """
 
@@ -160,18 +159,12 @@ class BlockDiagonalPriorPreconditioner(PreconditionerWithInterval):
         self.base_preconditioner = base_preconditioner
 
     def _compute_block_preconditioner(self, image: DataContainer) -> np.ndarray:
-        if not hasattr(self.prior, "operator") or not hasattr(self.prior, "function"):
+        if not hasattr(self.prior, "inv_preconditioner_block"):
             raise AttributeError(
-                "BlockDiagonalPriorPreconditioner expects an OperatorCompositionFunction-like prior "
-                "with .operator and .function attributes."
-            )
-        if not hasattr(self.prior.function, "inv_preconditioner_block"):
-            raise AttributeError(
-                f"Prior function {type(self.prior.function)} does not expose inv_preconditioner_block()."
+                f"Prior {type(self.prior)} does not expose inv_preconditioner_block()."
             )
 
-        x_common = self.prior.operator.direct(image)
-        block = self.prior.function.inv_preconditioner_block(x_common, epsilon=self.epsilon)
+        block = self.prior.inv_preconditioner_block(image, epsilon=self.epsilon)
         block_arr = _to_numpy_array(block)
         if block_arr.shape[-2:] != (2, 2):
             raise ValueError(
@@ -192,8 +185,7 @@ class BlockDiagonalPriorPreconditioner(PreconditionerWithInterval):
         block_arr: np.ndarray,
         out: Optional[DataContainer] = None,
     ):
-        grad_common = self.prior.operator.direct(gradient)
-        grad_arr = _stack_block_container(grad_common)
+        grad_arr = _stack_block_container(gradient)
         if grad_arr.shape[-1] != 2:
             raise ValueError(
                 f"Block preconditioner requires 2 modalities, got {grad_arr.shape[-1]}."
@@ -201,11 +193,10 @@ class BlockDiagonalPriorPreconditioner(PreconditionerWithInterval):
         if block_arr.shape[:-2] != grad_arr.shape[:-1]:
             raise ValueError(
                 f"Gradient/block shape mismatch: gradient {grad_arr.shape}, block {block_arr.shape}."
-            )
+        )
 
         precond_common_arr = np.einsum("...ij,...j->...i", block_arr, grad_arr, optimize=True)
-        precond_common = _fill_block_container_from_array(grad_common, precond_common_arr)
-        ret = self.prior.operator.adjoint(precond_common)
+        ret = _fill_block_container_from_array(gradient, precond_common_arr)
         if out is None:
             return ret
         out.fill(ret)
@@ -277,8 +268,7 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         if isinstance(scalar_precond, np.ndarray):
             scalar = scalar_precond
         elif isinstance(scalar_precond, (DataContainer, BlockDataContainer)):
-            scalar_common = self.block_preconditioner.prior.operator.direct(scalar_precond)
-            scalar_stack = _stack_block_container(scalar_common).astype(np.float64, copy=False)
+            scalar_stack = _stack_block_container(scalar_precond).astype(np.float64, copy=False)
             if scalar_stack.shape[-1] != 2:
                 raise ValueError(
                     f"Block Lehmer blend requires 2 modalities, got {scalar_stack.shape[-1]}."
@@ -409,6 +399,7 @@ class MajorisingHessianDiagonalPreconditioner(PreconditionerWithInterval):
         x_epsilon: float = 1e-8,
         hessian_floor: float = 1e-8,
         max_value: float = np.inf,
+        safety_scale: float = 1.0,
     ):
         super().__init__(update_interval, freeze_iter)
         self.s_inv = s_inv
@@ -416,6 +407,38 @@ class MajorisingHessianDiagonalPreconditioner(PreconditionerWithInterval):
         self.x_epsilon = float(x_epsilon)
         self.hessian_floor = float(hessian_floor)
         self.max_value = float(max_value)
+        self.safety_scale = float(safety_scale)
+        if self.safety_scale <= 0:
+            raise ValueError("safety_scale must be > 0.")
+
+    def _evaluate_prior_diag(self, prior_obj, image):
+        if hasattr(prior_obj, "preconditioner_diag"):
+            fn = getattr(prior_obj, "preconditioner_diag")
+        elif hasattr(prior_obj, "hessian_diag"):
+            fn = getattr(prior_obj, "hessian_diag")
+        else:
+            return None
+
+        try:
+            diag = fn(image, epsilon=self.hessian_floor)
+        except TypeError as exc:
+            if "epsilon" not in str(exc):
+                raise
+            diag = fn(image)
+        return diag.abs()
+
+    def _apply_safety_scale(self, diagonal):
+        if self.safety_scale == 1.0:
+            return diagonal
+        if isinstance(diagonal, BlockDataContainer):
+            for con in diagonal.containers:
+                arr = get_array(con).astype(np.float64, copy=False)
+                arr *= self.safety_scale
+                con.fill(arr)
+            return diagonal
+        arr = _as_array(diagonal).astype(np.float64, copy=False)
+        arr *= self.safety_scale
+        return _fill_from_array(diagonal, arr)
 
     def _invert_diagonal_container(self, diagonal, clamp_max: bool):
         if isinstance(diagonal, BlockDataContainer):
@@ -443,15 +466,13 @@ class MajorisingHessianDiagonalPreconditioner(PreconditionerWithInterval):
         return self._invert_diagonal_container(denom, clamp_max=False)
 
     def _compute_prior_hessian_diag(self, image: DataContainer) -> DataContainer:
-        if hasattr(self.prior, "preconditioner_diag"):
-            prior_h = self.prior.preconditioner_diag(image)
-        elif hasattr(self.prior, "hessian_diag"):
-            prior_h = self.prior.hessian_diag(image)
-        else:
-            raise AttributeError(
-                f"Prior {type(self.prior)} does not expose preconditioner_diag() or hessian_diag()."
-            )
-        return prior_h.abs()
+        prior_h = self._evaluate_prior_diag(self.prior, image)
+        if prior_h is not None:
+            return prior_h
+
+        raise AttributeError(
+            f"Prior {type(self.prior)} does not expose preconditioner_diag() or hessian_diag()."
+        )
 
     def compute_preconditioner(self, algorithm, out=None):
         image = algorithm.solution
@@ -459,6 +480,7 @@ class MajorisingHessianDiagonalPreconditioner(PreconditionerWithInterval):
         prior_h = self._compute_prior_hessian_diag(image)
         total_h = data_h + prior_h
         precond = self._invert_diagonal_container(total_h, clamp_max=True)
+        precond = self._apply_safety_scale(precond)
 
         if out is None:
             return precond
@@ -478,6 +500,7 @@ class MajorisingHessianBlockPreconditioner(PreconditionerWithInterval):
         x_epsilon: float = 1e-8,
         hessian_floor: float = 1e-8,
         max_value: float = np.inf,
+        safety_scale: float = 1.0,
     ):
         super().__init__(update_interval, freeze_iter)
         self.s_inv = s_inv
@@ -485,17 +508,15 @@ class MajorisingHessianBlockPreconditioner(PreconditionerWithInterval):
         self.x_epsilon = float(x_epsilon)
         self.hessian_floor = float(hessian_floor)
         self.max_value = float(max_value)
+        self.safety_scale = float(safety_scale)
+        if self.safety_scale <= 0:
+            raise ValueError("safety_scale must be > 0.")
 
     def _compute_prior_hessian_block(self, image: DataContainer) -> np.ndarray:
         if hasattr(self.prior, "preconditioner_block"):
             block = self.prior.preconditioner_block(image, epsilon=self.hessian_floor)
         elif hasattr(self.prior, "hessian_block_diag"):
             block = self.prior.hessian_block_diag(image, epsilon=self.hessian_floor)
-        elif hasattr(self.prior, "function") and hasattr(self.prior.function, "preconditioner_block"):
-            x_common = self.prior.operator.direct(image)
-            block = self.prior.function.preconditioner_block(
-                x_common, epsilon=self.hessian_floor
-            )
         else:
             raise AttributeError(
                 f"Prior {type(self.prior)} does not expose block Hessian helpers."
@@ -509,26 +530,36 @@ class MajorisingHessianBlockPreconditioner(PreconditionerWithInterval):
         return _symmetrise_blocks(block_arr)
 
     def _compute_data_hessian_block(self, image: DataContainer) -> np.ndarray:
-        x_common = self.prior.operator.direct(image)
-        s_inv_common = self.prior.operator.direct(self.s_inv)
-        x_arr = _stack_block_container(x_common).astype(np.float64, copy=False)
-        s_inv_arr = _stack_block_container(s_inv_common).astype(np.float64, copy=False)
-        if x_arr.shape[-1] != 2:
-            raise ValueError(
-                f"Block preconditioner requires exactly 2 modalities, got {x_arr.shape[-1]}."
+        if not isinstance(image, BlockDataContainer):
+            raise TypeError(
+                f"Expected BlockDataContainer image, got {type(image)}."
             )
-        if s_inv_arr.shape != x_arr.shape:
+        if not isinstance(self.s_inv, BlockDataContainer):
+            raise TypeError(
+                f"Expected BlockDataContainer s_inv, got {type(self.s_inv)}."
+            )
+        if len(image.containers) != 2:
             raise ValueError(
-                f"s_inv/common geometry mismatch: x {x_arr.shape}, s_inv {s_inv_arr.shape}."
+                f"Block preconditioner requires exactly 2 modalities, got {len(image.containers)}."
+            )
+        if len(self.s_inv.containers) != len(image.containers):
+            raise ValueError(
+                f"s_inv/image modality mismatch: x has {len(image.containers)} containers, "
+                f"s_inv has {len(self.s_inv.containers)}."
             )
 
-        denom = (x_arr + self.x_epsilon) * s_inv_arr
-        np.maximum(denom, self.hessian_floor, out=denom)
-        diag = 1.0 / denom
-
-        data_h = np.zeros((*diag.shape[:-1], 2, 2), dtype=np.float64)
-        data_h[..., 0, 0] = diag[..., 0]
-        data_h[..., 1, 1] = diag[..., 1]
+        data_h = np.zeros((*get_array(image.containers[0]).shape, 2, 2), dtype=np.float64)
+        for idx, (x_con, s_inv_con) in enumerate(zip(image.containers, self.s_inv.containers)):
+            x_arr = get_array(x_con).astype(np.float64, copy=False)
+            s_inv_arr = get_array(s_inv_con).astype(np.float64, copy=False)
+            if x_arr.shape != s_inv_arr.shape:
+                raise ValueError(
+                    f"s_inv/image geometry mismatch for modality {idx}: "
+                    f"x {x_arr.shape}, s_inv {s_inv_arr.shape}."
+                )
+            denom = (x_arr + self.x_epsilon) * s_inv_arr
+            np.maximum(denom, self.hessian_floor, out=denom)
+            data_h[..., idx, idx] = np.reciprocal(denom)
         return data_h
 
     def _invert_block_hessian(self, hessian_block: np.ndarray) -> np.ndarray:
@@ -547,8 +578,7 @@ class MajorisingHessianBlockPreconditioner(PreconditionerWithInterval):
         block_arr: np.ndarray,
         out: Optional[DataContainer] = None,
     ):
-        grad_common = self.prior.operator.direct(gradient)
-        grad_arr = _stack_block_container(grad_common)
+        grad_arr = _stack_block_container(gradient)
         if grad_arr.shape[-1] != 2:
             raise ValueError(
                 f"Block preconditioner requires 2 modalities, got {grad_arr.shape[-1]}."
@@ -556,11 +586,10 @@ class MajorisingHessianBlockPreconditioner(PreconditionerWithInterval):
         if block_arr.shape[:-2] != grad_arr.shape[:-1]:
             raise ValueError(
                 f"Gradient/block shape mismatch: gradient {grad_arr.shape}, block {block_arr.shape}."
-            )
+        )
 
         precond_common_arr = np.einsum("...ij,...j->...i", block_arr, grad_arr, optimize=True)
-        precond_common = _fill_block_container_from_array(grad_common, precond_common_arr)
-        ret = self.prior.operator.adjoint(precond_common)
+        ret = _fill_block_container_from_array(gradient, precond_common_arr)
         if out is None:
             return ret
         out.fill(ret)
@@ -571,7 +600,10 @@ class MajorisingHessianBlockPreconditioner(PreconditionerWithInterval):
         prior_h = self._compute_prior_hessian_block(image)
         data_h = self._compute_data_hessian_block(image)
         total_h = prior_h + data_h
-        return self._invert_block_hessian(total_h)
+        precond = self._invert_block_hessian(total_h)
+        if self.safety_scale != 1.0:
+            precond = precond * self.safety_scale
+        return precond
 
     def apply(self, algorithm, gradient, out=None):
         if algorithm.iteration < self.freeze_iter:

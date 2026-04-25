@@ -75,8 +75,8 @@ def _directional_projector_stats_from_jacobian(jacobian, like, n_params: int, n_
 
 
 def _direction_valid_mask(shape, directions, device, dtype, bnd_cond):
-    # Our Neumann implementation uses symmetric clamping, so all shifts remain valid.
-    if bnd_cond in {"Periodic", "Neumann"}:
+    # Periodic boundaries keep all forward stencil channels valid.
+    if bnd_cond == "Periodic":
         return None
     nx, ny, nz = shape
     xs = torch.arange(nx, device=device)
@@ -146,9 +146,13 @@ class WeightedVectorialTotalVariation(Function):
     GPU vectorial total variation with optional gradient normalization.
     """
 
-    _PRECOND_DIAG_METHODS = {"mm_diag", "mm_diag_gershgorin", "frob_diag"}
-    _PRECOND_BLOCK_METHODS = {"mm_block_diag", "ls_block_diag"}
+    _PRECOND_DIAG_METHODS = {"mm_diag_tight", "mm_diag_gershgorin_maj"}
+    _PRECOND_BLOCK_METHODS = {"mm_diag_block_maj", "mm_diag_block_tight"}
     _PRECOND_METHODS = _PRECOND_DIAG_METHODS | _PRECOND_BLOCK_METHODS
+
+    @classmethod
+    def _canonical_precond_method(cls, method: str) -> str:
+        return method
 
     def __init__(
         self,
@@ -163,7 +167,7 @@ class WeightedVectorialTotalVariation(Function):
         both_directions=False,
         max_step=1,
         tail_singular_values=None,
-        precond_method="mm_diag",
+        precond_method="mm_diag_tight",
         bnd_cond="Periodic",
     ):
         voxel_sizes = geometry.containers[0].voxel_sizes()
@@ -180,7 +184,7 @@ class WeightedVectorialTotalVariation(Function):
         )
 
         self.smoothing = smoothing
-        self.precond_method = precond_method
+        self.precond_method = self._canonical_precond_method(precond_method)
         if self.precond_method not in self._PRECOND_METHODS:
             raise ValueError(
                 f"Unknown preconditioner method: {self.precond_method}. "
@@ -271,32 +275,37 @@ class WeightedVectorialTotalVariation(Function):
         Compute diagonal preconditioner in image space.
 
         Methods (self.precond_method):
-            - "mm_diag"
-            - "mm_diag_gershgorin"
-            - "frob_diag"
+            - "mm_diag_tight"
+            - "mm_diag_gershgorin_maj"
         """
-        if self.precond_method not in self._PRECOND_DIAG_METHODS:
+        method = self._canonical_precond_method(self.precond_method)
+        if method != self.precond_method:
+            self.precond_method = method
+        if method not in self._PRECOND_DIAG_METHODS:
             raise ValueError(
                 f"preconditioner_diag requires a diagonal method; got {self.precond_method}."
             )
         from .preconditioners import compute_precond_diag
 
         x_arr = self.bdc2a.direct(x)
-        diag = compute_precond_diag(self, x_arr, self.precond_method, epsilon=epsilon)
+        diag = compute_precond_diag(self, x_arr, method, epsilon=epsilon)
         return self.bdc2a.adjoint(self._dV * diag, out=out)
 
     def inv_preconditioner_diag(self, x, out=None, eta: float = 0.7, epsilon: float = 1e-8):
         """
         Compute inverse diagonal preconditioner in image space.
         """
-        if self.precond_method not in self._PRECOND_DIAG_METHODS:
+        method = self._canonical_precond_method(self.precond_method)
+        if method != self.precond_method:
+            self.precond_method = method
+        if method not in self._PRECOND_DIAG_METHODS:
             raise ValueError(
                 f"inv_preconditioner_diag requires a diagonal method; got {self.precond_method}."
             )
         from .preconditioners import compute_precond_diag
 
         x_arr = self.bdc2a.direct(x)
-        diag = compute_precond_diag(self, x_arr, self.precond_method, epsilon=epsilon)
+        diag = compute_precond_diag(self, x_arr, method, epsilon=epsilon)
         inv_arr = torch.reciprocal(diag)
         inv_arr = torch.nan_to_num(inv_arr, nan=0.0, posinf=0.0, neginf=0.0)
         return self.bdc2a.adjoint(inv_arr / self._dV, out=out)
@@ -306,17 +315,20 @@ class WeightedVectorialTotalVariation(Function):
         Compute 2x2 block preconditioner per voxel.
 
         Methods (self.precond_method):
-            - "mm_block_diag"
-            - "ls_block_diag"
+            - "mm_diag_block_maj"
+            - "mm_diag_block_tight"
         """
-        if self.precond_method not in self._PRECOND_BLOCK_METHODS:
+        method = self._canonical_precond_method(self.precond_method)
+        if method != self.precond_method:
+            self.precond_method = method
+        if method not in self._PRECOND_BLOCK_METHODS:
             raise ValueError(
                 f"preconditioner_block requires a block method; got {self.precond_method}."
             )
         from .preconditioners import compute_precond_block
 
         x_arr = self.bdc2a.direct(x)
-        blocks = compute_precond_block(self, x_arr, self.precond_method, epsilon=epsilon)
+        blocks = compute_precond_block(self, x_arr, method, epsilon=epsilon)
         blocks = self._dV * blocks
         if out is not None:
             out.copy_(blocks)
@@ -327,14 +339,17 @@ class WeightedVectorialTotalVariation(Function):
         """
         Compute inverse 2x2 block preconditioner per voxel.
         """
-        if self.precond_method not in self._PRECOND_BLOCK_METHODS:
+        method = self._canonical_precond_method(self.precond_method)
+        if method != self.precond_method:
+            self.precond_method = method
+        if method not in self._PRECOND_BLOCK_METHODS:
             raise ValueError(
                 f"inv_preconditioner_block requires a block method; got {self.precond_method}."
             )
         from .preconditioners import compute_precond_block
 
         x_arr = self.bdc2a.direct(x)
-        blocks = compute_precond_block(self, x_arr, self.precond_method, epsilon=epsilon)
+        blocks = compute_precond_block(self, x_arr, method, epsilon=epsilon)
         p12 = 0.5 * (blocks[..., 0, 1] + blocks[..., 1, 0])
         p11 = blocks[..., 0, 0]
         p22 = blocks[..., 1, 1]
