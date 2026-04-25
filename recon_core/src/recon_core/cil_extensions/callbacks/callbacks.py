@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -32,18 +33,20 @@ class SaveImageCallback(Callback):
     CIL Callback that saves an image to disk.
     """
 
-    def __init__(self, filename, interval, **kwargs):
+    def __init__(self, filename, interval, iteration_offset=0, **kwargs):
         super().__init__(interval, **kwargs)
         self.filename = filename
+        self.iteration_offset = int(iteration_offset)
 
     def __call__(self, algo):
         if self.skip_iteration(algo):
             return
+        iteration = algo.iteration + self.iteration_offset
         if isinstance(algo.solution, ImageData):
-            algo.solution.write(f"{self.filename}_{algo.iteration}.hv")
+            algo.solution.write(f"{self.filename}_{iteration}.hv")
         elif isinstance(algo.solution, BlockDataContainer):
             for i, el in enumerate(algo.solution.containers):
-                el.write(f"{self.filename}_{i}_{algo.iteration}.hv")
+                el.write(f"{self.filename}_{i}_{iteration}.hv")
 
 
 class SaveKernelisedImageCallback(Callback):
@@ -68,18 +71,20 @@ class SaveGradientUpdateCallback(Callback):
     CIL Callback that saves the gradient update to disk.
     """
 
-    def __init__(self, filename, interval, **kwargs):
+    def __init__(self, filename, interval, iteration_offset=0, **kwargs):
         super().__init__(interval, **kwargs)
         self.filename = filename
+        self.iteration_offset = int(iteration_offset)
 
     def __call__(self, algo):
         if self.skip_iteration(algo):
             return
+        iteration = algo.iteration + self.iteration_offset
         if isinstance(algo.gradient_update, ImageData):
-            algo.gradient_update.write(f"{self.filename}_{algo.iteration}.hv")
+            algo.gradient_update.write(f"{self.filename}_{iteration}.hv")
         elif isinstance(algo.gradient_update, BlockDataContainer):
             for i, el in enumerate(algo.gradient_update.containers):
-                el.write(f"{self.filename}_{i}_{algo.iteration}.hv")
+                el.write(f"{self.filename}_{i}_{iteration}.hv")
 
 
 class PrintObjectiveCallback(Callback):
@@ -97,14 +102,46 @@ class SaveObjectiveCallback(Callback):
     CIL Callback that saves the objective function value to disk.
     """
 
-    def __init__(self, filename, interval, **kwargs):
+    def __init__(self, filename, interval, iteration_offset=0, **kwargs):
         super().__init__(interval, **kwargs)
         self.filename = filename
+        self.iteration_offset = int(iteration_offset)
+        if self.iteration_offset > 0:
+            self._existing_history = self._load_existing_history()
+        else:
+            self._existing_history = []
+
+    def _csv_path(self) -> Path:
+        path = Path(self.filename)
+        if path.suffix == ".csv":
+            return path
+        return Path(f"{self.filename}.csv")
+
+    def _load_existing_history(self):
+        path = self._csv_path()
+        if not path.exists():
+            return []
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            return []
+        if df.empty:
+            return []
+        # prefer the last numeric column
+        for col in reversed(df.columns):
+            if np.issubdtype(df[col].dtype, np.number):
+                return df[col].dropna().astype(float).tolist()
+        # fallback: flatten all values
+        return df.iloc[:, -1].dropna().astype(float).tolist()
 
     def __call__(self, algo):
         if self.skip_iteration(algo):
             return
-        pd.DataFrame(algo.objective).to_csv(f"{self.filename}.csv")
+        history = list(algo.objective)
+        combined = history
+        if self._existing_history:
+            combined = self._existing_history + history
+        pd.DataFrame(combined).to_csv(self._csv_path(), index=False)
 
 class SaveStepSizeCallback(Callback):
     """
@@ -152,10 +189,11 @@ class SavePreconditionerCallback(Callback):
     CIL Callback that saves the preconditioner to disk.
     """
 
-    def __init__(self, filename, interval, **kwargs):
+    def __init__(self, filename, interval, iteration_offset=0, **kwargs):
         super().__init__(interval, **kwargs)
         self.filename = filename
         self._warned_block_precond = False
+        self.iteration_offset = int(iteration_offset)
 
     def __call__(self, algo):
         if self.skip_iteration(algo):
@@ -173,11 +211,12 @@ class SavePreconditionerCallback(Callback):
                 self._warned_block_precond = True
             return
 
+        iteration = algo.iteration + self.iteration_offset
         if isinstance(preconditioner, ImageData):
-            preconditioner.write(f"{self.filename}_{algo.iteration}.hv")
+            preconditioner.write(f"{self.filename}_{iteration}.hv")
         elif isinstance(preconditioner, BlockDataContainer):
             for i, el in enumerate(preconditioner.containers):
-                el.write(f"{self.filename}_{i}_{algo.iteration}.hv")
+                el.write(f"{self.filename}_{i}_{iteration}.hv")
         else:
             logging.warning(
                 "SavePreconditionerCallback: unsupported preconditioner type %s; skipping save.",
