@@ -239,8 +239,7 @@ def get_spect_data(path: str, load_sinos: bool = True, displacement_suffix: str 
 
     This function always loads a template image and then attempts to load the
     initial image. If the initial image is not found, it creates a uniform copy
-    of the template image (filled with ones). Also, the attenuation image is flipped
-    on the x-axis due to a known STIR bug.
+    of the template image (filled with ones).
 
     Args:
         path (str): Path to the data directory.
@@ -276,10 +275,8 @@ def get_spect_data(path: str, load_sinos: bool = True, displacement_suffix: str 
             spect_data["additive"] = AcquisitionData(spect_data["acquisition_data"])
             spect_data["additive"].fill(0)
 
-    # Attenuation (flip x-axis due to STIR bug) IS THIS STILL NEEDED?
+    # Attenuation
     spect_data["attenuation"] = ImageData(os.path.join(path, "umap_zoomed.hv"))
-    attn_arr = np.flip(spect_data["attenuation"].as_array(), axis=-1)
-    spect_data["attenuation"].fill(attn_arr)
 
     # Template image (required)
     template_img_path = os.path.join(path, "template_image.hv")
@@ -474,7 +471,7 @@ def smooth_kappa_via_inverse(kappa2, fwhm_mm=(10.0, 10.0, 10.0), save_inverse=Fa
 
     # Compute inverse with safe division
     arr = kappa2.asarray()
-    inv_arr = np.reciprocal(arr, where=arr != 0)
+    inv_arr = _safe_reciprocal(arr)
     kappa2_inv = kappa2.clone()
     kappa2_inv.fill(inv_arr)
 
@@ -488,7 +485,7 @@ def smooth_kappa_via_inverse(kappa2, fwhm_mm=(10.0, 10.0, 10.0), save_inverse=Fa
     # Compute inverse again to get smoothed kappa²
     inv_arr_smoothed = kappa2_inv.asarray()
     kappa2_smoothed = kappa2.clone()
-    kappa2_arr = np.reciprocal(inv_arr_smoothed, where=inv_arr_smoothed != 0)
+    kappa2_arr = _safe_reciprocal(inv_arr_smoothed)
     kappa2_smoothed.fill(kappa2_arr)
 
     return kappa2_smoothed, kappa2_inv
@@ -576,6 +573,13 @@ def _clamp_inverse(inv_sens_arr, clamp_percentile):
     return np.minimum(inv_sens_arr, clamp_value)
 
 
+def _safe_reciprocal(arr: np.ndarray) -> np.ndarray:
+    """Reciprocal with zero-preserving mask and deterministic output."""
+    out = np.zeros_like(arr, dtype=np.result_type(arr, np.float32))
+    np.reciprocal(arr, out=out, where=arr != 0)
+    return out
+
+
 def get_s_inv_from_objs(
     obj_funs,
     initial_estimates,
@@ -592,19 +596,23 @@ def get_s_inv_from_objs(
         for j, obj_fun in enumerate(obj_funs[i]):
             # Extract underlying function if wrapped in OperatorCompositionFunction
             obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
+            subset_sens = obj_fn.get_subset_sensitivity(0)
+            # SIRF can emit small negative sensitivity values; clamp on creation.
+            subset_sens.maximum(0, out=subset_sens)
             if j == 0:
-                sens = obj_fn.get_subset_sensitivity(0)
+                sens = subset_sens
             else:
-                sens += obj_fn.get_subset_sensitivity(0)
+                sens += subset_sens
         # Compute maximum with zero (returning a new container)
         sens.maximum(0, out=sens)
         adjoint_op = adjoint_ops[i]
         if adjoint_op is not None:
             sens = adjoint_op.adjoint(sens)
+        sens.maximum(0, out=sens)
         sens_arr = get_array(sens).astype(np.float32)
         # We can afford to avoid zeros because
         # a zero sensitivity means we're outside the FOV
-        inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
+        inv_sens_arr = _safe_reciprocal(sens_arr)
         inv_sens_arr = _clamp_inverse(inv_sens_arr, clamp_percentile)
         # there really shouldn't be any NaNs, but just in case
         s_inv.containers[i].fill(np.nan_to_num(inv_sens_arr))
@@ -632,8 +640,9 @@ def get_s_inv_from_am(
         adjoint_op = adjoint_ops[i]
         if adjoint_op is not None:
             el = adjoint_op.adjoint(el)
+        el = el.maximum(0)
         el_arr = get_array(el)
-        el_arr = np.reciprocal(el_arr, where=el_arr != 0)
+        el_arr = _safe_reciprocal(el_arr)
         el_arr = _clamp_inverse(el_arr, clamp_percentile)
         el.fill(np.nan_to_num(el_arr))
     return s_inv
@@ -650,18 +659,22 @@ def get_s_inv_from_subset_objs(
     for j, obj_fun in enumerate(obj_funs):
         # Extract underlying function if wrapped in OperatorCompositionFunction
         obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
+        subset_sens = obj_fn.get_subset_sensitivity(0)
+        # SIRF can emit small negative sensitivity values; clamp on creation.
+        subset_sens.maximum(0, out=subset_sens)
         if j == 0:
-            sens = obj_fn.get_subset_sensitivity(0)
+            sens = subset_sens
         else:
-            sens += obj_fn.get_subset_sensitivity(0)
+            sens += subset_sens
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
     if adjoint_operator is not None:
         sens = adjoint_operator.adjoint(sens)
+    sens = sens.maximum(0)
     sens_arr = get_array(sens).astype(np.float32)
     # We can afford to avoid zeros because
     # a zero sensitivity means we're outside the FOV
-    inv_sens_arr = np.reciprocal(sens_arr, where=sens_arr != 0)
+    inv_sens_arr = _safe_reciprocal(sens_arr)
     inv_sens_arr = _clamp_inverse(inv_sens_arr, clamp_percentile)
     # there really shouldn't be any NaNs, but just in case
     s_inv.fill(np.nan_to_num(inv_sens_arr))
@@ -673,14 +686,18 @@ def get_sensitivity_from_subset_objs(obj_funs, initial_estimate, adjoint_operato
     for j, obj_fun in enumerate(obj_funs):
         # Extract underlying function if wrapped in OperatorCompositionFunction
         obj_fn = obj_fun.function if isinstance(obj_fun, OperatorCompositionFunction) else obj_fun
+        subset_sens = obj_fn.get_subset_sensitivity(0)
+        # SIRF can emit small negative sensitivity values; clamp on creation.
+        subset_sens.maximum(0, out=subset_sens)
         if j == 0:
-            sens = obj_fn.get_subset_sensitivity(0)
+            sens = subset_sens
         else:
-            sens += obj_fn.get_subset_sensitivity(0)
+            sens += subset_sens
     # Compute maximum with zero (returning a new container)
     sens = sens.maximum(0)
     if adjoint_operator is not None:
         sens = adjoint_operator.adjoint(sens)
+    sens = sens.maximum(0)
     return sens
 
 
@@ -712,7 +729,7 @@ def compute_inv_hessian_diagonals(bdc, obj_funs_list):
         hessian_diag = hessian_diag.abs()
 
         hessian_diag_arr = get_array(hessian_diag)
-        hessian_diag.fill(np.reciprocal(hessian_diag_arr, where=hessian_diag_arr != 0))
+        hessian_diag.fill(_safe_reciprocal(hessian_diag_arr))
 
         outputs.append(hessian_diag)
 
