@@ -4,19 +4,40 @@ from cil.optimisation.functions import Function
 from recon_core.utils.sirf import get_array
 
 class BlockIndicatorBox(Function):
-    def __init__(self, lower=0, upper=np.inf):
+    def __init__(self, lower=0, upper=np.inf, mask=None, mask_tolerance=0.0):
         self.lower = lower
         self.upper = upper
+        self.mask = mask
+        self.mask_tolerance = float(mask_tolerance)
+
+    @staticmethod
+    def _containers(obj):
+        return obj.containers if hasattr(obj, "containers") else (obj,)
+
+    def _mask_containers(self):
+        if self.mask is None:
+            return None
+        return self._containers(self.mask)
 
     def __call__(self, x):
         """Return 0 when `x` is inside [lower, upper], otherwise +∞."""
 
-        containers = x.containers if hasattr(x, "containers") else (x,)
+        containers = self._containers(x)
+        mask_containers = self._mask_containers()
+        if mask_containers is not None and len(mask_containers) != len(containers):
+            raise ValueError(
+                "Mask container count does not match input container count."
+            )
 
-        for el in containers:
+        for idx, el in enumerate(containers):
             arr = get_array(el)
             if not np.all((arr >= self.lower) & (arr <= self.upper)):
                 return np.inf
+            if mask_containers is not None:
+                mask_arr = get_array(mask_containers[idx])
+                off_support = mask_arr <= 0
+                if np.any(np.abs(arr[off_support]) > self.mask_tolerance):
+                    return np.inf
 
         return 0.0
 
@@ -37,6 +58,15 @@ class BlockIndicatorBox(Function):
             out = x.copy()
         x.maximum(self.lower, out=out)
         out.minimum(self.upper, out=out)
+        mask_containers = self._mask_containers()
+        if mask_containers is not None:
+            out_containers = self._containers(out)
+            if len(mask_containers) != len(out_containers):
+                raise ValueError(
+                    "Mask container count does not match proximal output container count."
+                )
+            for out_el, mask_el in zip(out_containers, mask_containers):
+                out_el.multiply(mask_el, out=out_el)
         return out
     
     
