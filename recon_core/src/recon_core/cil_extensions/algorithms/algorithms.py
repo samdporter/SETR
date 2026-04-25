@@ -3,6 +3,7 @@ def ista_update_step(self) -> None:
 
     .. math:: x_{k+1} = \mathrm{prox}_{\alpha g}(x_{k} - \alpha\nabla f(x_{k}))
     """
+    M = self.x_old.max()
     self.gradient_update = self.f.gradient(self.x_old, out=self.gradient_update)
     try:
         step_size = self.step_size_rule.get_step_size(self)
@@ -15,6 +16,9 @@ def ista_update_step(self) -> None:
         grad = self.preconditioner.apply(self, self.gradient_update)
     else:
         grad = self.gradient_update.clone()
+
+    # ensure gradient step does not cause overflow
+    grad = grad.maximum(-M / step_size).minimum(M / step_size)
 
     self.x_old.sapyb(1.0, grad, -step_size, out=self.x_old)
     self.g.proximal(self.x_old, step_size, out=self.x)
