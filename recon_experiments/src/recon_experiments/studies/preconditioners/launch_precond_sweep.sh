@@ -18,6 +18,10 @@ SWEEP_CONFIG="${1:-precond_sweep_1bpos.yaml}"
 MODE="${2:-full}"
 SWEEP_REPEATS="${SWEEP_REPEATS:-1}"
 
+if [[ "$MODE" =~ ^local(_all)?$ ]]; then
+    export LOCAL_RUN_ID="${LOCAL_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+fi
+
 if ! [[ "$SWEEP_REPEATS" =~ ^[0-9]+$ ]] || [ "$SWEEP_REPEATS" -lt 1 ]; then
     echo "Error: SWEEP_REPEATS must be a positive integer (got '$SWEEP_REPEATS')"
     exit 1

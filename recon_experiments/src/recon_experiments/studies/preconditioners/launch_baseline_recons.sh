@@ -19,8 +19,8 @@ PRECOND_TYPE="${PRECOND_TYPE:-mm_diag_block_maj}"
 PRECOND_COMBINE="${PRECOND_COMBINE:-majoriser}"
 PRECOND_SCALAR_REDUCTION="${PRECOND_SCALAR_REDUCTION:-diag}"
 PRECOND_SAFETY_SCALE="${PRECOND_SAFETY_SCALE:-0.8}"
-EM_PRECOND_CAP_TO_INITIAL_MAX="${EM_PRECOND_CAP_TO_INITIAL_MAX:-false}"
-PRECOND_CAP_TO_INITIAL_MAX="${PRECOND_CAP_TO_INITIAL_MAX:-false}"
+EM_PRECOND_CAP_TO_INITIAL_MAX="${EM_PRECOND_CAP_TO_INITIAL_MAX:-true}"
+PRECOND_CAP_TO_INITIAL_MAX="${PRECOND_CAP_TO_INITIAL_MAX:-true}"
 GAMMA_TNV="${GAMMA_TNV:-0.01}"
 SUPPORT_MASK_FROM_SENSITIVITY="${SUPPORT_MASK_FROM_SENSITIVITY:-true}"
 SUPPORT_MASK_REL_THRESHOLD="${SUPPORT_MASK_REL_THRESHOLD:-1e-3}"
@@ -41,6 +41,10 @@ else
     MODE="${3:-local}"
 fi
 
+if [[ "$MODE" =~ ^local(_all)?$ ]]; then
+    export LOCAL_RUN_ID="${LOCAL_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+fi
+
 echo "=== Baseline Reconstruction Launcher ==="
 echo "Base config: $BASE_CONFIG"
 echo "Epochs: $NUM_EPOCHS"
@@ -55,6 +59,9 @@ echo "Support mask from sensitivity: $SUPPORT_MASK_FROM_SENSITIVITY"
 echo "Support mask relative threshold: $SUPPORT_MASK_REL_THRESHOLD"
 echo "Support mask absolute threshold: $SUPPORT_MASK_ABS_THRESHOLD"
 echo "Mode: $MODE"
+if [[ "$MODE" =~ ^local(_all)?$ ]]; then
+    echo "Local run ID: $LOCAL_RUN_ID"
+fi
 echo ""
 
 infer_bpos() {
