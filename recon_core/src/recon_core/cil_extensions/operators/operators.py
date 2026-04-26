@@ -21,8 +21,12 @@ class AdjointOperator(LinearOperator):
 
     def __init__(self, operator):
         self.operator = operator
-        self.domain_geometry = operator.domain_geometry
-        self.range_geometry = operator.range_geometry
+        self.domain_geometry = operator.range_geometry
+        self.range_geometry = operator.domain_geometry
+        super().__init__(
+            domain_geometry=self.domain_geometry,
+            range_geometry=self.range_geometry,
+        )
 
     def direct(self, x, out=None):
         return self.operator.adjoint(x, out)

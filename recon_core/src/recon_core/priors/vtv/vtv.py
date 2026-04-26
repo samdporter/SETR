@@ -92,6 +92,30 @@ def _direction_valid_mask(shape, directions, device, dtype, bnd_cond):
     return torch.stack(masks, dim=-1).to(dtype)
 
 
+def _direction_participation_counts(shape, directions, device, dtype, bnd_cond):
+    """Return diag contribution counts for each finite-difference direction."""
+    nx, ny, nz = shape
+    if bnd_cond == "Periodic":
+        return torch.full((nx, ny, nz, len(directions)), 2.0, device=device, dtype=dtype)
+
+    xs = torch.arange(nx, device=device)
+    ys = torch.arange(ny, device=device)
+    zs = torch.arange(nz, device=device)
+    counts = []
+    for dx, dy, dz in directions:
+        fwd_x = (xs + dx >= 0) & (xs + dx < nx)
+        fwd_y = (ys + dy >= 0) & (ys + dy < ny)
+        fwd_z = (zs + dz >= 0) & (zs + dz < nz)
+        bwd_x = (xs - dx >= 0) & (xs - dx < nx)
+        bwd_y = (ys - dy >= 0) & (ys - dy < ny)
+        bwd_z = (zs - dz >= 0) & (zs - dz < nz)
+
+        fwd = fwd_x[:, None, None] & fwd_y[None, :, None] & fwd_z[None, None, :]
+        bwd = bwd_x[:, None, None] & bwd_y[None, :, None] & bwd_z[None, None, :]
+        counts.append(fwd.to(dtype) + bwd.to(dtype))
+    return torch.stack(counts, dim=-1)
+
+
 def _shift_with_zeros(x, sh: tuple[int, int, int]):
     dx, dy, dz = (int(v) for v in sh)
     nx, ny, nz = x.shape[:3]
@@ -236,7 +260,8 @@ class WeightedVectorialTotalVariation(Function):
         """
         Compute per-voxel directional participation counts for boundary handling.
 
-        Voxels participate in 1 direction at boundaries, 2 in interior.
+        For each finite-difference channel, voxels can participate as the anchor
+        of the forward edge and/or as the shifted neighbour of another edge.
 
         Args:
             shape: (nx, ny, nz, d) spatial + directional dimensions
@@ -247,28 +272,13 @@ class WeightedVectorialTotalVariation(Function):
             Tensor of shape (nx, ny, nz, d) with participation counts
         """
         nx, ny, nz, d = shape
-
-        def _counts_1d(n: int):
-            """Boundary=1, interior=2 for dimension of size n"""
-            c = torch.full((n,), 2.0, device=device, dtype=dtype)
-            if n > 0:
-                c[0] = 1.0
-                if n > 1:
-                    c[-1] = 1.0
-            return c
-
-        # Start with interior assumption (2.0 everywhere)
-        C = torch.full((nx, ny, nz, d), 2.0, device=device, dtype=dtype)
-
-        # Override with boundary counts per direction
-        if d >= 1:
-            C[..., 0] = _counts_1d(nx).view(nx, 1, 1).expand(nx, ny, nz)
-        if d >= 2:
-            C[..., 1] = _counts_1d(ny).view(1, ny, 1).expand(nx, ny, nz)
-        if d >= 3:
-            C[..., 2] = _counts_1d(nz).view(1, 1, nz).expand(nx, ny, nz)
-
-        return C
+        base_grad = self.jacobian.grad[0] if isinstance(self.jacobian.grad, list) else self.jacobian.grad
+        base_grad = getattr(base_grad, "gradient", base_grad)
+        directions = list(getattr(base_grad, "directions", []))
+        bnd_cond = getattr(base_grad, "bnd_cond", "Neumann")
+        if len(directions) != d:
+            return torch.full((nx, ny, nz, d), 2.0, device=device, dtype=dtype)
+        return _direction_participation_counts((nx, ny, nz), directions, device, dtype, bnd_cond)
 
     def preconditioner_diag(self, x, out=None, eta: float = 0.7, epsilon: float = 1e-8):
         """
@@ -506,7 +516,8 @@ class WeightedLogVectorialTotalVariation(Function):
         """
         Compute per-voxel directional participation counts for boundary handling.
 
-        Voxels participate in 1 direction at boundaries, 2 in interior.
+        For each finite-difference channel, voxels can participate as the anchor
+        of the forward edge and/or as the shifted neighbour of another edge.
 
         Args:
             shape: (nx, ny, nz, d) spatial + directional dimensions
@@ -517,28 +528,13 @@ class WeightedLogVectorialTotalVariation(Function):
             Tensor of shape (nx, ny, nz, d) with participation counts
         """
         nx, ny, nz, d = shape
-
-        def _counts_1d(n: int):
-            """Boundary=1, interior=2 for dimension of size n"""
-            c = torch.full((n,), 2.0, device=device, dtype=dtype)
-            if n > 0:
-                c[0] = 1.0
-                if n > 1:
-                    c[-1] = 1.0
-            return c
-
-        # Start with interior assumption (2.0 everywhere)
-        C = torch.full((nx, ny, nz, d), 2.0, device=device, dtype=dtype)
-
-        # Override with boundary counts per direction
-        if d >= 1:
-            C[..., 0] = _counts_1d(nx).view(nx, 1, 1).expand(nx, ny, nz)
-        if d >= 2:
-            C[..., 1] = _counts_1d(ny).view(1, ny, 1).expand(nx, ny, nz)
-        if d >= 3:
-            C[..., 2] = _counts_1d(nz).view(1, 1, nz).expand(nx, ny, nz)
-
-        return C
+        base_grad = self.jacobian.grad[0] if isinstance(self.jacobian.grad, list) else self.jacobian.grad
+        base_grad = getattr(base_grad, "gradient", base_grad)
+        directions = list(getattr(base_grad, "directions", []))
+        bnd_cond = getattr(base_grad, "bnd_cond", "Neumann")
+        if len(directions) != d:
+            return torch.full((nx, ny, nz, d), 2.0, device=device, dtype=dtype)
+        return _direction_participation_counts((nx, ny, nz), directions, device, dtype, bnd_cond)
 
     def _preconditioner_weights_core_fast(self, v_arr, eta: float = 0.7, epsilon: float = 1e-8):
         """

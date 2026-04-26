@@ -14,6 +14,7 @@ from recon_core.priors.vtv.preconditioners import (
     _ls_hessian_matrix,
     compute_precond_block,
 )
+from recon_core.core.gradients import Jacobian
 
 
 class _GradInfo:
@@ -89,6 +90,35 @@ def test_mm_block_projector_returns_symmetric_positive_blocks():
     assert torch.max(torch.abs(blocks[..., 0, 1] - blocks[..., 1, 0])) < 1e-5
     eigvals = torch.linalg.eigvalsh(blocks)
     assert torch.all(eigvals > 0)
+
+
+def test_directional_participation_counts_follow_actual_stencil_order():
+    vtv = object.__new__(WeightedVectorialTotalVariation)
+    vtv.jacobian = Jacobian(
+        voxel_sizes=(1.0, 1.0, 1.0),
+        stencil="6",
+        both_directions=False,
+        bnd_cond="Neumann",
+    )
+
+    counts = vtv._compute_directional_participation_counts(
+        (3, 4, 5, 3),
+        device=DEVICE,
+        dtype=torch.float32,
+    )
+
+    directions = vtv.jacobian.grad.directions
+    assert directions == [(0, 0, 1), (0, 1, 0), (1, 0, 0)]
+
+    # Channel 0 is z, not x. The old implementation used nx for this channel.
+    assert torch.all(counts[:, :, 0, 0] == 1)
+    assert torch.all(counts[:, :, -1, 0] == 1)
+    assert torch.all(counts[:, :, 1:-1, 0] == 2)
+
+    # Channel 2 is x.
+    assert torch.all(counts[0, :, :, 2] == 1)
+    assert torch.all(counts[-1, :, :, 2] == 1)
+    assert torch.all(counts[1:-1, :, :, 2] == 2)
 
 
 @pytest.mark.parametrize("method", ["mm_diag_block_maj", "mm_diag_block_tight"])
