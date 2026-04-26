@@ -95,7 +95,7 @@ def _make_wvtv_harness(
     )
     wvtv.bdc2a = _IdentityBDC2A()
     wvtv.smoothing = smoothing
-    wvtv.precond_method = "mm_diag"
+    wvtv.precond_method = "mm_diag_tight"
 
     weights = torch.ones(shape, device=DEVICE, dtype=torch.float64)
     weights[..., 0] *= 1.3

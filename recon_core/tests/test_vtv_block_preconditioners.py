@@ -9,7 +9,11 @@ require_vtv()
 DEVICE = torch.device("cpu")
 
 from recon_core.priors.vtv.vtv import WeightedVectorialTotalVariation
-from recon_core.priors.vtv.preconditioners import compute_precond_block
+from recon_core.priors.vtv.preconditioners import (
+    _ls_blocks_lowmem,
+    _ls_hessian_matrix,
+    compute_precond_block,
+)
 
 
 class _GradInfo:
@@ -64,7 +68,7 @@ def test_mm_block_returns_symmetric_positive_blocks():
     weights = torch.abs(torch.randn(3, 2, 2, 2, device=DEVICE)) + 0.5
 
     vtv = _make_block_vtv(j_field, s_field, weights, eps=1.0)
-    blocks = compute_precond_block(vtv, weights, "mm_block_diag", epsilon=1e-8)
+    blocks = compute_precond_block(vtv, weights, "mm_diag_block_maj", epsilon=1e-8)
 
     assert blocks.shape == (*weights.shape[:-1], 2, 2)
     assert torch.max(torch.abs(blocks[..., 0, 1] - blocks[..., 1, 0])) < 1e-5
@@ -72,14 +76,14 @@ def test_mm_block_returns_symmetric_positive_blocks():
     assert torch.all(eigvals > 0)
 
 
-def test_ls_block_diag_returns_symmetric_positive_blocks():
-    torch.manual_seed(12)
-    j_field = torch.randn(1, 1, 1, 2, 2, device=DEVICE)
-    s_field = torch.abs(torch.randn(1, 1, 1, 2, 2, device=DEVICE)) + 0.2
-    weights = torch.abs(torch.randn(1, 1, 1, 2, device=DEVICE)) + 0.3
+def test_mm_block_projector_returns_symmetric_positive_blocks():
+    torch.manual_seed(111)
+    j_field = torch.randn(3, 2, 2, 2, 3, device=DEVICE)
+    s_field = torch.abs(torch.randn(3, 2, 2, 2, 3, device=DEVICE)) + 0.2
+    weights = torch.abs(torch.randn(3, 2, 2, 2, device=DEVICE)) + 0.5
 
     vtv = _make_block_vtv(j_field, s_field, weights, eps=1.0)
-    blocks = compute_precond_block(vtv, weights, "ls_block_diag", epsilon=1e-8)
+    blocks = compute_precond_block(vtv, weights, "mm_diag_block_tight", epsilon=1e-8)
 
     assert blocks.shape == (*weights.shape[:-1], 2, 2)
     assert torch.max(torch.abs(blocks[..., 0, 1] - blocks[..., 1, 0])) < 1e-5
@@ -87,7 +91,7 @@ def test_ls_block_diag_returns_symmetric_positive_blocks():
     assert torch.all(eigvals > 0)
 
 
-@pytest.mark.parametrize("method", ["mm_block_diag", "ls_block_diag"])
+@pytest.mark.parametrize("method", ["mm_diag_block_maj", "mm_diag_block_tight"])
 def test_block_inverse_matches_identity(method):
     torch.manual_seed(13)
     j_field = torch.randn(1, 1, 1, 2, 2, device=DEVICE)
@@ -103,3 +107,34 @@ def test_block_inverse_matches_identity(method):
     target = torch.eye(2, device=DEVICE, dtype=ident.dtype)
     target = target.view(*((1,) * (ident.ndim - 2)), 2, 2).expand_as(ident)
     assert torch.allclose(ident, target, atol=1e-3, rtol=1e-3)
+
+
+def test_ls_block_diag_is_not_global_loewner_majoriser_of_full_ls_hessian():
+    """
+    LS block-diagonal extraction keeps only per-direction 2x2 blocks of the
+    full LS Hessian, so it is generally *not* a global Loewner majoriser.
+    """
+    j = torch.tensor(
+        [
+            [0.12573022, -0.13210486],
+            [0.64042265, 0.10490012],
+            [-0.53566937, 0.36159505],
+        ],
+        dtype=torch.float64,
+        device=DEVICE,
+    )  # shape (d=3, modalities=2)
+    eps = 1e-3
+
+    h_full = _ls_hessian_matrix(j, eps)
+    b_blocks = _ls_blocks_lowmem(j, eps)
+
+    d = j.shape[0]
+    h_block_diag = torch.zeros((2 * d, 2 * d), dtype=torch.float64, device=DEVICE)
+    for q in range(d):
+        h_block_diag[2 * q : 2 * q + 2, 2 * q : 2 * q + 2] = b_blocks[q]
+
+    delta = 0.5 * ((h_block_diag - h_full) + (h_block_diag - h_full).T)
+    eigvals = torch.linalg.eigvalsh(delta)
+
+    # Negative eigenvalue => block-diagonal approximation does not majorise full Hessian.
+    assert float(eigvals.min()) < -1e-2
