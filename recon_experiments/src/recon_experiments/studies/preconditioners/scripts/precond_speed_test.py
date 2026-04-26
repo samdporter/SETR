@@ -13,14 +13,16 @@ from typing import Iterable, List, Tuple
 
 import numpy as np
 import yaml
-from cil.optimisation.operators import BlockOperator, IdentityOperator, ZeroOperator
 from sirf.STIR import ImageData, SeparableGaussianImageFilter
 
 from recon_core.cil_extensions.framework.framework import EnhancedBlockDataContainer
 from recon_core.utils import get_pet_data, get_pet_data_multiple_bed_pos, get_spect_data
 from recon_core.utils.dynamic_range import apply_dynamic_range_scaling, dynamic_range_scale_sirf
 from recon_core.utils.sirf import get_array, get_filters
-from recon_experiments.runners.common import attach_prior_hessian, get_resampling_operators
+from recon_experiments.runners.common import (
+    build_shared_initial_estimates,
+    get_resampling_operators,
+)
 from recon_experiments.runners.dtnv_common import get_preconditioners, get_prior
 
 try:
@@ -106,16 +108,12 @@ def _build_geometry(args: SimpleNamespace, bpos: int):
         ct, pet_data, spect_data, initial_estimates = _prepare_data_2bpos(args)
 
     spect2pet = get_resampling_operators(args, pet_data, spect_data)
-    bo = BlockOperator(
-        IdentityOperator(pet_data["initial_image"]),
-        ZeroOperator(spect_data["initial_image"], pet_data["initial_image"]),
-        ZeroOperator(pet_data["initial_image"]),
+    shared_initial_estimates = build_shared_initial_estimates(
+        pet_data["initial_image"],
+        spect_data["initial_image"],
         spect2pet,
-        shape=(2, 2),
     )
-
-    combined = EnhancedBlockDataContainer(*bo.direct(initial_estimates).containers)
-    return ct, initial_estimates, combined, bo
+    return ct, shared_initial_estimates, shared_initial_estimates
 
 
 def _apply_scaling_and_delta(args: SimpleNamespace, combined: EnhancedBlockDataContainer) -> Tuple[float, float]:
@@ -165,7 +163,6 @@ def _build_priors(
     args: SimpleNamespace,
     ct,
     combined: EnhancedBlockDataContainer,
-    bo: BlockOperator,
     pet_scale: float,
     spect_scale: float,
 ):
@@ -173,13 +170,10 @@ def _build_priors(
         args,
         ct,
         combined,
-        bo,
         kappas=None,
         pet_scale=pet_scale,
         spect_scale=spect_scale,
     )
-    for prior in priors:
-        attach_prior_hessian(prior)
     return priors
 
 
@@ -295,10 +289,8 @@ def main() -> None:
 
         cfg_args = _load_base_config(base_dir, base_config, fixed_params)
 
-        ct, initial_estimates, combined, bo = _build_geometry(cfg_args, bpos)
+        ct, initial_estimates, combined = _build_geometry(cfg_args, bpos)
         pet_scale, spect_scale = _apply_scaling_and_delta(cfg_args, combined)
-        priors = _build_priors(cfg_args, ct, combined, bo, pet_scale, spect_scale)
-
         s_inv = _make_uniform_sinv(initial_estimates)
         all_funs = [None]
 
@@ -314,17 +306,34 @@ def main() -> None:
         results = []
         for precond_type, combine in precond_entries:
             cfg_args.precond_type = precond_type
-            cfg_args.precond_combine = combine or "harmonic"
-            precond = get_preconditioners(
-                cfg_args,
-                s_inv,
-                all_funs,
-                update_interval=1,
-                priors_list=priors,
-                initial_estimates=initial_estimates,
-            )
-            timings = _time_preconditioner(precond, algo, args.repeats, args.warmup)
-            mean, std, min_t, max_t = _summarize(timings)
+            cfg_args.precond_combine = combine or "majoriser"
+            status = "success"
+            error = ""
+            mean = std = min_t = max_t = float("nan")
+
+            try:
+                # Rebuild priors per method so the prior's internal preconditioner
+                # mode matches cfg_args.precond_type for this timing entry.
+                priors = _build_priors(cfg_args, ct, combined, pet_scale, spect_scale)
+                precond = get_preconditioners(
+                    cfg_args,
+                    s_inv,
+                    all_funs,
+                    update_interval=1,
+                    priors_list=priors,
+                    initial_estimates=initial_estimates,
+                )
+                timings = _time_preconditioner(precond, algo, args.repeats, args.warmup)
+                mean, std, min_t, max_t = _summarize(timings)
+            except Exception as exc:  # pragma: no cover - defensive benchmark robustness
+                status = "failed"
+                error = f"{type(exc).__name__}: {exc}"
+                logging.exception(
+                    "Benchmark failed for precond_type=%s combine=%s",
+                    precond_type,
+                    combine,
+                )
+
             results.append(
                 {
                     "sweep": sweep_label,
@@ -341,6 +350,8 @@ def main() -> None:
                     "pet_shape": str(get_array(initial_estimates[0]).shape),
                     "spect_shape": str(get_array(initial_estimates[1]).shape),
                     "device": "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu",
+                    "status": status,
+                    "error": error,
                 }
             )
 

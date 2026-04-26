@@ -62,6 +62,8 @@ def _build_override_list(args: argparse.Namespace) -> list[str]:
             f"beta={args.alpha}",
             f"initial_step_size={args.step_size}",
             f"num_epochs={args.epochs}",
+            # Sweep runs should use full preconditioning (no damping).
+            "precond_safety_scale=1.0",
             f"output_path={args.output}",
         ]
     )
@@ -85,7 +87,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--precond-combine",
         default="majoriser",
-        help="Combine mode: lehmer|harmonic|majoriser|magez",
+        help="Combine mode: none|lehmer|harmonic|majoriser|magez",
     )
     parser.add_argument("--lehmer-p", type=float, default=None, help="Lehmer mean p value")
     parser.add_argument(
@@ -110,6 +112,10 @@ def main() -> int:
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Avoid reporting an old status when reusing an existing output directory.
+    result_path = output_dir / "result.csv"
+    if result_path.exists():
+        result_path.unlink()
 
     logging.basicConfig(
         level=logging.INFO,
@@ -159,7 +165,6 @@ def main() -> int:
         "error": None if status == "success" else f"returncode={proc.returncode}",
     }
 
-    result_path = output_dir / "result.csv"
     with result_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(result.keys()))
         writer.writeheader()

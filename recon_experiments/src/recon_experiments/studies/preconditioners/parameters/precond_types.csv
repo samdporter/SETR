@@ -1,6 +1,6 @@
 precond_type,combine
-mm_diag,majoriser
-frob_diag,majoriser
-mm_diag_gershgorin,majoriser
-mm_block_diag,majoriser
-ls_block_diag,majoriser
+bsrem,none
+mm_diag_tight,majoriser
+mm_diag_gershgorin_maj,majoriser
+mm_diag_block_tight,majoriser
+mm_diag_block_maj,majoriser

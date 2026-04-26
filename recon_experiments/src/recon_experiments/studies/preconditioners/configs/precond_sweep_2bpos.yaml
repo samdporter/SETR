@@ -19,5 +19,17 @@ parameters:
 
 # Fixed parameters for all runs
 fixed_params:
-  num_epochs: 50
-  use_tof: true
+  num_epochs: 25
+  gamma_tnv: 0.02
+  relaxation_eta: 0.002
+  # Keep the sweep aligned with the existing 500-epoch 2bpos baseline.
+  use_tof: false
+  em_precond_smooth: true
+  em_precond_smoothing_fwhm: [5, 5, 5]
+  em_precond_cap_to_initial_max: false
+  em_precond_cap_to_initial_max_factor: 2.0
+  precond_cap_to_initial_max: false
+  precond_cap_to_initial_max_factor: 2.0
+  # Sweeps only need images/objectives for convergence analysis.
+  save_gradients: false
+  save_preconditioners: false

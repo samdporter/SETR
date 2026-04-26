@@ -28,12 +28,12 @@ Establish reference solutions by running long reconstructions for each alpha val
 
 **Submit to cluster (all alphas):**
 ```bash
-./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full
+./launch_baseline_recons.sh config_1bpos_anthro.yaml 1000 full
 ```
 
 ### Parameters
 - **Config**: `config_1bpos_anthro.yaml` (uses full phantom data)
-- **Epochs**: 200 (longer than sweep to ensure convergence)
+- **Epochs**: 1000 (longer than sweep to ensure convergence)
 - **Alpha values**: Read from `parameters/alphas.csv`
 - **Script**: Uses the proven `run_dtnv_1bpos.py` with config overrides
 - **Preconditioner**: `mm_block_diag` by default (override via `PRECOND_TYPE`)
@@ -78,9 +78,13 @@ Compare different preconditioners and step sizes by measuring convergence speed 
 ```bash
 ./launch_precond_sweep.sh precond_sweep_1bpos.yaml full
 ```
+To run repeated stochastic trials per setting:
+```bash
+SWEEP_REPEATS=5 ./launch_precond_sweep.sh precond_sweep_1bpos.yaml full
+```
 
 ### Current Configuration
-- **Preconditioners**: Defined in `parameters/precond_types.csv` (includes combine modes)
+- **Preconditioners**: Defined in `parameters/precond_types.csv` (includes `bsrem` data-only and TNV+data combine modes)
 - **Alphas**: Defined in `parameters/alphas.csv`
 - **Step sizes**: Defined in `parameters/step_sizes.csv`
 - **Epochs per job**: 50 (shorter than baseline)
@@ -153,8 +157,8 @@ For each test:
 
 ### 1. Run Baselines (Do This First!)
 ```bash
-# Submit baseline jobs (3 alphas × 200 epochs each)
-./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full
+# Submit baseline jobs (one alpha × 1000 epochs each with gamma_tnv=0.01)
+./launch_baseline_recons.sh config_1bpos_anthro.yaml 1000 full
 
 # Monitor
 qstat -u $USER | grep baseline
@@ -168,8 +172,11 @@ ls -la output/baselines_1bpos/*/baseline_metrics.json
 
 ### 3. Run Preconditioner Sweep
 ```bash
-# Submit sweep jobs (60 jobs × 48h each)
+# Submit sweep jobs (preconditioners × alphas × step sizes base combinations)
 ./launch_precond_sweep.sh precond_sweep_1bpos.yaml full
+
+# Or with 5 repeats per combination
+SWEEP_REPEATS=5 ./launch_precond_sweep.sh precond_sweep_1bpos.yaml full
 
 # Monitor
 qstat -u $USER | grep precond
@@ -201,9 +208,9 @@ xdg-open output/precond_1bpos_analysis/convergence_alpha_0.005.png
 
 All parameters are in `parameters/`:
 
-- **alphas.csv**: Alpha values to test (currently: 0.005, 0.05, 0.5)
-- **step_sizes.csv**: Step sizes to test (currently: 0.05, 0.1, 0.5, 1.0, 5.0)
-- **precond_types.csv**: Preconditioner types (currently: 5 types)
+- **alphas.csv**: Alpha values to test
+- **step_sizes.csv**: Step sizes to test
+- **precond_types.csv**: Preconditioner types (includes `bsrem`)
 
 **DO NOT modify these** without re-running baselines!
 
@@ -235,7 +242,7 @@ All parameters are in `parameters/`:
 tail -f output/baselines_1bpos/_logs/*.o*
 
 # Test locally first
-PRECOND_TYPE=mm_block_diag PRECOND_COMBINE=majoriser ./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 local
+PRECOND_TYPE=mm_block_diag PRECOND_COMBINE=majoriser ./launch_baseline_recons.sh config_1bpos_anthro.yaml 1000 local
 ```
 
 **Analysis script errors?**

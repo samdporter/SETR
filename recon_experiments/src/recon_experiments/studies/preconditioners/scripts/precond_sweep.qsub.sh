@@ -30,7 +30,7 @@ report_failure() {
     # Write detailed failure info to completion file
     if [ -n "${OUTPUT_DIR:-}" ]; then
         cat > "$OUTPUT_DIR/job_completion.txt" <<EOF
-precond_type=${PRECOND_TYPE:-unknown},combine=${PRECOND_COMBINE:-},alpha=${ALPHA:-unknown},step_size=${STEP_SIZE:-unknown},status=failed,return_code=$exit_code,end_time=$(date),host=$HOSTNAME,failure_reason=$failure_reason,failure_type=$failure_type,start_time=$START_TIME
+precond_type=${PRECOND_TYPE:-unknown},combine=${PRECOND_COMBINE:-},alpha=${ALPHA:-unknown},step_size=${STEP_SIZE:-unknown},repeat=${REPEAT:-1},status=failed,return_code=$exit_code,end_time=$(date),host=$HOSTNAME,failure_reason=$failure_reason,failure_type=$failure_type,start_time=$START_TIME
 EOF
     fi
 }
@@ -116,11 +116,18 @@ ALPHAS_FILE=${ALPHAS_FILE:-alphas.csv}
 STEP_SIZES_FILE=${STEP_SIZES_FILE:-step_sizes.csv}
 NUM_EPOCHS=${NUM_EPOCHS:-50}
 RECON_SCRIPT=${RECON_SCRIPT:-run_precond_sweep_single.py}
+SWEEP_REPEATS=${SWEEP_REPEATS:-1}
+
+if ! [[ "$SWEEP_REPEATS" =~ ^[0-9]+$ ]] || [ "$SWEEP_REPEATS" -lt 1 ]; then
+    report_failure 1 "Invalid SWEEP_REPEATS='$SWEEP_REPEATS' (must be positive integer)" "config"
+    exit 1
+fi
 
 log_with_timestamp "Base config: $BASE_CONFIG_FILE"
 log_with_timestamp "Epochs: $NUM_EPOCHS"
+log_with_timestamp "Sweep repeats: $SWEEP_REPEATS"
 
-# --- Read parameters (3-way combination: precond_type × alpha × step_size) ---
+# --- Read parameters (4-way combination: precond_type × alpha × step_size × repeat) ---
 log_with_timestamp "Reading parameter files..."
 
 if [ ! -f "$PARAM_DIR/$PRECOND_TYPES_FILE" ]; then
@@ -149,22 +156,28 @@ NUM_STEP_SIZES=${#STEP_SIZES[@]}
 log_with_timestamp "Total precond types: $NUM_PRECOND_TYPES"
 log_with_timestamp "Total alphas: $NUM_ALPHAS"
 log_with_timestamp "Total step sizes: $NUM_STEP_SIZES"
+TOTAL_BASE_COMBINATIONS=$((NUM_PRECOND_TYPES * NUM_ALPHAS * NUM_STEP_SIZES))
+TOTAL_TASKS=$((TOTAL_BASE_COMBINATIONS * SWEEP_REPEATS))
+log_with_timestamp "Total base combinations: $TOTAL_BASE_COMBINATIONS"
+log_with_timestamp "Total tasks with repeats: $TOTAL_TASKS"
 
 if [ "$NUM_PRECOND_TYPES" -eq 0 ] || [ "$NUM_ALPHAS" -eq 0 ] || [ "$NUM_STEP_SIZES" -eq 0 ]; then
     report_failure 1 "No parameters found in parameter files" "config"
     exit 0
 fi
 
-# Calculate 3-way indices
-# Task layout: iterate step_sizes (fastest), then alphas, then precond_types (slowest)
-STEP_SIZE_INDEX=$(( (TASK_ID - 1) % NUM_STEP_SIZES ))
-ALPHA_INDEX=$(( ((TASK_ID - 1) / NUM_STEP_SIZES) % NUM_ALPHAS ))
-PRECOND_TYPE_INDEX=$(( (TASK_ID - 1) / (NUM_STEP_SIZES * NUM_ALPHAS) ))
-
-if [ $PRECOND_TYPE_INDEX -ge $NUM_PRECOND_TYPES ]; then
+# Calculate 4-way indices
+# Task layout: repeat (fastest), then step_sizes, then alphas, then precond_types (slowest)
+if [ "$TASK_ID" -gt "$TOTAL_TASKS" ]; then
     log_with_timestamp "Task ID $TASK_ID exceeds available parameter combinations. Exiting."
     exit 0
 fi
+
+REPEAT_INDEX=$(( (TASK_ID - 1) % SWEEP_REPEATS ))
+COMBINATION_INDEX=$(( (TASK_ID - 1) / SWEEP_REPEATS ))
+STEP_SIZE_INDEX=$(( COMBINATION_INDEX % NUM_STEP_SIZES ))
+ALPHA_INDEX=$(( (COMBINATION_INDEX / NUM_STEP_SIZES) % NUM_ALPHAS ))
+PRECOND_TYPE_INDEX=$(( COMBINATION_INDEX / (NUM_STEP_SIZES * NUM_ALPHAS) ))
 
 PRECOND_LINE=${PRECOND_TYPES[$PRECOND_TYPE_INDEX]}
 IFS=',' read -r PRECOND_TYPE PRECOND_COMBINE <<< "$PRECOND_LINE"
@@ -172,14 +185,18 @@ PRECOND_TYPE="${PRECOND_TYPE//[$'\t\r\n ']/}"
 PRECOND_COMBINE="${PRECOND_COMBINE//[$'\t\r\n ']/}"
 ALPHA=${ALPHAS[$ALPHA_INDEX]}
 STEP_SIZE=${STEP_SIZES[$STEP_SIZE_INDEX]}
+REPEAT=$((REPEAT_INDEX + 1))
 
-log_with_timestamp "Task $TASK_ID: precond_type=$PRECOND_TYPE, combine=$PRECOND_COMBINE, alpha=$ALPHA, step_size=$STEP_SIZE"
+log_with_timestamp "Task $TASK_ID: precond_type=$PRECOND_TYPE, combine=$PRECOND_COMBINE, alpha=$ALPHA, step_size=$STEP_SIZE, repeat=$REPEAT/$SWEEP_REPEATS"
 
 # --- Paths for this job ---
 if [ -n "$PRECOND_COMBINE" ]; then
     OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/precond_${PRECOND_TYPE}_combine_${PRECOND_COMBINE}_alpha_${ALPHA}_step_${STEP_SIZE}"
 else
     OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/precond_${PRECOND_TYPE}_alpha_${ALPHA}_step_${STEP_SIZE}"
+fi
+if [ "$SWEEP_REPEATS" -gt 1 ]; then
+    OUTPUT_DIR="${OUTPUT_DIR}_rep_${REPEAT}"
 fi
 WORKING_DIR="$OUTPUT_DIR/tmp"
 
@@ -213,10 +230,7 @@ for attempt in $(seq 1 $MAX_RETRIES); do
             [ -n "$ov" ] && OVERRIDE_ARGS+=(--override "$ov")
         done
     fi
-    COMBINE_ARGS=()
-    if [ -n "$PRECOND_COMBINE" ]; then
-        COMBINE_ARGS=(--precond-combine "$PRECOND_COMBINE")
-    fi
+    COMBINE_ARGS=(--precond-combine "$PRECOND_COMBINE")
 
     if python "$SCRIPTS_DIR/$RECON_SCRIPT" \
         --config "$BASE_DIR/configs/$BASE_CONFIG_FILE" \
@@ -257,7 +271,7 @@ if [ $RETURN_CODE -eq 0 ]; then
     log_with_timestamp "Job completed successfully at: $END_TIME"
 
     cat > "$OUTPUT_DIR/job_completion.txt" <<EOF
-precond_type=$PRECOND_TYPE,combine=$PRECOND_COMBINE,alpha=$ALPHA,step_size=$STEP_SIZE,status=completed,end_time=$END_TIME,host=$HOSTNAME,start_time=$START_TIME
+precond_type=$PRECOND_TYPE,combine=$PRECOND_COMBINE,alpha=$ALPHA,step_size=$STEP_SIZE,repeat=$REPEAT,status=completed,end_time=$END_TIME,host=$HOSTNAME,start_time=$START_TIME
 EOF
 else
     log_with_timestamp "Job failed with return code: $RETURN_CODE at: $END_TIME"

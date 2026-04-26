@@ -10,13 +10,41 @@ ALPHAS_FILE="$SCRIPT_DIR/parameters/alphas.csv"
 PRECOND_TYPES_FILE="$SCRIPT_DIR/parameters/precond_types.csv"
 STEP_SIZES_FILE="$SCRIPT_DIR/parameters/step_sizes.csv"
 
+infer_bpos() {
+    local value="${1:-1}"
+    value="$(basename "$value" | tr '[:upper:]' '[:lower:]')"
+    case "$value" in
+        2|2bpos|*2bpos*) printf "2" ;;
+        1|1bpos|*1bpos*) printf "1" ;;
+        *)
+            echo "Error: Could not infer bed positions from '$1'. Use 1, 2, 1bpos, 2bpos, or a matching config/sweep name." >&2
+            exit 1
+            ;;
+    esac
+}
+
+BPOS="$(infer_bpos "${1:-1}")"
+BASELINE_CONFIG_HINT="config_${BPOS}bpos.yaml"
+if [[ "$BPOS" == "1" ]]; then
+    BASELINE_CONFIG_HINT="config_1bpos_anthro.yaml"
+fi
+SWEEP_CONFIG_HINT="precond_sweep_${BPOS}bpos.yaml"
+BASELINE_DIR="$OUTPUT_DIR/baselines_${BPOS}bpos"
+SWEEP_DIR="$OUTPUT_DIR/precond_${BPOS}bpos"
+ANALYSIS_DIR="$OUTPUT_DIR/precond_${BPOS}bpos_analysis"
+
+SWEEP_REPEATS="${SWEEP_REPEATS:-1}"
+if ! [[ "$SWEEP_REPEATS" =~ ^[0-9]+$ ]] || [ "$SWEEP_REPEATS" -lt 1 ]; then
+    SWEEP_REPEATS=1
+fi
+
 echo "=== Preconditioner Experiment Status ==="
+echo "Bed positions: $BPOS"
 echo ""
 
 # Check baselines
 echo "BASELINE RECONSTRUCTIONS (Stage 1):"
 echo "-----------------------------------"
-BASELINE_DIR="$OUTPUT_DIR/baselines_1bpos"
 if [ -d "$BASELINE_DIR" ]; then
     TOTAL_BASELINES=$(find "$BASELINE_DIR" -maxdepth 1 -type d -name "baseline_alpha_*" | wc -l)
     COMPLETED_BASELINES=$(find "$BASELINE_DIR" -name "baseline_metrics.json" | wc -l)
@@ -44,14 +72,13 @@ if [ -d "$BASELINE_DIR" ]; then
     fi
 else
     echo "  ❌ No baselines found"
-    echo "      Run: ./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full"
+    echo "      Run: ./launch_baseline_recons.sh $BASELINE_CONFIG_HINT 200 full"
 fi
 echo ""
 
 # Check sweep results
 echo "PRECONDITIONER SWEEP (Stage 2):"
 echo "-------------------------------"
-SWEEP_DIR="$OUTPUT_DIR/precond_1bpos"
 if [ -d "$SWEEP_DIR" ]; then
     TOTAL_SWEEP=$(find "$SWEEP_DIR" -maxdepth 1 -type d -name "precond_*" | wc -l)
     COMPLETED_SWEEP=$(find "$SWEEP_DIR" -name "result.csv" | wc -l)
@@ -83,14 +110,13 @@ if [ -d "$SWEEP_DIR" ]; then
     fi
 else
     echo "  ❌ No sweep results found"
-    echo "      Run: ./launch_precond_sweep.sh precond_sweep_1bpos.yaml full"
+    echo "      Run: ./launch_precond_sweep.sh $SWEEP_CONFIG_HINT full"
 fi
 echo ""
 
 # Check analysis results
 echo "ANALYSIS RESULTS (Stage 3):"
 echo "---------------------------"
-ANALYSIS_DIR="$OUTPUT_DIR/precond_1bpos_analysis"
 if [ -d "$ANALYSIS_DIR" ]; then
     if [ -f "$ANALYSIS_DIR/analysis_results.csv" ]; then
         NUM_ANALYZED=$(tail -n +2 "$ANALYSIS_DIR/analysis_results.csv" | wc -l)
@@ -109,7 +135,7 @@ if [ -d "$ANALYSIS_DIR" ]; then
 else
     if [ -d "$SWEEP_DIR" ] && [ $COMPLETED_SWEEP -gt 0 ] && [ -d "$BASELINE_DIR" ] && [ $COMPLETED_BASELINES -gt 0 ]; then
         echo "  ⏳ Ready to analyze!"
-        echo "      Run: python scripts/analyze_precond_sweep.py --sweep precond_1bpos --baseline baselines_1bpos"
+        echo "      Run: python scripts/analyze_precond_sweep.py --sweep precond_${BPOS}bpos --baseline baselines_${BPOS}bpos"
     else
         echo "  ⏳ Waiting for baselines and sweep to complete"
     fi
@@ -137,7 +163,7 @@ echo ""
 
 echo "=== Next Steps ==="
 if [ ! -d "$BASELINE_DIR" ] || [ $COMPLETED_BASELINES -eq 0 ]; then
-    echo "1. Run baselines: ./launch_baseline_recons.sh config_1bpos_anthro.yaml 200 full"
+    echo "1. Run baselines: ./launch_baseline_recons.sh $BASELINE_CONFIG_HINT 200 full"
 elif [ -f "$ALPHAS_FILE" ]; then
     EXPECTED_BASELINES=$(tail -n +2 "$ALPHAS_FILE" | wc -l)
     if [ $COMPLETED_BASELINES -lt $EXPECTED_BASELINES ]; then
@@ -145,12 +171,18 @@ elif [ -f "$ALPHAS_FILE" ]; then
     fi
 fi
 if [ ! -d "$SWEEP_DIR" ] || [ $COMPLETED_SWEEP -eq 0 ]; then
-    echo "2. Run sweep: ./launch_precond_sweep.sh precond_sweep_1bpos.yaml full"
+    echo "2. Run sweep: ./launch_precond_sweep.sh $SWEEP_CONFIG_HINT full"
 elif [ -f "$PRECOND_TYPES_FILE" ] && [ -f "$ALPHAS_FILE" ] && [ -f "$STEP_SIZES_FILE" ]; then
-    EXPECTED_SWEEP=$(( $(tail -n +2 "$PRECOND_TYPES_FILE" | wc -l) * $(tail -n +2 "$ALPHAS_FILE" | wc -l) * $(tail -n +2 "$STEP_SIZES_FILE" | wc -l) ))
+    BASE_SWEEP_COMBINATIONS=$(( $(tail -n +2 "$PRECOND_TYPES_FILE" | wc -l) * $(tail -n +2 "$ALPHAS_FILE" | wc -l) * $(tail -n +2 "$STEP_SIZES_FILE" | wc -l) ))
+    DETECTED_REPEATS=$(find "$SWEEP_DIR" -maxdepth 1 -type d -name "precond_*_rep_*" 2>/dev/null | sed -n 's/.*_rep_\([0-9][0-9]*\)$/\1/p' | sort -n | tail -1)
+    EFFECTIVE_REPEATS="$SWEEP_REPEATS"
+    if [ -n "$DETECTED_REPEATS" ] && [ "$DETECTED_REPEATS" -gt "$EFFECTIVE_REPEATS" ]; then
+        EFFECTIVE_REPEATS="$DETECTED_REPEATS"
+    fi
+    EXPECTED_SWEEP=$((BASE_SWEEP_COMBINATIONS * EFFECTIVE_REPEATS))
     if [ $COMPLETED_SWEEP -lt $EXPECTED_SWEEP ]; then
         echo "2. Wait for sweep to complete ($COMPLETED_SWEEP/$EXPECTED_SWEEP done)"
-        echo "   Monitor: python scripts/analyze_precond_sweep.py --sweep precond_1bpos --baseline baselines_1bpos --watch"
+        echo "   Monitor: python scripts/analyze_precond_sweep.py --sweep precond_${BPOS}bpos --baseline baselines_${BPOS}bpos --watch"
     else
         echo "3. Review results: cat $ANALYSIS_DIR/summary_report.md"
     fi

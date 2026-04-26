@@ -43,7 +43,6 @@ from recon_core.cil_extensions.callbacks import (
     SaveObjectiveCallback,
     SavePreconditionerCallback,
 )
-from recon_experiments.runners.common import attach_prior_hessian
 from recon_experiments.runners.dtnv_common import get_probabilities
 import time
 
@@ -136,8 +135,6 @@ def run_baseline(
     if precond_type != "bsrem":
         logging.info(f"Creating priors for preconditioner (hessian={hessian_type})...")
         priors_for_precond = create_prior_for_test(alpha, setup_data, args, hessian_type)
-        for prior in priors_for_precond:
-            attach_prior_hessian(prior)
     else:
         priors_for_precond = priors_for_objective
 
