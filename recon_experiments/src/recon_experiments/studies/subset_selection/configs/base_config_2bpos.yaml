@@ -1,0 +1,89 @@
+# Base configuration for subset selection experiments
+# Oxford patient data - two bed positions
+
+bpos: 2
+
+# Baseline-equivalent weighting: alpha=beta=1 with gamma_tnv=0.01.
+alpha: 1
+beta: 1
+delta: null
+
+# Subset configuration
+# Use equal PET/SPECT counts so paired mode is well-defined in 2bpos.
+num_subsets: [9, 9]  # [PET per bed, SPECT]
+
+# Reconstruction parameters
+num_epochs: 25  # Will be overridden to 1000 for convergence reference
+initial_step_size: 1
+relaxation_eta: 0.002
+variance_reduction: "svrg"
+prior_updates_per_epoch: null
+snapshot_interval_factor: 1.0
+precond_combine: "majoriser"
+block_scalar_reduction: "diag"
+precond_safety_scale: 0.8
+
+# Kappa weighting
+use_kappa: false
+
+# TNV (vectorial) prior settings - DTNV only
+use_tnv_prior: true
+gamma_tnv: 0.01
+use_log_tnv: false
+directional_tnv: true
+tail_singular_values: null
+stable: false
+tnv_both_directions: false
+tnv_stencil: "6"
+tnv_max_step: 1
+tnv_bnd_cond: "Neumann"
+smoothing: "charbonnier"
+
+# No modality-specific priors for these experiments
+use_modality_specific_priors: false
+no_prior: false
+
+# Resolution modeling
+pet_gauss_fwhm: [5.61, 4.83, 4.93]
+spect_gauss_fwhm: [6.8, 6.8, 6.8]
+spect_res: [1.31, 0.027, false]
+use_zoom_registration: false
+
+# Forward model settings
+use_tof: false
+
+# Data paths
+pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
+spect_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/SPECT"
+output_path: "/home/sam/working/synergistic_recon/recon_experiments/src/recon_experiments/studies/subset_selection/output/test_2bpos"
+working_path: "/home/sam/working/synergistic_recon/tmp"
+
+# Runtime settings
+save_images: false
+save_gradients: false
+save_preconditioners: false
+seed: 42
+no_gpu: false
+keep_all_views_in_cache: true
+support_mask_from_sensitivity: true
+support_mask_rel_threshold: 0.001
+support_mask_abs_threshold: 0.0
+em_precond_smooth: true
+em_precond_smoothing_fwhm: [5, 5, 5]
+em_precond_cap_to_initial_max: true
+precond_cap_to_initial_max: true
+profile: false
+flip: false
+use_scatter: true
+
+# Metrics computation (for convergence comparison)
+compute_metrics: true
+metrics_interval: null
+reference_path: null
+mask_threshold: 0.01
+metrics_normalization: "range"
+
+# Experimental parameters (set by sweep)
+# subset_mode: "separate" or "paired"
+# prior_mode: "always" or "subset"
+# precond_type: "bsrem", "mm_diag_gershgorin_maj", or "mm_diag_block_maj"

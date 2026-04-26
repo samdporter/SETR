@@ -17,6 +17,10 @@ SCRIPTS_DIR="$FUNC_DIR/scripts"
 SWEEP_CONFIG="${1:-sweep_main_experiments.yaml}"
 MODE="${2:-full}"
 
+if [ "$MODE" = "local" ]; then
+    export LOCAL_RUN_ID="${LOCAL_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+fi
+
 show_usage() {
     echo "=== SETR Subset Selection Sweep Launcher ==="
     echo "Usage: $0 [sweep_config.yaml] [mode]"
@@ -151,7 +155,11 @@ if [ "$TOTAL_JOBS" -eq 0 ]; then
 fi
 
 # Prepare sweep output + logs
-SWEEP_OUT_DIR="$FUNC_DIR/output/$SWEEP_NAME"
+OUTPUT_ROOT="${SUBSET_OUTPUT_ROOT:-$FUNC_DIR/output}"
+if [ "$MODE" = "local" ] && [ -n "${LOCAL_RUN_ID:-}" ] && [ -z "${SUBSET_OUTPUT_ROOT:-}" ]; then
+    OUTPUT_ROOT="$FUNC_DIR/output/local_runs/$LOCAL_RUN_ID"
+fi
+SWEEP_OUT_DIR="$OUTPUT_ROOT/$SWEEP_NAME"
 LOG_DIR="$SWEEP_OUT_DIR/_logs"
 mkdir -p "$LOG_DIR"
 
@@ -170,6 +178,9 @@ case "$MODE" in
     "local")
         echo ""
         echo "LOCAL TEST MODE: Running first parameter combination locally"
+        if [ -n "${LOCAL_RUN_ID:-}" ]; then
+            echo "Local run ID: $LOCAL_RUN_ID"
+        fi
         echo ""
 
         # Build override arguments
@@ -191,9 +202,24 @@ case "$MODE" in
             OVERRIDES="$OVERRIDES gamma_tnv=$GAMMA"
         fi
 
+        RUN_NAME="subset"
+        if [ -n "${SUBSET_MODE:-}" ]; then
+            RUN_NAME="${RUN_NAME}_${SUBSET_MODE}"
+        fi
+        if [ -n "${PRIOR_MODE:-}" ]; then
+            RUN_NAME="${RUN_NAME}_prior_${PRIOR_MODE}"
+        fi
+        if [ -n "${PRECOND_TYPE:-}" ]; then
+            RUN_NAME="${RUN_NAME}_precond_${PRECOND_TYPE}"
+        fi
+        if [ -n "${GAMMA:-}" ]; then
+            RUN_NAME="${RUN_NAME}_gamma_${GAMMA}"
+        fi
+        RUN_NAME="${RUN_NAME//[^A-Za-z0-9._-]/_}"
+
         echo "Testing: $OVERRIDES"
 
-        OUTPUT_DIR="$SWEEP_OUT_DIR/local_test"
+        OUTPUT_DIR="$SWEEP_OUT_DIR/$RUN_NAME"
         mkdir -p "$OUTPUT_DIR"
 
         cd "$BASE_DIR"

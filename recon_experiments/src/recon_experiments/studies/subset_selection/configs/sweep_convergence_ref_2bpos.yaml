@@ -1,0 +1,26 @@
+# Convergence reference runs sweep configuration for 2 bed positions
+# N gamma values × 1 config
+
+sweep_name: "subset_selection_convergence_2bpos"
+base_config: "base_config_2bpos.yaml"
+script: "run_subset_selection.py"
+
+# SGE resource requirements
+sge:
+  runtime: "168:00:00"
+  memory: "95G"
+  cores: 1
+  queue: null
+  gpu: true
+
+# Parameter sweep - gamma only
+parameters:
+  gammas_file: "gammas.csv"
+
+# Fixed parameters for convergence reference
+fixed_params:
+  num_epochs: 1000
+  subset_mode: "separate"
+  prior_mode: "always"
+  precond_type: "mm_diag_block_maj"
+  seed: 42
