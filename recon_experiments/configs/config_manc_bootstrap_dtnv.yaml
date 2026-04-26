@@ -31,7 +31,7 @@ tnv_stencil: "18"
 tnv_max_step: 1
 tnv_bnd_cond: "Neumann"
 hessian_type: "slow"
-precond_type: "vtv"
+precond_type: "mm_diag_tight"
 
 # No modality-specific priors for these experiments
 use_modality_specific_priors: false

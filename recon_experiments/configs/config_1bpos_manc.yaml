@@ -9,6 +9,10 @@ use_kappa: false
 initial_step_size: 1.0
 relaxation_eta: 0.01
 use_scatter: true
+support_mask_from_spect_attenuation: true
+support_mask_spect_attn_rel_threshold: 0.0
+support_mask_spect_attn_abs_threshold: 0.01
+save_support_mask: true
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true
@@ -23,6 +27,12 @@ directional_tnv: true
 tail_singular_values: null
 stable: false
 variance_reduction: "svrg" # can be "svrg", "saga", or "none"
+em_precond_smooth: true
+em_precond_smoothing_fwhm: [5, 5, 5]
+em_precond_cap_to_initial_max: false
+em_precond_cap_to_initial_max_factor: 1.0
+precond_cap_to_initial_max: false
+precond_cap_to_initial_max_factor: 1.0
 
 # Modality-specific TV prior settings
 use_modality_specific_priors: false

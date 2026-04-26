@@ -10,7 +10,7 @@ relaxation_eta: 0.02
 both_directions: false
 use_scatter: true
 update_interval: 21
-precond_type: "mm_block_diag"
+precond_type: "mm_diag_block_maj"
 variance_reduction: "svrg" # can be "svrg", "saga", or "none"
 
 # TNV (vectorial) prior settings

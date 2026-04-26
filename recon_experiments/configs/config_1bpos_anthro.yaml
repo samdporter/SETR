@@ -2,8 +2,9 @@
 num_subsets: [18, 18]
 num_epochs: 25
 initial_step_size: 1
+initial_iteration_offset: 0
 update_interval: 36
-relaxation_eta: 0.01
+relaxation_eta: 0.0
 use_scatter: true
 variance_reduction: "svrg" # can be "svrg", "saga", or "none"
 
@@ -16,7 +17,14 @@ delta_divisor: 20.0
 epsilon_divisor: 100.0  # Epsilon = dynamic_range / divisor (for log TNV)
 prior_updates_per_epoch: null
 snapshot_interval_factor: 1.0  # Update SVRG snapshot every epoch (was 2x)
-precond_type: "mm_block_diag"
+precond_type: "mm_diag_block_maj"
+em_precond_smooth: true
+em_precond_smoothing_fwhm: [5, 5, 5]
+em_precond_cap_to_initial_max: false
+em_precond_cap_to_initial_max_factor: 2.0
+precond_cap_to_initial_max: false
+precond_cap_to_initial_max_factor: 2.0
+precond_freeze_epochs: 50
 
 # TNV (vectorial) prior settings
 use_tnv_prior: true
@@ -29,7 +37,7 @@ tnv_bnd_cond: "Neumann"
 directional_tnv: true
 tnv_both_directions: false
 tail_singular_values: null
-stable: false
+stable: true
 smoothing: 'charbonnier' # can be charbonnier, fair or perona_malik
 
 # Modality-specific TV prior settings
@@ -54,8 +62,16 @@ no_gpu: false
 keep_all_views_in_cache: true
 use_tof: false
 
+#== Support masks
+support_mask_from_spect_attenuation: false
+support_mask_spect_attn_rel_threshold: 0.0
+support_mask_spect_attn_abs_threshold: 0.01
+save_support_mask: true
+
 pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short"
 spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+pet_initial_image_path: null
+spect_initial_image_path: null
 output_path: "/home/sam/working/synergistic_recon/output/test_anthro"
 working_path: "/home/sam/working/synergistic_recon/tmp"
 

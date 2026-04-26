@@ -1,7 +1,9 @@
 # Base configuration for subset selection experiments
 # Anthropomorphic phantom - single bed position
 
-# Data fidelity weights (alpha gets scaled by gradient energy scaling)
+bpos: 1
+
+# Baseline-equivalent weighting: alpha=beta=1 with gamma_tnv=0.01.
 alpha: 1
 beta: 1
 delta: null
@@ -10,40 +12,46 @@ delta: null
 num_subsets: [18, 18]  # [PET, SPECT]
 
 # Reconstruction parameters
-num_epochs: 100  # Will be overridden to 10000 for convergence reference
+num_epochs: 25  # Will be overridden to 1000 for convergence reference
 initial_step_size: 1
-relaxation_eta: 0.01
+relaxation_eta: 0.002
 variance_reduction: "svrg"
 prior_updates_per_epoch: null
+snapshot_interval_factor: 1.0
+precond_combine: "majoriser"
+block_scalar_reduction: "diag"
+precond_safety_scale: 1.0
 
 # Kappa weighting
 use_kappa: false
 
 # TNV (vectorial) prior settings - DTNV only
 use_tnv_prior: true
-gamma_tnv: 1.0  # Will be swept: [10, 100, 1000]
+gamma_tnv: 0.01
+use_log_tnv: false
 directional_tnv: true
 tail_singular_values: null
-stable: false
-tnv_both_directions: true
-tnv_stencil: "18"
+stable: true
+tnv_both_directions: false
+tnv_stencil: "6"
 tnv_max_step: 1
-tnv_bnd_cond: "Periodic"
-hessian_type: "slow"
+tnv_bnd_cond: "Neumann"
+smoothing: "charbonnier"
 
 # No modality-specific priors for these experiments
 use_modality_specific_priors: false
 no_prior: false
 
 # Resolution modeling
-pet_gauss_fwhm: [5.1, 4.9, 4.9]  # Mediso Anyscan at 10cm
-spect_gauss_fwhm: [6.7, 6.7, 6.7]
-spect_res: [0.81, 0.03, false]  # Analytical collimator resolution
+pet_gauss_fwhm: [5.61, 4.83, 4.93]  # FROM 710 acceptance testing at UCL (10cm)
+spect_gauss_fwhm: [6.8, 6.8, 6.8]  # FROM bremss data anyscan
+spect_res: [1.31, 0.027, false]  # Analytical collimator resolution for SPECT
+use_zoom_registration: false
 
 # Data paths
 pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short"
 spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
-output_path: "/home/sam/working/synergistic_recon/functionality/subset_selection/output/test"
+output_path: "/home/sam/working/synergistic_recon/recon_experiments/src/recon_experiments/studies/subset_selection/output/test"
 working_path: "/home/sam/working/synergistic_recon/tmp"
 
 # Runtime settings
@@ -53,6 +61,14 @@ save_preconditioners: false
 seed: 42  # Fixed seed for reproducibility
 no_gpu: false
 keep_all_views_in_cache: true
+use_tof: false
+support_mask_from_sensitivity: true
+support_mask_rel_threshold: 0.001
+support_mask_abs_threshold: 0.0
+em_precond_smooth: true
+em_precond_smoothing_fwhm: [5, 5, 5]
+em_precond_cap_to_initial_max: false
+precond_cap_to_initial_max: false
 profile: false
 flip: false
 use_scatter: true
@@ -67,4 +83,4 @@ metrics_normalization: "range"  # Normalization for NRMSE/NMAE
 # Experimental parameters (set by sweep)
 # subset_mode: "separate" or "paired"
 # prior_mode: "always" or "subset"
-# precond_type: "bsrem", "vtv_svd_principal_alpha", or "vtv_frobenius_surrogate_pd"
+# precond_type: "bsrem", "mm_diag_gershgorin_maj", or "mm_diag_block_maj"

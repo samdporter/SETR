@@ -102,7 +102,7 @@ else
     BASE_DIR="$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
 fi
 
-FUNC_DIR="$BASE_DIR/functionality/subset_selection"
+FUNC_DIR="$BASE_DIR/studies/subset_selection"
 PARAM_DIR="$FUNC_DIR/parameters"
 CONFIG_DIR="$FUNC_DIR/configs"
 OUTPUT_BASE_DIR="$FUNC_DIR/output"

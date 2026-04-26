@@ -65,6 +65,25 @@ cd recon_experiments/src/recon_experiments/sweeps
 python scripts/analyze_sweep_results.py --sweep-dir output/sweep_name
 ```
 
+### Running Current Studies
+
+To launch the subset-selection and preconditioner studies on both the phantom
+and patient datasets:
+
+```bash
+cd recon_experiments/src/recon_experiments/studies
+
+# Submit one cluster test job per study stage
+./launch_subset_precond_studies.sh test
+
+# Submit the full phantom + patient study set
+./launch_subset_precond_studies.sh full
+```
+
+The combined launcher submits subset-selection runs immediately, runs
+preconditioner baselines for the 1-bed phantom and 2-bed patient configs, waits
+for those baselines, then submits the preconditioner sweeps.
+
 ### HPC/Cluster Workflows
 
 ```bash

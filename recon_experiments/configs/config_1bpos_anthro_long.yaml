@@ -2,8 +2,9 @@
 num_subsets: [18, 18]
 num_epochs: 25
 initial_step_size: 1
+initial_iteration_offset: 0
 update_interval: 36
-precond_type: "mm_block_diag"
+precond_type: "mm_diag_block_maj"
 relaxation_eta: 0.01
 use_scatter: true
 variance_reduction: "svrg" # can be "svrg", "saga", or "none"

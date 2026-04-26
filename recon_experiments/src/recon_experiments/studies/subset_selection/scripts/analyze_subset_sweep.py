@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -27,32 +28,18 @@ def parse_config_from_dirname(dirname: str) -> Dict[str, str]:
     """Extract configuration from directory name."""
     # Expected format: subset_<mode>_prior_<mode>_precond_<type>_gamma_<value>
     parts = {}
-    
-    if 'subset_separate' in dirname:
-        parts['subset_mode'] = 'separate'
-    elif 'subset_paired' in dirname:
-        parts['subset_mode'] = 'paired'
-    
-    if 'prior_always' in dirname:
-        parts['prior_mode'] = 'always'
-    elif 'prior_subset' in dirname:
-        parts['prior_mode'] = 'subset'
-    
-    if 'precond_bsrem' in dirname:
-        parts['precond_type'] = 'bsrem'
-    elif 'precond_vtv_svd_principal_alpha' in dirname:
-        parts['precond_type'] = 'vtv_svd_principal_alpha'
-    elif 'precond_vtv_frobenius_surrogate_pd' in dirname:
-        parts['precond_type'] = 'vtv_frobenius_surrogate_pd'
-    
-    # Extract gamma value
-    if 'gamma_' in dirname:
-        gamma_part = dirname.split('gamma_')[1].split('_')[0]
-        try:
-            parts['gamma_tnv'] = float(gamma_part)
-        except ValueError:
-            parts['gamma_tnv'] = None
-    
+    match = re.search(
+        r"subset_(?P<subset_mode>.+?)_prior_(?P<prior_mode>.+?)_precond_(?P<precond_type>.+?)_gamma_(?P<gamma_tnv>.+)$",
+        dirname,
+    )
+    if not match:
+        return parts
+
+    parts.update({k: v for k, v in match.groupdict().items() if k != "gamma_tnv"})
+    try:
+        parts["gamma_tnv"] = float(match.group("gamma_tnv"))
+    except ValueError:
+        parts["gamma_tnv"] = None
     return parts
 
 

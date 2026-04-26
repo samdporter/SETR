@@ -2,6 +2,9 @@
 
 Experimental framework for testing different subset organization and prior update strategies in DTNV reconstruction with SVRG optimization.
 
+The study runner now supports both 1-bed and 2-bed PET reconstruction spaces.
+The 2-bed paired mode requires equal PET and SPECT subset counts; the provided 2-bed base config enforces that.
+
 ## Overview
 
 This experiment investigates how different subset organization schemes and prior update frequencies affect convergence efficiency in stochastic variance-reduced gradient (SVRG) reconstruction. The key hypothesis is that all configurations should converge to the same solution (due to SVRG's variance reduction), but with different convergence rates.
@@ -16,13 +19,12 @@ This experiment investigates how different subset organization schemes and prior
 - `always`: Prior in outer SumFunction, evaluated every iteration
 - `subset`: Prior as separate function in SVRG sampler with adjusted probability
 
-**3. Preconditioner Type (3 variants)**
-- `bsrem`: Basic BSREM preconditioner only
-- `vtv_svd_principal_alpha`: VTV preconditioner with SVD principal eigenvalue
-- `vtv_frobenius_surrogate_pd`: VTV preconditioner with Frobenius surrogate
+**3. Preconditioner Type**
+- Defined in `parameters/precond_types.csv`
 
-**4. Prior Weight (3 values)**
-- gamma_tnv: 10, 100, 1000
+**4. Prior Weight**
+- Defined in `parameters/gammas.csv`
+- Current baseline-aligned setting: `gamma_tnv=0.01` with `alpha=beta=1`
 
 ### Prior Sampling Probabilities
 
@@ -34,27 +36,30 @@ To maintain approximately equal prior gradient evaluations across configurations
 
 ### Total Experiments
 
-**Main experiments**: 2 × 2 × 3 × 3 = **36 runs** @ 100 epochs each
+**Main experiments**: `subset_modes × prior_modes × precond_types × gammas` @ 100 epochs each
 
-**Convergence references**: 3 runs @ 10,000 epochs each
-- Configuration: separate, always, vtv_svd_principal_alpha
-- Gamma values: 10, 100, 1000
+**Convergence references**: one run per gamma @ 1,000 epochs each
+- Configuration: separate, always, mm_diag_block_maj
 
-**Grand total**: **39 reconstruction runs**
+With the current parameter files this is 8 main runs and 1 convergence reference per dataset.
 
 ## Directory Structure
 
 ```
-functionality/subset_selection/
+recon_experiments/src/recon_experiments/studies/subset_selection/
 ├── configs/
-│   ├── base_config_anthro.yaml          # Base config for anthropomorphic phantom
-│   ├── sweep_main_experiments.yaml      # Main 36-run sweep
-│   └── sweep_convergence_ref.yaml       # Convergence reference sweep
+│   ├── base_config_anthro.yaml          # 1bpos anthropomorphic phantom
+│   ├── base_config_manc.yaml            # 1bpos bootstrap phantom
+│   ├── base_config_2bpos.yaml           # 2bpos patient study
+│   ├── sweep_main_experiments.yaml      # 1bpos main 36-run sweep
+│   ├── sweep_main_experiments_2bpos.yaml # 2bpos main 36-run sweep
+│   ├── sweep_convergence_ref.yaml       # 1bpos convergence reference sweep
+│   └── sweep_convergence_ref_2bpos.yaml # 2bpos convergence reference sweep
 ├── parameters/
 │   ├── subset_modes.csv                 # separate, paired
 │   ├── prior_modes.csv                  # always, subset
-│   ├── precond_types.csv                # bsrem, vtv_svd_principal_alpha, vtv_frobenius_surrogate_pd
-│   └── gammas.csv                       # 10, 100, 1000
+│   ├── precond_types.csv                # Preconditioners to test
+│   └── gammas.csv                       # Prior weights to test
 ├── scripts/
 │   ├── run_subset_selection.py          # Main reconstruction script
 │   ├── launch_sweep.sh                  # Cluster submission launcher
@@ -71,22 +76,36 @@ functionality/subset_selection/
 Quick test with minimal epochs:
 
 ```bash
-cd functionality/subset_selection/scripts
+cd recon_experiments/src/recon_experiments/studies/subset_selection/scripts
 ./test_local.sh
 ```
 
 Or run specific configuration:
 
 ```bash
-python scripts/run_subset_selection.py \
-    --config functionality/subset_selection/configs/base_config_anthro.yaml \
+python recon_experiments/src/recon_experiments/studies/subset_selection/scripts/run_subset_selection.py \
+    --config recon_experiments/src/recon_experiments/studies/subset_selection/configs/base_config_anthro.yaml \
     --override \
-        output_path=output/test \
+        output_path=recon_experiments/src/recon_experiments/studies/subset_selection/output/test \
         num_epochs=2 \
         subset_mode=separate \
         prior_mode=always \
-        precond_type=bsrem \
-        gamma_tnv=10
+        precond_type=mm_diag_gershgorin_maj \
+        gamma_tnv=0.01
+```
+
+Two-bed local example:
+
+```bash
+python recon_experiments/src/recon_experiments/studies/subset_selection/scripts/run_subset_selection.py \
+    --config recon_experiments/src/recon_experiments/studies/subset_selection/configs/base_config_2bpos.yaml \
+    --override \
+        output_path=recon_experiments/src/recon_experiments/studies/subset_selection/output/test_2bpos \
+        num_epochs=2 \
+        subset_mode=paired \
+        prior_mode=subset \
+        precond_type=mm_diag_block_maj \
+        gamma_tnv=0.01
 ```
 
 ### 2. Cluster Submission
@@ -94,14 +113,26 @@ python scripts/run_subset_selection.py \
 **Main experiments (36 runs @ 100 epochs):**
 
 ```bash
-cd functionality/subset_selection/scripts
+cd recon_experiments/src/recon_experiments/studies/subset_selection/scripts
 ./launch_sweep.sh sweep_main_experiments.yaml full
 ```
 
-**Convergence references (3 runs @ 10,000 epochs):**
+Two-bed main experiments:
+
+```bash
+./launch_sweep.sh sweep_main_experiments_2bpos.yaml full
+```
+
+**Convergence references (3 runs @ 1,000 epochs):**
 
 ```bash
 ./launch_sweep.sh sweep_convergence_ref.yaml full
+```
+
+Two-bed convergence references:
+
+```bash
+./launch_sweep.sh sweep_convergence_ref_2bpos.yaml full
 ```
 
 **Test modes:**
@@ -123,32 +154,36 @@ qstat -u $USER
 
 View logs:
 ```bash
-tail -f functionality/subset_selection/output/subset_selection_main/_logs/*.o*
+tail -f recon_experiments/src/recon_experiments/studies/subset_selection/output/subset_selection_main/_logs/*.o*
 ```
 
 Check completion status:
 ```bash
-find functionality/subset_selection/output/subset_selection_main -name "job_completion.txt" | xargs cat
+find recon_experiments/src/recon_experiments/studies/subset_selection/output/subset_selection_main -name "job_completion.txt" | xargs cat
 ```
 
 ## Configuration Details
 
 ### Data
 
-- **PET**: `/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short`
-- **SPECT**: `/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140`
-- Single bed position reconstruction
+- **1bpos anthropomorphic config**:
+  PET: `/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short`
+  SPECT: `/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140`
+- **2bpos config**:
+  PET: `/home/storage/prepared_data/oxford_patient_data/sirt3/PET`
+  SPECT: `/home/storage/prepared_data/oxford_patient_data/sirt3/SPECT`
 
 ### Reconstruction Parameters
 
-- **Subsets**: [18, 18] for PET and SPECT
-- **Alpha = Beta = 1** (with gradient energy scaling applied to alpha)
-- **Kappa weighting**: Enabled
+- **1bpos subsets**: [18, 18] for PET and SPECT
+- **2bpos subsets**: [9, 9] by default so paired mode is well-defined
+- **Alpha = Beta = 1**, with `gamma_tnv=0.01` to align the subset references with the preconditioner baselines
+- **Kappa weighting**: Disabled in the anthropomorphic base config
 - **Prior**: DTNV (vectorial TV) only, no modality-specific priors
 - **Resolution modeling**:
-  - PET: [5.1, 4.9, 4.9] mm FWHM
-  - SPECT: [6.7, 6.7, 6.7] mm FWHM + collimator model
-- **Step size**: Initial 0.1, decay 0.02
+  - PET: [5.61, 4.83, 4.93] mm FWHM
+  - SPECT: [6.8, 6.8, 6.8] mm FWHM + collimator model
+- **Step size**: Initial 1.0, decay 0.01
 - **SVRG snapshot interval**: 2 × num_subsets
 
 ### Resource Requirements
@@ -161,7 +196,7 @@ find functionality/subset_selection/output/subset_selection_main -name "job_comp
 
 **Convergence references:**
 - Runtime: 168 hours (7 days)
-- Memory: 32GB
+- Memory: 60GB
 - GPU: Required
 - Cores: 1
 
@@ -210,7 +245,7 @@ The snapshot computes full gradient (all data + prior), so configurations differ
 ### Prior Probability Calculations
 
 **Paired + Prior as subset:**
-- 18 pairs + 1 prior = 19 functions
+- 18 paired data functions + 1 prior = 19 stochastic functions
 - Target: 1 prior eval per 2 data subset evals
 - prob(prior) = 1/2, prob(each pair) = 1/36
 - Check: 0.5 + 18×(1/36) = 0.5 + 0.5 = 1.0 ✓
