@@ -10,6 +10,7 @@
 #   RUN_PRECOND=true|false
 #   PHANTOM_BASELINE_EPOCHS=1000
 #   PATIENT_BASELINE_EPOCHS=1000
+#   WAIT_FOR_BASELINES=false
 #   POLL_SECONDS=300
 #   SWEEP_REPEATS=5
 #   LOCAL_RUN_ID=20260426_120000
@@ -25,6 +26,7 @@ RUN_SUBSET="${RUN_SUBSET:-true}"
 RUN_PRECOND="${RUN_PRECOND:-true}"
 PHANTOM_BASELINE_EPOCHS="${PHANTOM_BASELINE_EPOCHS:-1000}"
 PATIENT_BASELINE_EPOCHS="${PATIENT_BASELINE_EPOCHS:-1000}"
+WAIT_FOR_BASELINES="${WAIT_FOR_BASELINES:-false}"
 POLL_SECONDS="${POLL_SECONDS:-300}"
 
 if [[ "$MODE" == "local" ]]; then
@@ -51,6 +53,7 @@ show_usage() {
     echo "  RUN_PRECOND=true|false"
     echo "  PHANTOM_BASELINE_EPOCHS=1000"
     echo "  PATIENT_BASELINE_EPOCHS=1000"
+    echo "  WAIT_FOR_BASELINES=false"
     echo "  POLL_SECONDS=300"
     echo "  SWEEP_REPEATS=5"
     echo "  LOCAL_RUN_ID=20260426_120000"
@@ -124,6 +127,7 @@ echo "Run subset studies: $RUN_SUBSET"
 echo "Run preconditioner studies: $RUN_PRECOND"
 echo "Phantom baseline epochs: $PHANTOM_BASELINE_EPOCHS"
 echo "Patient baseline epochs: $PATIENT_BASELINE_EPOCHS"
+echo "Wait for baselines before sweeps: $WAIT_FOR_BASELINES"
 echo "Poll seconds: $POLL_SECONDS"
 if [[ "$MODE" == "local" ]]; then
     echo "Local run ID: $LOCAL_RUN_ID"
@@ -152,17 +156,21 @@ run_launcher "$PRECOND_DIR/launch_baseline_recons.sh" config_1bpos_anthro.yaml "
 run_launcher "$PRECOND_DIR/launch_baseline_recons.sh" config_2bpos.yaml "$PATIENT_BASELINE_EPOCHS" "$PRECOND_MODE"
 
 echo ""
-echo "[3/4] Waiting for baseline availability"
-case "$MODE" in
-    test|full)
-        EXPECTED_BASELINES="$(expected_baselines "$MODE")"
-        wait_for_baselines 1 "$EXPECTED_BASELINES"
-        wait_for_baselines 2 "$EXPECTED_BASELINES"
-        ;;
-    local)
-        echo "Local baseline runs are blocking; continuing directly to sweeps."
-        ;;
-esac
+echo "[3/4] Baseline availability"
+if [[ "$WAIT_FOR_BASELINES" == "true" ]]; then
+    case "$MODE" in
+        test|full)
+            EXPECTED_BASELINES="$(expected_baselines "$MODE")"
+            wait_for_baselines 1 "$EXPECTED_BASELINES"
+            wait_for_baselines 2 "$EXPECTED_BASELINES"
+            ;;
+        local)
+            echo "Local baseline runs are blocking; continuing directly to sweeps."
+            ;;
+    esac
+else
+    echo "Skipping baseline wait; baselines are only required for post-processing."
+fi
 
 echo ""
 echo "[4/4] Launching preconditioner sweeps"
