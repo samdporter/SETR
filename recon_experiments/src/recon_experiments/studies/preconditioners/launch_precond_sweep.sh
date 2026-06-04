@@ -66,6 +66,7 @@ echo "Base directory: $BASE_DIR"
 CONFIG_VALUES=$(python3 -c "
 import yaml
 import shlex
+import base64
 with open('$SWEEP_CONFIG_PATH', 'r') as f:
     config = yaml.safe_load(f)
 fixed = config.get('fixed_params', {}) or {}
@@ -73,6 +74,7 @@ num_epochs = fixed.get('num_epochs', 50)
 fixed_overrides = [
     f\"{k}={repr(v)}\" for k, v in fixed.items() if k != 'num_epochs'
 ]
+fixed_overrides_text = ';'.join(fixed_overrides)
 
 def emit(key, value):
     print(f\"{key}={shlex.quote(str(value))}\")
@@ -89,7 +91,8 @@ emit('SGE_CORES', config['sge']['cores'])
 emit('SGE_QUEUE', config['sge']['queue'] or 'default')
 emit('SGE_GPU', str(config['sge'].get('gpu', False)).lower())
 emit('NUM_EPOCHS', num_epochs)
-emit('FIXED_OVERRIDES', ';'.join(fixed_overrides))
+emit('FIXED_OVERRIDES', fixed_overrides_text)
+emit('FIXED_OVERRIDES_B64', base64.b64encode(fixed_overrides_text.encode()).decode())
 ")
 
 # Source the config values
@@ -296,7 +299,7 @@ case "$MODE" in
           -N "precond_${SWEEP_NAME}_test" \
           -o "$LOG_DIR" \
           -e "$LOG_DIR" \
-          -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BASE_CONFIG,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE,ALPHAS_FILE=$ALPHAS_FILE,STEP_SIZES_FILE=$STEP_SIZES_FILE,NUM_EPOCHS=$NUM_EPOCHS,RECON_SCRIPT=$RECON_SCRIPT,FIXED_OVERRIDES=$FIXED_OVERRIDES,SWEEP_REPEATS=$SWEEP_REPEATS" \
+          -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BASE_CONFIG,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE,ALPHAS_FILE=$ALPHAS_FILE,STEP_SIZES_FILE=$STEP_SIZES_FILE,NUM_EPOCHS=$NUM_EPOCHS,RECON_SCRIPT=$RECON_SCRIPT,FIXED_OVERRIDES_B64=$FIXED_OVERRIDES_B64,SWEEP_REPEATS=$SWEEP_REPEATS" \
           "$QSUB_SCRIPT"
 
         echo ""
@@ -349,7 +352,7 @@ case "$MODE" in
           -N "precond_${SWEEP_NAME}" \
           -o "$LOG_DIR" \
           -e "$LOG_DIR" \
-          -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BASE_CONFIG,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE,ALPHAS_FILE=$ALPHAS_FILE,STEP_SIZES_FILE=$STEP_SIZES_FILE,NUM_EPOCHS=$NUM_EPOCHS,RECON_SCRIPT=$RECON_SCRIPT,FIXED_OVERRIDES=$FIXED_OVERRIDES,SWEEP_REPEATS=$SWEEP_REPEATS" \
+          -v "SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BASE_CONFIG,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE,ALPHAS_FILE=$ALPHAS_FILE,STEP_SIZES_FILE=$STEP_SIZES_FILE,NUM_EPOCHS=$NUM_EPOCHS,RECON_SCRIPT=$RECON_SCRIPT,FIXED_OVERRIDES_B64=$FIXED_OVERRIDES_B64,SWEEP_REPEATS=$SWEEP_REPEATS" \
           "$QSUB_SCRIPT"
 
         echo ""

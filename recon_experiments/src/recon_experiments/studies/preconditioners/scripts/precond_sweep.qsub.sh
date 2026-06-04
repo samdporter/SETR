@@ -122,6 +122,10 @@ NUM_EPOCHS=${NUM_EPOCHS:-50}
 RECON_SCRIPT=${RECON_SCRIPT:-run_precond_sweep_single.py}
 SWEEP_REPEATS=${SWEEP_REPEATS:-1}
 
+if [ -n "${FIXED_OVERRIDES_B64:-}" ]; then
+    FIXED_OVERRIDES="$(python3 -c 'import base64, os; print(base64.b64decode(os.environ["FIXED_OVERRIDES_B64"]).decode())')"
+fi
+
 if ! [[ "$SWEEP_REPEATS" =~ ^[0-9]+$ ]] || [ "$SWEEP_REPEATS" -lt 1 ]; then
     report_failure 1 "Invalid SWEEP_REPEATS='$SWEEP_REPEATS' (must be positive integer)" "config"
     exit 1
