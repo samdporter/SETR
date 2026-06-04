@@ -49,8 +49,8 @@ spect_res: [1.31, 0.027, false]  # Analytical collimator resolution for SPECT
 use_zoom_registration: false
 
 # Data paths
-pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short"
-spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short"
+spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
 output_path: "/home/sam/working/synergistic_recon/recon_experiments/src/recon_experiments/studies/subset_selection/output/test"
 working_path: "/home/sam/working/synergistic_recon/tmp"
 

@@ -53,8 +53,8 @@ use_zoom_registration: false
 use_tof: false
 
 # Data paths
-pet_data_path: "/home/sporter/prepared_data/oxford_patient_data/sirt3/PET"
-spect_data_path: "/home/sporter/prepared_data/oxford_patient_data/sirt3/SPECT"
+pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/PET"
+spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/SPECT"
 output_path: "/home/sam/working/synergistic_recon/recon_experiments/src/recon_experiments/studies/subset_selection/output/test_2bpos"
 working_path: "/home/sam/working/synergistic_recon/tmp"
 

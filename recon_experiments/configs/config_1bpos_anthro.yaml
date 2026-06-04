@@ -71,8 +71,8 @@ support_mask_spect_attn_rel_threshold: 0.0
 support_mask_spect_attn_abs_threshold: 0.01
 save_support_mask: true
 
-pet_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short"
-spect_data_path: "/home/storage/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
+pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/phantom_data/anthropomorphic_phantom_data/PET/phantom_short"
+spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
 pet_initial_image_path: null
 spect_initial_image_path: null
 output_path: "/home/sam/working/synergistic_recon/output/test_anthro"

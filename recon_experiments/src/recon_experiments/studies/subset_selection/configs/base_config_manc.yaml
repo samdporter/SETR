@@ -46,8 +46,8 @@ spect_gauss_fwhm: [6.7, 6.7, 6.7]
 spect_res: [0.81, 0.03, false]  # Analytical collimator resolution
 
 # Data paths
-pet_data_path: "/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/PET/bootstraps/nonparametric/param_test_s73_sf0.05_001"
-spect_data_path: "/home/storage/prepared_data/phantom_data/manc_nema_phantom_data/SPECT"
+pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/phantom_data/manc_nema_phantom_data/PET/bootstraps/nonparametric/param_test_s73_sf0.05_001"
+spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/phantom_data/manc_nema_phantom_data/SPECT"
 output_path: "/home/sam/working/synergistic_recon/recon_experiments/src/recon_experiments/studies/subset_selection/output/test"
 working_path: "/home/sam/working/synergistic_recon/tmp"
 
