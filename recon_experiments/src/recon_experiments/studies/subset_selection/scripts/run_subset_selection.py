@@ -199,6 +199,7 @@ def get_data_fidelity_separate(
 
     This is the experimental subset organization mode.
     """
+    logging.info("Partitioning PET data")
     _, _, pet_obj_funs = partitioner.data_partition(
         pet_data["acquisition_data"],
         pet_data["additive"],
@@ -207,6 +208,10 @@ def get_data_fidelity_separate(
         mode="staggered",
         create_acq_model=get_pet_am,
     )
+    logging.info("PET data partitioned; setting up PET objective functions")
+    for obj_fun in pet_obj_funs:
+        obj_fun.set_up(pet_data["initial_image"])
+    logging.info("PET objective functions set up; partitioning SPECT data")
     _, _, spect_obj_funs = partitioner.data_partition(
         spect_data["acquisition_data"],
         spect_data["additive"] if args.use_scatter else spect_data["additive"].get_uniform_copy(0),
@@ -215,11 +220,10 @@ def get_data_fidelity_separate(
         mode="staggered",
         create_acq_model=get_spect_am,
     )
-
-    for obj_fun in pet_obj_funs:
-        obj_fun.set_up(pet_data["initial_image"])
+    logging.info("SPECT data partitioned; setting up SPECT objective functions")
     for obj_fun in spect_obj_funs:
         obj_fun.set_up(spect_data["initial_image"])
+    logging.info("SPECT objective functions set up")
 
     # Create Gaussian blurring operator for PET only
     pet_blur_op = create_gaussian_blur_operator(args.pet_gauss_fwhm, pet_data["initial_image"])
@@ -304,6 +308,11 @@ def get_data_fidelity_paired(
         mode="staggered",
         create_acq_model=get_pet_am,
     )
+    # STIR's SPECTUBMatrix setup corrupts global projector state that PET set_up reads.
+    # Must call PET set_up before SPECT data_partition to avoid SIGSEGV.
+    for obj_fun in pet_obj_funs:
+        obj_fun.set_up(pet_data["initial_image"])
+
     _, _, spect_obj_funs = partitioner.data_partition(
         spect_data["acquisition_data"],
         spect_data["additive"] if args.use_scatter else spect_data["additive"].get_uniform_copy(0),
@@ -312,9 +321,6 @@ def get_data_fidelity_paired(
         mode="staggered",
         create_acq_model=get_spect_am,
     )
-
-    for obj_fun in pet_obj_funs:
-        obj_fun.set_up(pet_data["initial_image"])
     for obj_fun in spect_obj_funs:
         obj_fun.set_up(spect_data["initial_image"])
 

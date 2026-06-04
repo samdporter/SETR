@@ -60,8 +60,8 @@ keep_all_views_in_cache: true
 use_tof: false
 
 #== Data paths
-pet_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/PET"
-spect_data_path: "/home/storage/prepared_data/oxford_patient_data/sirt3/SPECT"
+pet_data_path: "/home/sporter/prepared_data/oxford_patient_data/sirt3/PET"
+spect_data_path: "/home/sporter/prepared_data/oxford_patient_data/sirt3/SPECT"
 output_path: "/home/sam/working/synergistic_recon/output/dtnv"
 working_path: "/home/sam/working/synergistic_recon/output"
 

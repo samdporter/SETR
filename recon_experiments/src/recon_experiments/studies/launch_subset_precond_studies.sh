@@ -29,6 +29,9 @@ POLL_SECONDS="${POLL_SECONDS:-300}"
 
 if [[ "$MODE" == "local" ]]; then
     export LOCAL_RUN_ID="${LOCAL_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+    PRECOND_MODE="local_all"
+else
+    PRECOND_MODE="$MODE"
 fi
 
 show_usage() {
@@ -145,8 +148,8 @@ fi
 
 echo ""
 echo "[2/4] Launching preconditioner baselines"
-run_launcher "$PRECOND_DIR/launch_baseline_recons.sh" config_1bpos_anthro.yaml "$PHANTOM_BASELINE_EPOCHS" "$MODE"
-run_launcher "$PRECOND_DIR/launch_baseline_recons.sh" config_2bpos.yaml "$PATIENT_BASELINE_EPOCHS" "$MODE"
+run_launcher "$PRECOND_DIR/launch_baseline_recons.sh" config_1bpos_anthro.yaml "$PHANTOM_BASELINE_EPOCHS" "$PRECOND_MODE"
+run_launcher "$PRECOND_DIR/launch_baseline_recons.sh" config_2bpos.yaml "$PATIENT_BASELINE_EPOCHS" "$PRECOND_MODE"
 
 echo ""
 echo "[3/4] Waiting for baseline availability"
@@ -167,8 +170,8 @@ if [[ -z "${SWEEP_REPEATS:-}" && "$MODE" != "local" ]]; then
     export SWEEP_REPEATS=5
     echo "Defaulting SWEEP_REPEATS=$SWEEP_REPEATS for $MODE mode."
 fi
-run_launcher "$PRECOND_DIR/launch_precond_sweep.sh" precond_sweep_1bpos.yaml "$MODE"
-run_launcher "$PRECOND_DIR/launch_precond_sweep.sh" precond_sweep_2bpos.yaml "$MODE"
+run_launcher "$PRECOND_DIR/launch_precond_sweep.sh" precond_sweep_1bpos.yaml "$PRECOND_MODE"
+run_launcher "$PRECOND_DIR/launch_precond_sweep.sh" precond_sweep_2bpos.yaml "$PRECOND_MODE"
 
 echo ""
 echo "Done."

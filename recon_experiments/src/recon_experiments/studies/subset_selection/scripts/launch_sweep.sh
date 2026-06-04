@@ -177,59 +177,93 @@ ENV_VARS="SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BAS
 case "$MODE" in
     "local")
         echo ""
-        echo "LOCAL TEST MODE: Running first parameter combination locally"
+        echo "LOCAL MODE: Running all parameter combinations sequentially"
         if [ -n "${LOCAL_RUN_ID:-}" ]; then
             echo "Local run ID: $LOCAL_RUN_ID"
         fi
         echo ""
 
-        # Build override arguments
-        OVERRIDES=""
+        # Build arrays of values for each swept dimension.
+        # Dimensions not present in this sweep get a single empty-string sentinel
+        # so the loop runs once without contributing to OVERRIDES or RUN_NAME.
         if [ -n "${SUBSET_MODES_FILE:-}" ]; then
-            SUBSET_MODE=$(tail -n +2 "$PARAM_DIR/$SUBSET_MODES_FILE" | head -1 | awk '{print $1}')
-            OVERRIDES="$OVERRIDES subset_mode=$SUBSET_MODE"
+            mapfile -t _SUBSET_MODES < <(tail -n +2 "$PARAM_DIR/$SUBSET_MODES_FILE" | awk '{print $1}')
+        else
+            _SUBSET_MODES=("")
         fi
         if [ -n "${PRIOR_MODES_FILE:-}" ]; then
-            PRIOR_MODE=$(tail -n +2 "$PARAM_DIR/$PRIOR_MODES_FILE" | head -1 | awk '{print $1}')
-            OVERRIDES="$OVERRIDES prior_mode=$PRIOR_MODE"
+            mapfile -t _PRIOR_MODES < <(tail -n +2 "$PARAM_DIR/$PRIOR_MODES_FILE" | awk '{print $1}')
+        else
+            _PRIOR_MODES=("")
         fi
         if [ -n "${PRECOND_TYPES_FILE:-}" ]; then
-            PRECOND_TYPE=$(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | head -1 | awk '{print $1}')
-            OVERRIDES="$OVERRIDES precond_type=$PRECOND_TYPE"
+            mapfile -t _PRECOND_TYPES < <(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | awk '{print $1}')
+        else
+            _PRECOND_TYPES=("")
         fi
         if [ -n "${GAMMAS_FILE:-}" ]; then
-            GAMMA=$(tail -n +2 "$PARAM_DIR/$GAMMAS_FILE" | head -1 | awk '{print $1}')
-            OVERRIDES="$OVERRIDES gamma_tnv=$GAMMA"
+            mapfile -t _GAMMAS < <(tail -n +2 "$PARAM_DIR/$GAMMAS_FILE" | awk '{print $1}')
+        else
+            _GAMMAS=("")
         fi
 
-        RUN_NAME="subset"
-        if [ -n "${SUBSET_MODE:-}" ]; then
-            RUN_NAME="${RUN_NAME}_${SUBSET_MODE}"
-        fi
-        if [ -n "${PRIOR_MODE:-}" ]; then
-            RUN_NAME="${RUN_NAME}_prior_${PRIOR_MODE}"
-        fi
-        if [ -n "${PRECOND_TYPE:-}" ]; then
-            RUN_NAME="${RUN_NAME}_precond_${PRECOND_TYPE}"
-        fi
-        if [ -n "${GAMMA:-}" ]; then
-            RUN_NAME="${RUN_NAME}_gamma_${GAMMA}"
-        fi
-        RUN_NAME="${RUN_NAME//[^A-Za-z0-9._-]/_}"
-
-        echo "Testing: $OVERRIDES"
-
-        OUTPUT_DIR="$SWEEP_OUT_DIR/$RUN_NAME"
-        mkdir -p "$OUTPUT_DIR"
-
-        cd "$BASE_DIR"
-        python "$SCRIPTS_DIR/run_subset_selection.py" \
-            --config "$CONFIG_DIR/$BASE_CONFIG" \
-            --override output_path="$OUTPUT_DIR" num_epochs="$NUM_EPOCHS" $OVERRIDES
-
+        TOTAL_LOCAL=$(( ${#_SUBSET_MODES[@]} * ${#_PRIOR_MODES[@]} * ${#_PRECOND_TYPES[@]} * ${#_GAMMAS[@]} ))
+        JOB_NUM=0
+        echo "Total combinations: $TOTAL_LOCAL"
         echo ""
-        echo "Local test complete!"
-        echo "Output: $OUTPUT_DIR"
+
+        for SUBSET_MODE in "${_SUBSET_MODES[@]}"; do
+        for PRIOR_MODE in "${_PRIOR_MODES[@]}"; do
+        for PRECOND_TYPE in "${_PRECOND_TYPES[@]}"; do
+        for GAMMA in "${_GAMMAS[@]}"; do
+            JOB_NUM=$((JOB_NUM + 1))
+            OVERRIDES=""
+            RUN_NAME="subset"
+
+            if [ -n "$SUBSET_MODE" ]; then
+                OVERRIDES="$OVERRIDES subset_mode=$SUBSET_MODE"
+                RUN_NAME="${RUN_NAME}_${SUBSET_MODE}"
+            elif [ -n "${FIXED_SUBSET_MODE:-}" ]; then
+                OVERRIDES="$OVERRIDES subset_mode=$FIXED_SUBSET_MODE"
+            fi
+
+            if [ -n "$PRIOR_MODE" ]; then
+                OVERRIDES="$OVERRIDES prior_mode=$PRIOR_MODE"
+                RUN_NAME="${RUN_NAME}_prior_${PRIOR_MODE}"
+            elif [ -n "${FIXED_PRIOR_MODE:-}" ]; then
+                OVERRIDES="$OVERRIDES prior_mode=$FIXED_PRIOR_MODE"
+            fi
+
+            if [ -n "$PRECOND_TYPE" ]; then
+                OVERRIDES="$OVERRIDES precond_type=$PRECOND_TYPE"
+                RUN_NAME="${RUN_NAME}_precond_${PRECOND_TYPE}"
+            elif [ -n "${FIXED_PRECOND_TYPE:-}" ]; then
+                OVERRIDES="$OVERRIDES precond_type=$FIXED_PRECOND_TYPE"
+            fi
+
+            if [ -n "$GAMMA" ]; then
+                OVERRIDES="$OVERRIDES gamma_tnv=$GAMMA"
+                RUN_NAME="${RUN_NAME}_gamma_${GAMMA}"
+            fi
+
+            RUN_NAME="${RUN_NAME//[^A-Za-z0-9._-]/_}"
+            OUTPUT_DIR="$SWEEP_OUT_DIR/$RUN_NAME"
+            mkdir -p "$OUTPUT_DIR"
+
+            echo "[$JOB_NUM/$TOTAL_LOCAL] $RUN_NAME"
+            cd "$BASE_DIR"
+            python "$SCRIPTS_DIR/run_subset_selection.py" \
+                --config "$CONFIG_DIR/$BASE_CONFIG" \
+                --override output_path="$OUTPUT_DIR" num_epochs="$NUM_EPOCHS" $OVERRIDES
+            echo "[$JOB_NUM/$TOTAL_LOCAL] Done: $OUTPUT_DIR"
+            echo ""
+        done
+        done
+        done
+        done
+
+        echo "All $TOTAL_LOCAL local jobs complete!"
+        echo "Output: $SWEEP_OUT_DIR"
         ;;
 
     "test")

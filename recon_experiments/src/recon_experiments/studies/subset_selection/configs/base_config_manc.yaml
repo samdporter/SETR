@@ -13,11 +13,14 @@ num_subsets: [18, 18]  # [PET, SPECT]
 
 # Reconstruction parameters
 num_epochs: 25  # Will be overridden to 1000 for convergence reference
-initial_step_size: 0.1
+initial_step_size: 1
 relaxation_eta: 0.002
 variance_reduction: "svrg"
 prior_updates_per_epoch: null
+snapshot_interval_factor: 1.0
 precond_combine: "majoriser"
+block_scalar_reduction: "diag"
+precond_safety_scale: 1.0
 
 # Kappa weighting
 use_kappa: true
@@ -60,8 +63,8 @@ support_mask_rel_threshold: 0.001
 support_mask_abs_threshold: 0.0
 em_precond_smooth: true
 em_precond_smoothing_fwhm: [5, 5, 5]
-em_precond_cap_to_initial_max: true
-precond_cap_to_initial_max: true
+em_precond_cap_to_initial_max: false
+precond_cap_to_initial_max: false
 profile: false
 flip: true
 use_scatter: true

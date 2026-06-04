@@ -34,6 +34,50 @@ def _infer_bpos(config_path: Path) -> int:
     raise ValueError(f"Could not infer bed positions from config name: {config_path.name}")
 
 
+def _as_bool_text(value: str) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _split_override(override: str) -> tuple[str, str] | None:
+    if "=" not in override:
+        return None
+    key, value = override.split("=", 1)
+    return key.strip(), value.strip()
+
+
+def _consume_bool_override(overrides: list[str], key: str, default: bool = False) -> tuple[bool, list[str]]:
+    value = default
+    remaining: list[str] = []
+    for override in overrides:
+        parsed = _split_override(override)
+        if parsed is not None and parsed[0] == key:
+            value = _as_bool_text(parsed[1])
+        else:
+            remaining.append(override)
+    return value, remaining
+
+
+def _has_override(overrides: list[str], key: str) -> bool:
+    for override in overrides:
+        parsed = _split_override(override)
+        if parsed is not None and parsed[0] == key:
+            return True
+    return False
+
+
+def _subset_selection_config(base_dir: Path, bpos: int) -> Path:
+    config_name = "base_config_anthro.yaml" if bpos == 1 else "base_config_2bpos.yaml"
+    return (
+        base_dir
+        / "src"
+        / "recon_experiments"
+        / "studies"
+        / "subset_selection"
+        / "configs"
+        / config_name
+    )
+
+
 def _read_final_objective(obj_path: Path) -> float:
     if not obj_path.exists():
         return float("nan")
@@ -137,6 +181,33 @@ def main() -> int:
         raise FileNotFoundError(f"Runner script not found: {runner_path}")
 
     overrides = _build_override_list(args)
+    emulate_subset_selection, overrides = _consume_bool_override(
+        overrides,
+        "emulate_subset_selection",
+        default=False,
+    )
+    if emulate_subset_selection:
+        runner_path = (
+            base_dir
+            / "src"
+            / "recon_experiments"
+            / "studies"
+            / "subset_selection"
+            / "scripts"
+            / "run_subset_selection.py"
+        )
+        config_path = _subset_selection_config(base_dir, bpos)
+        if not _has_override(overrides, "subset_mode"):
+            overrides.append("subset_mode=separate")
+        if not _has_override(overrides, "prior_mode"):
+            overrides.append("prior_mode=always")
+        logging.info("Emulating subset-selection path for %dbpos", bpos)
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config not found: {config_path}")
+    if not runner_path.exists():
+        raise FileNotFoundError(f"Runner script not found: {runner_path}")
+
     cmd = [sys.executable, str(runner_path), "--config", str(config_path)]
     for ov in overrides:
         cmd.extend(["--override", ov])

@@ -22,5 +22,5 @@ parameters:
 
 # Fixed parameters for main experiments
 fixed_params:
-  num_epochs: 100
+  num_epochs: 25
   seed: 42

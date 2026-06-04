@@ -26,9 +26,9 @@ fixed_params:
   use_tof: false
   em_precond_smooth: true
   em_precond_smoothing_fwhm: [5, 5, 5]
-  em_precond_cap_to_initial_max: true
+  em_precond_cap_to_initial_max: false
   em_precond_cap_to_initial_max_factor: 2.0
-  precond_cap_to_initial_max: true
+  precond_cap_to_initial_max: false
   precond_cap_to_initial_max_factor: 2.0
   # Sweeps only need images/objectives for convergence analysis.
   save_gradients: false
