@@ -68,6 +68,10 @@ fi
 # --- Run baseline reconstruction ---
 cd "$BASE_DIR"
 
+REPO_ROOT="$(cd "$BASE_DIR/.." && pwd)"
+export PYTHONPATH="$REPO_ROOT/recon_core/src:$REPO_ROOT/recon_experiments/src:${PYTHONPATH:-}"
+log_with_timestamp "Python source paths added for repo: $REPO_ROOT"
+
 mkdir -p "$OUTPUT_DIR"
 
 BPOS="${BPOS:-}"

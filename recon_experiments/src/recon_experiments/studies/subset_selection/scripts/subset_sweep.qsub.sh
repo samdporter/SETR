@@ -102,6 +102,10 @@ else
     BASE_DIR="$(dirname "$(dirname "$(dirname "$SCRIPT_DIR")")")"
 fi
 
+REPO_ROOT="$(cd "$BASE_DIR/../../.." && pwd)"
+export PYTHONPATH="$REPO_ROOT/recon_core/src:$REPO_ROOT/recon_experiments/src:${PYTHONPATH:-}"
+log_with_timestamp "Python source paths added for repo: $REPO_ROOT"
+
 FUNC_DIR="$BASE_DIR/studies/subset_selection"
 PARAM_DIR="$FUNC_DIR/parameters"
 CONFIG_DIR="$FUNC_DIR/configs"
