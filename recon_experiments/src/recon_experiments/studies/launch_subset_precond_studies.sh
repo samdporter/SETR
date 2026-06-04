@@ -84,7 +84,7 @@ fi
 
 run_launcher() {
     if [[ "$MODE" == "full" ]]; then
-        yes y | "$@"
+        printf 'y\n' | "$@"
     else
         "$@"
     fi
