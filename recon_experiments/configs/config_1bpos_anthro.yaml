@@ -75,8 +75,8 @@ pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/phantom_data/anthrop
 spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/phantom_data/anthropomorphic_phantom_data/SPECT/phantom_140"
 pet_initial_image_path: null
 spect_initial_image_path: null
-output_path: "/home/sam/working/synergistic_recon/output/test_anthro"
-working_path: "/home/sam/working/synergistic_recon/tmp"
+output_path: "/home/sporter/synergistic_Y90/SETR2/output/test_anthro"
+working_path: "/home/sporter/synergistic_Y90/SETR2/tmp"
 
 #== Miscellaneous
 save_images: false

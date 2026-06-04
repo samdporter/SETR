@@ -62,8 +62,8 @@ use_tof: false
 #== Data paths
 pet_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/PET"
 spect_data_path: "/home/sporter/synergistic_Y90/prepared_data/oxford_patient_data/sirt3/SPECT"
-output_path: "/home/sam/working/synergistic_recon/output/dtnv"
-working_path: "/home/sam/working/synergistic_recon/output"
+output_path: "/home/sporter/synergistic_Y90/SETR2/output/dtnv"
+working_path: "/home/sporter/synergistic_Y90/SETR2/tmp"
 
 #== Miscellaneous
 save_images: true
