@@ -317,6 +317,7 @@ def _map_mm_block_majoriser_to_voxels(wvtv, x_arr, like, W, epsilon: float):
     phi[..., 0, 1] = phi01
     phi[..., 1, 0] = phi01
     phi = 0.5 * (phi + phi.transpose(-1, -2))
+    phi = torch.nan_to_num(phi, nan=0.0, posinf=0.0, neginf=0.0)
 
     phi_eigs = torch.linalg.eigvalsh(phi)
     phi_norm = torch.maximum(torch.abs(phi_eigs[..., 0]), torch.abs(phi_eigs[..., 1]))

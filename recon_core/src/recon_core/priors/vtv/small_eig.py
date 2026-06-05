@@ -231,13 +231,14 @@ def orthonormalize_columns_chol(V, tol=1e-6):
 def adaptive_regularization(H, base_eps=1e-7):
     n = H.shape[-1]
 
+    H_safe = torch.nan_to_num(H, nan=0.0, posinf=0.0, neginf=0.0)
     # Eigenvalue computation (unchanged)
     if n == 2:
-        eigs = eigenvalsh_2x2(H)
+        eigs = eigenvalsh_2x2(H_safe)
     elif n == 3:
-        eigs = eigenvalsh_3x3_cardano(H)
+        eigs = eigenvalsh_3x3_cardano(H_safe)
     else:
-        eigs = torch.linalg.eigvalsh(H)
+        eigs = torch.linalg.eigvalsh(H_safe)
 
     finfo = torch.finfo(H.dtype)
     lam_min = eigs[..., 0].clamp_min(finfo.tiny)

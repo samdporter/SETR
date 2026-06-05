@@ -65,12 +65,13 @@ def norm(M, norm_type, smoothing_func, order, eps, tail=None):
 
     # Extract eigenvalues
     n = H_reg.shape[-1]
+    H_reg_safe = torch.nan_to_num(H_reg, nan=0.0, posinf=0.0, neginf=0.0)
     if n == 2:
-        eig = eigenvalsh_2x2(H_reg)
+        eig = eigenvalsh_2x2(H_reg_safe)
     elif n == 3:
-        eig = eigenvalsh_3x3_cardano(H_reg)
+        eig = eigenvalsh_3x3_cardano(H_reg_safe)
     else:
-        eig = torch.linalg.eigvalsh(H_reg)
+        eig = torch.linalg.eigvalsh(H_reg_safe)
 
     # Compensate for regularization in singular values
     # Mathematical justification: σ²(A) + ε = λ(H̃)
