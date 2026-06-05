@@ -319,7 +319,10 @@ def _map_mm_block_majoriser_to_voxels(wvtv, x_arr, like, W, epsilon: float):
     phi = 0.5 * (phi + phi.transpose(-1, -2))
     phi = torch.nan_to_num(phi, nan=0.0, posinf=0.0, neginf=0.0)
 
-    phi_eigs = torch.linalg.eigvalsh(phi)
+    _a = phi[..., 0, 0]; _c = phi[..., 1, 1]; _b = phi[..., 0, 1]
+    _mean = 0.5 * (_a + _c)
+    _disc = torch.sqrt((0.5 * (_a - _c)) ** 2 + _b ** 2)
+    phi_eigs = torch.stack([_mean - _disc, _mean + _disc], dim=-1)
     phi_norm = torch.maximum(torch.abs(phi_eigs[..., 0]), torch.abs(phi_eigs[..., 1]))
 
     xi_abs = torch.abs(xi_common)
