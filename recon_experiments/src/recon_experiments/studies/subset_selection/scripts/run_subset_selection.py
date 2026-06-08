@@ -60,7 +60,7 @@ from recon_core.utils import (
     get_spect_data,
 )
 from recon_core.utils.io import apply_overrides, load_config, parse_cli, save_args
-from recon_core.utils.sirf import get_array, get_filters, get_s_inv_from_objs
+from recon_core.utils.sirf import get_array, get_filters, get_s_inv_from_objs, get_s_inv_from_subset_objs
 from recon_core.cil_extensions.operators.blurring import create_gaussian_blur_operator
 
 
