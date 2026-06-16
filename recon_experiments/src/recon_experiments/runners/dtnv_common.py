@@ -1310,6 +1310,50 @@ def estimate_delta_from_gradients(images, scales=None, percentile=95, divisor=10
     return ref_stat / divisor
 
 
+def set_auto_delta_from_scaled_images(args, images) -> None:
+    """Set ``args.delta`` using the DTNV baseline auto-delta rule."""
+
+    if getattr(args, "delta", None) is not None:
+        return
+
+    if getattr(args, "use_log_tnv", False):
+        divisor = getattr(args, "delta_divisor", 10.0)
+        args.delta = 1.0 / divisor
+        logging.info(
+            "Auto-set delta to %.6g for log-TNV (1 / %.3g divisor)",
+            args.delta,
+            divisor,
+        )
+        return
+
+    weighted_pet = args.alpha * get_array(images[0])
+    weighted_spect = args.beta * get_array(images[1])
+
+    percentile = getattr(args, "delta_percentile", 99.0)
+    divisor = getattr(args, "delta_divisor", 100.0)
+
+    pet_positive = weighted_pet[weighted_pet > 0]
+    spect_positive = weighted_spect[weighted_spect > 0]
+    if pet_positive.size == 0 or spect_positive.size == 0:
+        raise ValueError(
+            "Cannot auto-set delta: PET and SPECT initial images must both "
+            "contain positive weighted voxels."
+        )
+
+    pet_val = np.percentile(pet_positive, percentile)
+    spect_val = np.percentile(spect_positive, percentile)
+    args.delta = min(pet_val, spect_val) / divisor
+    logging.info(
+        "Auto-set delta to %.6g using %sth percentile of scaled intensities / %.3g "
+        "(ratio alpha/delta=%.1f, beta/delta=%.1f)",
+        args.delta,
+        percentile,
+        divisor,
+        args.alpha / args.delta,
+        args.beta / args.delta,
+    )
+
+
 def get_prior(
     args,
     umap,

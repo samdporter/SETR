@@ -7,6 +7,9 @@ bpos: 2
 alpha: 1
 beta: 1
 delta: null
+dynamic_percentile: 99.9
+delta_divisor: 5.0
+epsilon_divisor: 10.0
 
 # Subset configuration
 # Use equal PET/SPECT counts so paired mode is well-defined in 2bpos.
@@ -65,7 +68,7 @@ save_preconditioners: false
 seed: 42
 no_gpu: false
 keep_all_views_in_cache: true
-support_mask_from_sensitivity: true
+support_mask_from_sensitivity: false
 support_mask_rel_threshold: 0.001
 support_mask_abs_threshold: 0.0
 em_precond_smooth: true

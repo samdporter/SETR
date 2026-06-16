@@ -51,6 +51,7 @@ from recon_experiments.runners.dtnv_common import (
     get_prior,
     get_preconditioners,
     normalise_kappa_squares,
+    set_auto_delta_from_scaled_images,
 )
 from recon_core.utils import (
     get_pet_am,
@@ -232,6 +233,7 @@ def get_data_fidelity_separate(
     s_inv = get_s_inv_from_objs(
         [pet_obj_funs, spect_obj_funs],
         shared_initial_estimates,
+        clamp_percentile=99.5,
         adjoint_ops=[pet_blur_op, pet_to_spect],
     )
 
@@ -331,6 +333,7 @@ def get_data_fidelity_paired(
     s_inv = get_s_inv_from_objs(
         [pet_obj_funs, spect_obj_funs],
         shared_initial_estimates,
+        clamp_percentile=99.5,
         adjoint_ops=[pet_blur_op, pet_to_spect],
     )
 
@@ -816,15 +819,7 @@ def main(args) -> None:
     pet_scale, spect_scale = dynamic_range_scale_sirf(combined[0], combined[1])
     apply_dynamic_range_scaling(args, pet_scale, spect_scale)
 
-    # Set delta (same as run_dtnv_1bpos.py)
-    if args.delta is None:
-        args.delta = (
-            min(
-                args.alpha * initial_estimates.containers[0].max(),
-                args.beta * initial_estimates.containers[1].max(),
-            )
-            / 1e3
-        )
+    set_auto_delta_from_scaled_images(args, combined)
 
     save_args(args, "args.csv")
 

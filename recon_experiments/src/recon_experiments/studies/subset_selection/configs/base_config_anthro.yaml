@@ -7,6 +7,9 @@ bpos: 1
 alpha: 1
 beta: 1
 delta: null
+dynamic_percentile: 95.0
+delta_divisor: 20.0
+epsilon_divisor: 100.0
 
 # Subset configuration
 num_subsets: [18, 18]  # [PET, SPECT]

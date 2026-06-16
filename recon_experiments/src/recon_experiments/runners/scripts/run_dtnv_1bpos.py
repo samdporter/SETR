@@ -44,6 +44,7 @@ from recon_experiments.runners.dtnv_common import (
     get_preconditioners,
     get_prior,
     normalise_kappa_squares,
+    set_auto_delta_from_scaled_images,
 )
 from recon_core.utils import get_pet_am, get_pet_data, get_spect_am, get_spect_data
 from recon_core.utils.io import apply_overrides, load_config, parse_cli, save_args
@@ -405,44 +406,7 @@ def main(args) -> None:
                 args.beta,
             )
 
-    # Set delta (smoothing parameter) if not provided
-    if args.delta is None:
-        use_log_tnv = getattr(args, "use_log_tnv", False)
-
-        if use_log_tnv:
-            # For log TNV: use fixed relative smoothing parameter
-            # The log transform normalizes dynamic range, making delta scale-invariant
-            divisor = getattr(args, "delta_divisor", 10.0)
-            args.delta = 1.0 / divisor
-            logging.info(
-                "Auto-set delta to %.6g for log-TNV (1 / %.3g divisor)",
-                args.delta,
-                divisor,
-            )
-        else:
-            # For standard TNV: estimate from scaled image intensities
-            # Delta should be ~divisor fraction of the 95th percentile of scaled intensities
-            weighted_pet = args.alpha * get_array(combined[0])
-            weighted_spect = args.beta * get_array(combined[1])
-
-            percentile = getattr(args, "delta_percentile", 99.0)
-            divisor = getattr(args, "delta_divisor", 100.0)
-
-            # Take minimum of the two weighted image scales
-            pet_val = np.percentile(weighted_pet[weighted_pet > 0], percentile)
-            spect_val = np.percentile(weighted_spect[weighted_spect > 0], percentile)
-            scale_val = min(pet_val, spect_val)
-
-            args.delta = scale_val / divisor
-            logging.info(
-                "Auto-set delta to %.6g using %sth percentile of scaled intensities / %.3g "
-                "(ratio alpha/delta=%.1f, beta/delta=%.1f)",
-                args.delta,
-                percentile,
-                divisor,
-                args.alpha / args.delta,
-                args.beta / args.delta,
-            )
+    set_auto_delta_from_scaled_images(args, combined)
 
     save_args(args, "args.csv")
 
