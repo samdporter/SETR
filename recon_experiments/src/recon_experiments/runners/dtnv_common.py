@@ -65,16 +65,23 @@ from recon_core.utils.sirf import (
 ISTA.update = ista_update_step
 
 _PRECOND_DIAG_METHODS = {"mm_diag_tight", "mm_diag_gershgorin_maj"}
-_PRECOND_BLOCK_METHODS = {"mm_diag_block_maj", "mm_diag_block_tight"}
+_PRECOND_BLOCK_METHODS = {
+    "mm_diag_block_maj",
+    "mm_diag_block_tight",
+    "ls_block_diag",
+    "ls_block_gershgorin",
+}
 _ALL_PRECOND_METHODS = _PRECOND_DIAG_METHODS | _PRECOND_BLOCK_METHODS
 _PRECOND_CONTRACTS = {
     # Proper MM majorisers (for the prior surrogate), when used with combine='majoriser'.
     "mm_diag_gershgorin_maj": "majoriser",
     "mm_diag_block_maj": "majoriser",
+    "ls_block_gershgorin": "majoriser",
     # Curvature estimates / heuristics (no strict majorisation guarantee end-to-end).
     "bsrem": "hessian_estimate",
     "mm_diag_tight": "hessian_estimate",
     "mm_diag_block_tight": "hessian_estimate",
+    "ls_block_diag": "hessian_estimate",
 }
 
 
@@ -85,6 +92,8 @@ def _canonical_preconditioner_type(precond_type: str) -> str:
         "mm_diag_gershgorin_maj": "mm_diag_gershgorin_maj",
         "mm_diag_block_maj": "mm_diag_block_maj",
         "mm_diag_block_tight": "mm_diag_block_tight",
+        "ls_block_diag": "ls_block_diag",
+        "ls_block_gershgorin": "ls_block_gershgorin",
     }.get(precond_type, precond_type)
 
 

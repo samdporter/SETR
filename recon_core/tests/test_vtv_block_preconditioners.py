@@ -139,6 +139,119 @@ def test_block_inverse_matches_identity(method):
     assert torch.allclose(ident, target, atol=1e-3, rtol=1e-3)
 
 
+def test_ls_block_methods_registered_on_weighted_vectorial_total_variation():
+    for method in ("ls_block_diag", "ls_block_gershgorin"):
+        assert method in WeightedVectorialTotalVariation._PRECOND_BLOCK_METHODS
+        assert method in WeightedVectorialTotalVariation._PRECOND_METHODS
+
+
+@pytest.mark.parametrize("method", ["ls_block_diag", "ls_block_gershgorin"])
+def test_ls_block_dispatch_returns_finite_blocks(method):
+    torch.manual_seed(29)
+    j_field = torch.randn(2, 2, 2, 2, 3, device=DEVICE)
+    s_field = torch.abs(torch.randn(2, 2, 2, 2, 3, device=DEVICE)) + 0.2
+    weights = torch.abs(torch.randn(2, 2, 2, 2, device=DEVICE)) + 0.5
+
+    vtv = _make_block_vtv(j_field, s_field, weights, eps=1.0)
+    blocks = compute_precond_block(vtv, weights, method, epsilon=1e-8)
+    assert blocks.shape == (*weights.shape[:-1], 2, 2)
+    assert torch.all(torch.isfinite(blocks))
+
+    vtv.precond_method = method
+    via_method = vtv.preconditioner_block(weights, epsilon=1e-8)
+    assert torch.all(torch.isfinite(via_method))
+
+
+@pytest.mark.parametrize("method", ["ls_block_diag", "ls_block_gershgorin"])
+def test_ls_block_returns_symmetric_spd_blocks_with_epsilon_floor(method):
+    torch.manual_seed(31)
+    j_field = torch.randn(3, 2, 2, 2, 3, device=DEVICE)
+    s_field = torch.abs(torch.randn(3, 2, 2, 2, 3, device=DEVICE)) + 0.2
+    weights = torch.abs(torch.randn(3, 2, 2, 2, device=DEVICE)) + 0.5
+
+    epsilon = 1e-6
+    vtv = _make_block_vtv(j_field, s_field, weights, eps=1.0)
+    blocks = compute_precond_block(vtv, weights, method, epsilon=epsilon)
+
+    assert torch.max(torch.abs(blocks[..., 0, 1] - blocks[..., 1, 0])) < 1e-5
+    eigvals = torch.linalg.eigvalsh(blocks)
+    assert torch.all(eigvals >= epsilon - 1e-6)
+
+
+@pytest.mark.parametrize("method", ["ls_block_diag", "ls_block_gershgorin"])
+def test_ls_block_matches_legacy_preconditioners_old(method):
+    from recon_core.priors.vtv import preconditioners_old
+
+    torch.manual_seed(23)
+    j_field = torch.randn(3, 2, 2, 2, 3, dtype=torch.float64, device=DEVICE)
+    s_field = torch.abs(torch.randn(3, 2, 2, 2, 3, dtype=torch.float64, device=DEVICE)) + 0.2
+    weights = torch.abs(torch.randn(3, 2, 2, 2, dtype=torch.float64, device=DEVICE)) + 0.5
+
+    vtv = _make_block_vtv(j_field, s_field, weights, eps=1.0)
+    active = compute_precond_block(vtv, weights, method, epsilon=1e-8)
+    legacy = preconditioners_old.compute_precond_block(vtv, weights, method, epsilon=1e-8)
+
+    assert torch.allclose(active, legacy, rtol=1e-6, atol=1e-8)
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_ls_hessian_matrix_matches_autograd_hessian(seed):
+    torch.manual_seed(seed)
+    d = 3
+    eps = 1e-2
+    J = torch.randn(d, 2, dtype=torch.float64, device=DEVICE)
+
+    def rho(vec):
+        Jm = vec.reshape(d, 2)
+        s = torch.linalg.svdvals(Jm)
+        return torch.sum(torch.sqrt(s * s + eps * eps))
+
+    H_autograd = torch.autograd.functional.hessian(rho, J.reshape(-1))
+    H_ls = _ls_hessian_matrix(J, eps)
+
+    assert torch.allclose(H_ls, H_autograd, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize("method", ["ls_block_diag", "ls_block_gershgorin"])
+def test_ls_block_nan_robustness(method):
+    nx, ny, nz = 4, 4, 4
+    M = 2
+    d = 3
+
+    x_arr = torch.rand((nx, ny, nz, M), dtype=torch.float32, device=DEVICE)
+    x_arr[1, 1, 1, :] = float("nan")
+    x_arr[2, 2, 2, :] = float("inf")
+
+    class DummyJacobian:
+        def __init__(self):
+            self.grad = type(
+                "Grad", (), {"directions": [(1, 0, 0), (0, 1, 0), (0, 0, 1)], "bnd_cond": "Neumann"}
+            )()
+
+        def direct(self, x):
+            out = torch.rand((nx, ny, nz, M, d), dtype=torch.float32, device=DEVICE)
+            out[1, 1, 1, :, :] = float("nan")
+            out[2, 2, 2, :, :] = float("inf")
+            return out
+
+        def sensitivity(self, x):
+            return torch.ones((nx, ny, nz, M, d), dtype=torch.float32, device=DEVICE)
+
+    class DummyWVTV:
+        def __init__(self):
+            self.jacobian = DummyJacobian()
+            self.smoothing = "charbonnier"
+            self.vtv = type("VTV", (), {"eps": 1e-4})()
+            self.weights = torch.tensor([1.0, 1.0], dtype=torch.float32, device=DEVICE)
+
+    wvtv = DummyWVTV()
+    res = compute_precond_block(wvtv, x_arr, method=method, epsilon=1e-8)
+
+    assert res is not None
+    assert not torch.isnan(res).any()
+    assert not torch.isinf(res).any()
+
+
 def test_ls_block_diag_is_not_global_loewner_majoriser_of_full_ls_hessian():
     """
     LS block-diagonal extraction keeps only per-direction 2x2 blocks of the

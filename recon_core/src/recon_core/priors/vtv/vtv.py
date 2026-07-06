@@ -171,7 +171,12 @@ class WeightedVectorialTotalVariation(Function):
     """
 
     _PRECOND_DIAG_METHODS = {"mm_diag_tight", "mm_diag_gershgorin_maj"}
-    _PRECOND_BLOCK_METHODS = {"mm_diag_block_maj", "mm_diag_block_tight"}
+    _PRECOND_BLOCK_METHODS = {
+        "mm_diag_block_maj",
+        "mm_diag_block_tight",
+        "ls_block_diag",
+        "ls_block_gershgorin",
+    }
     _PRECOND_METHODS = _PRECOND_DIAG_METHODS | _PRECOND_BLOCK_METHODS
 
     @classmethod
@@ -327,6 +332,8 @@ class WeightedVectorialTotalVariation(Function):
         Methods (self.precond_method):
             - "mm_diag_block_maj"
             - "mm_diag_block_tight"
+            - "ls_block_diag"
+            - "ls_block_gershgorin"
         """
         method = self._canonical_precond_method(self.precond_method)
         if method != self.precond_method:

@@ -1,0 +1,41 @@
+# Preconditioner comparison sweep configuration for 2 bed positions
+# LS-only variant: reuses the same sweep_name/output dir as precond_sweep_2bpos.yaml
+# so Lewis-Sendov block preconditioner rows land alongside the existing MM sweep
+# results and are analysed against the same baselines.
+sweep_name: "precond_2bpos"
+base_config: "config_2bpos.yaml"
+script: "run_precond_sweep_single.py"
+
+# SGE resource requirements
+sge:
+  runtime: "48:00:00"
+  memory: "95G"
+  cores: 1
+  queue: null  # Use default queue
+  gpu: true
+
+# Parameter sweep settings - 3-way combination
+parameters:
+  precond_types_file: "precond_types_ls.csv"
+  alphas_file: "alphas.csv"
+  step_sizes_file: "step_sizes.csv"
+
+# Fixed parameters for all runs
+fixed_params:
+  num_epochs: 25
+  gamma_tnv: 0.02
+  relaxation_eta: 0.002
+  # Keep the sweep aligned with the existing 500-epoch 2bpos baseline.
+  use_tof: false
+  support_mask_from_sensitivity: false
+  support_mask_rel_threshold: 0.001
+  support_mask_abs_threshold: 0.0
+  em_precond_smooth: true
+  em_precond_smoothing_fwhm: [5, 5, 5]
+  em_precond_cap_to_initial_max: false
+  em_precond_cap_to_initial_max_factor: 2.0
+  precond_cap_to_initial_max: false
+  precond_cap_to_initial_max_factor: 2.0
+  # Sweeps only need images/objectives for convergence analysis.
+  save_gradients: false
+  save_preconditioners: false

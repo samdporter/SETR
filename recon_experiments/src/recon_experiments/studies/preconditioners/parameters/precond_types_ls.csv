@@ -1,0 +1,3 @@
+precond_type,combine
+ls_block_diag,majoriser
+ls_block_gershgorin,majoriser

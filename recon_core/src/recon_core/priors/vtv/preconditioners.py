@@ -7,6 +7,15 @@ Notes on math (MM weights):
 - The quadratic surrogate uses tr(W Y Y^T); no extra 1/2 factor is folded into W.
 - Gershgorin inflation is applied to W (row-sum) to obtain a diagonal majoriser.
 
+Notes on math (Lewis-Sendov block methods):
+- "ls_block_diag" and "ls_block_gershgorin" build the full Lewis-Sendov Hessian
+  of the smoothed singular-value density via the Hermitian dilation of the
+  per-voxel Jacobian (see tnv_preconditioners_1_.md, Sections E-H), then
+  extract per-direction 2x2 diagonal blocks. "ls_block_diag" is a curvature
+  estimate (not a majoriser); "ls_block_gershgorin" adds spectral-norm
+  Gershgorin inflation from the off-diagonal blocks to obtain a provable
+  Loewner majoriser (Sec. G.4).
+
 If you need legacy/obsolete methods, see preconditioners_old.py and preconditioner_old.py.
 """
 
@@ -16,6 +25,7 @@ import torch
 
 from .numerical_constants import get_division_epsilon
 from .vtv import (
+    _accumulate_over_neighborhood_block,
     _direction_valid_mask,
     _directional_projector_stats_from_jacobian,
     _shift_with_zeros,
@@ -23,7 +33,12 @@ from .vtv import (
 
 
 _CANONICAL_DIAG_METHODS = {"mm_diag_tight", "mm_diag_gershgorin_maj"}
-_CANONICAL_BLOCK_METHODS = {"mm_diag_block_maj", "mm_diag_block_tight"}
+_CANONICAL_BLOCK_METHODS = {
+    "mm_diag_block_maj",
+    "mm_diag_block_tight",
+    "ls_block_diag",
+    "ls_block_gershgorin",
+}
 
 _DIAG_METHODS = _CANONICAL_DIAG_METHODS
 _BLOCK_METHODS = _CANONICAL_BLOCK_METHODS
@@ -391,25 +406,261 @@ def compute_precond_diag(wvtv, x_arr, method: str, epsilon: float = 1e-8):
     raise ValueError(f"Unhandled diagonal preconditioner method: {method}.")
 
 
+def _build_dilation_eig(J):
+    """
+    Eigendecomposition of the Hermitian dilation of J (per-voxel d x 2 Jacobian).
+
+    Returns (Q, lambdas) with Q orthogonal ((d+2) x (d+2)) and lambdas the
+    dilation eigenvalues (+-singular values of J, zero-padded).
+    """
+    J = torch.nan_to_num(J, nan=0.0, posinf=0.0, neginf=0.0)
+    d = J.shape[-2]
+    U, S, Vh = torch.linalg.svd(J, full_matrices=True)
+    V = Vh.transpose(-2, -1)
+
+    inv_sqrt2 = torch.tensor(1.0 / (2.0 ** 0.5), device=J.device, dtype=J.dtype)
+    r = S.shape[-1]
+    q_parts = []
+    lambda_parts = []
+
+    for k in range(r):
+        u_k = U[..., :, k]
+        v_k = V[..., :, k]
+        q_parts.append(torch.cat([u_k, v_k], dim=-1) * inv_sqrt2)
+        lambda_parts.append(S[..., k])
+
+    for k in range(r):
+        u_k = U[..., :, k]
+        v_k = V[..., :, k]
+        q_parts.append(torch.cat([u_k, -v_k], dim=-1) * inv_sqrt2)
+        lambda_parts.append(-S[..., k])
+
+    if d > r:
+        u_extra = U[..., :, r:]
+        zeros = torch.zeros(
+            (*u_extra.shape[:-2], 2, u_extra.shape[-1]), device=J.device, dtype=J.dtype
+        )
+        q_parts.append(torch.cat([u_extra, zeros], dim=-2))
+        lambda_parts.append(
+            torch.zeros((*S.shape[:-1], u_extra.shape[-1]), device=J.device, dtype=J.dtype)
+        )
+
+    if V.shape[-1] > r:
+        v_extra = V[..., :, r:]
+        zeros = torch.zeros(
+            (*v_extra.shape[:-2], d, v_extra.shape[-1]), device=J.device, dtype=J.dtype
+        )
+        q_parts.append(torch.cat([zeros, v_extra], dim=-2))
+        lambda_parts.append(
+            torch.zeros((*S.shape[:-1], v_extra.shape[-1]), device=J.device, dtype=J.dtype)
+        )
+
+    q_blocks = [q.unsqueeze(-1) if q.ndim == J.ndim - 1 else q for q in q_parts]
+    Q = torch.cat(q_blocks, dim=-1)
+
+    lambda_blocks = [
+        lam.unsqueeze(-1) if lam.ndim == J.ndim - 2 else lam for lam in lambda_parts
+    ]
+    lambdas = torch.cat(lambda_blocks, dim=-1)
+    return Q, lambdas
+
+
 def _ls_hessian_matrix(J, eps):
-    """Legacy LS helper forwarded to preconditioners_old."""
-    from .preconditioners_old import _ls_hessian_matrix as _old_ls_hessian_matrix
+    """Full Lewis-Sendov Hessian of rho(J) = sum_k sqrt(sigma_k(J)^2 + eps^2)."""
+    d = J.shape[-2]
+    n = d + 2
+    Q, lambdas = _build_dilation_eig(J)
+    Q_t = Q.transpose(-1, -2)
 
-    return _old_ls_hessian_matrix(J, eps)
+    eps_t = torch.as_tensor(float(eps), device=J.device, dtype=J.dtype)
+    denom = torch.sqrt(lambdas * lambdas + eps_t * eps_t)
+    psi_prime = lambdas / denom
+    psi_double = (eps_t * eps_t) / (denom * denom * denom)
+
+    li = lambdas.unsqueeze(-1)
+    lj = lambdas.unsqueeze(-2)
+    diff = li - lj
+
+    eps_div = get_division_epsilon(J.dtype)
+    psi_prime_i = psi_prime.unsqueeze(-1)
+    psi_prime_j = psi_prime.unsqueeze(-2)
+    psi_double_i = psi_double.unsqueeze(-1)
+    C = torch.where(diff.abs() > eps_div, (psi_prime_i - psi_prime_j) / diff, psi_double_i)
+    eye = torch.eye(n, device=J.device, dtype=torch.bool)
+    C = C.masked_fill(eye, 0.0)
+
+    H = torch.zeros((*J.shape[:-2], 2 * d, 2 * d), device=J.device, dtype=J.dtype)
+    for q in range(d):
+        for beta in range(2):
+            H_basis = torch.zeros((n, n), device=J.device, dtype=J.dtype)
+            H_basis[q, d + beta] = 1.0
+            H_basis[d + beta, q] = 1.0
+
+            tilde = Q_t @ H_basis @ Q
+            diag_tilde = torch.diagonal(tilde, dim1=-2, dim2=-1)
+            M = torch.diag_embed(psi_double * diag_tilde) + C * tilde
+            delta_G = Q @ M @ Q_t
+            delta_Y = delta_G[..., :d, d:]
+
+            col = q * 2 + beta
+            H[..., :, col] = delta_Y.reshape(*J.shape[:-2], 2 * d)
+
+    H = 0.5 * (H + H.transpose(-1, -2))
+    return H
 
 
-def _ls_blocks_from_hessian(H, d):
-    """Legacy LS helper forwarded to preconditioners_old (diag extraction)."""
-    from .preconditioners_old import _ls_blocks_from_hessian as _old_ls_blocks_from_hessian
+def _ls_blocks_from_hessian(H, d, method: str = "ls_block_diag"):
+    """Extract per-direction 2x2 diagonal blocks H_pp from the full LS Hessian."""
+    if method not in {"ls_block_diag", "ls_block_gershgorin"}:
+        raise ValueError(f"Unknown LS block method: {method}.")
 
-    return _old_ls_blocks_from_hessian(H, d, method="ls_block_diag")
+    H_blocks = H.reshape(*H.shape[:-2], d, 2, d, 2)
+    B = torch.zeros((*H.shape[:-2], d, 2, 2), device=H.device, dtype=H.dtype)
+    eye = torch.eye(2, device=H.device, dtype=H.dtype)
+
+    for p in range(d):
+        H_pp = H_blocks[..., p, :, p, :]
+        H_pp = 0.5 * (H_pp + H_pp.transpose(-1, -2))
+        if method == "ls_block_diag":
+            B[..., p, :, :] = H_pp
+            continue
+
+        off_sum = torch.zeros(H_pp.shape[:-2], device=H.device, dtype=H.dtype)
+        for q in range(d):
+            if q == p:
+                continue
+            H_pq = H_blocks[..., p, :, q, :]
+            sig = torch.linalg.svdvals(H_pq)
+            off_sum = off_sum + sig[..., 0]
+        B[..., p, :, :] = H_pp + off_sum.unsqueeze(-1).unsqueeze(-1) * eye
+
+    return B
 
 
-def _ls_blocks_lowmem(J, eps):
-    """Legacy LS helper forwarded to preconditioners_old (diag extraction)."""
-    from .preconditioners_old import _ls_blocks_lowmem as _old_ls_blocks_lowmem
+def _ls_blocks_lowmem(J, eps, method: str = "ls_block_diag"):
+    """
+    Per-direction 2x2 LS Hessian diagonal blocks, computed without materialising
+    the full (2d x 2d) Hessian.
 
-    return _old_ls_blocks_lowmem(J, eps, method="ls_block_diag")
+    "ls_block_gershgorin" additionally inflates each block by the spectral norm
+    (largest singular value) of the off-diagonal H_pq blocks (Gershgorin, Sec. G.4).
+    """
+    if method not in {"ls_block_diag", "ls_block_gershgorin"}:
+        raise ValueError(f"Unknown LS block method: {method}.")
+
+    d = J.shape[-2]
+    n = d + 2
+    Q, lambdas = _build_dilation_eig(J)
+    Q_t = Q.transpose(-1, -2)
+
+    eps_t = torch.as_tensor(float(eps), device=J.device, dtype=J.dtype)
+    denom = torch.sqrt(lambdas * lambdas + eps_t * eps_t)
+    psi_prime = lambdas / denom
+    psi_double = (eps_t * eps_t) / (denom * denom * denom)
+
+    li = lambdas.unsqueeze(-1)
+    lj = lambdas.unsqueeze(-2)
+    diff = li - lj
+
+    eps_div = get_division_epsilon(J.dtype)
+    psi_prime_i = psi_prime.unsqueeze(-1)
+    psi_prime_j = psi_prime.unsqueeze(-2)
+    psi_double_i = psi_double.unsqueeze(-1)
+    C = torch.where(diff.abs() > eps_div, (psi_prime_i - psi_prime_j) / diff, psi_double_i)
+    eye = torch.eye(n, device=J.device, dtype=torch.bool)
+    C = C.masked_fill(eye, 0.0)
+
+    B = torch.zeros((*J.shape[:-2], d, 2, 2), device=J.device, dtype=J.dtype)
+    off_sum = None
+    if method == "ls_block_gershgorin":
+        off_sum = torch.zeros((*J.shape[:-2], d), device=J.device, dtype=J.dtype)
+
+    for q in range(d):
+        delta_cols = []
+        for beta in range(2):
+            H_basis = torch.zeros((n, n), device=J.device, dtype=J.dtype)
+            H_basis[q, d + beta] = 1.0
+            H_basis[d + beta, q] = 1.0
+
+            tilde = Q_t @ H_basis @ Q
+            diag_tilde = torch.diagonal(tilde, dim1=-2, dim2=-1)
+            M = torch.diag_embed(psi_double * diag_tilde) + C * tilde
+            delta_G = Q @ M @ Q_t
+            delta_Y = delta_G[..., :d, d:]
+            delta_cols.append(delta_Y)
+
+        blocks_q = torch.stack(delta_cols, dim=-1)
+        B[..., q, :, :] = blocks_q[..., q, :, :]
+
+        if off_sum is not None:
+            sig = torch.linalg.svdvals(blocks_q)
+            sigma_max = sig[..., 0]
+            mask = torch.ones((d,), device=J.device, dtype=J.dtype)
+            mask[q] = 0.0
+            off_sum = off_sum + sigma_max * mask
+
+    B = 0.5 * (B + B.transpose(-1, -2))
+    if off_sum is not None:
+        eye2 = torch.eye(2, device=J.device, dtype=J.dtype)
+        B = B + off_sum.unsqueeze(-1).unsqueeze(-1) * eye2
+    return B
+
+
+def _directional_scaling_blocks(wvtv, x_arr, like):
+    """Per-direction 2x2 scaling blocks k^{(r)} used to pull edge blocks to voxels."""
+    base_grad = wvtv.jacobian.grad[0] if isinstance(wvtv.jacobian.grad, list) else wvtv.jacobian.grad
+    base_grad = getattr(base_grad, "gradient", base_grad)
+    directions = list(getattr(base_grad, "directions", []))
+    bnd_cond = getattr(base_grad, "bnd_cond", "Neumann")
+
+    if len(directions) == 0:
+        return None, directions, bnd_cond
+
+    nx, ny, nz, M, d = like.shape
+    valid_mask = _direction_valid_mask((nx, ny, nz), directions, like.device, like.dtype, bnd_cond)
+    q_scale = torch.as_tensor(wvtv.jacobian.sensitivity(x_arr), device=like.device, dtype=like.dtype)
+    if valid_mask is not None:
+        q_scale = q_scale * valid_mask.unsqueeze(-2)
+
+    d_diag, _ = _directional_projector_stats_from_jacobian(wvtv.jacobian, like, M, d)
+
+    weights = wvtv.weights.to(like.device, dtype=like.dtype)
+    w0 = weights[..., 0]
+    w1 = weights[..., 1]
+    s1 = q_scale[..., 0, :]
+    s2 = q_scale[..., 1, :]
+    d1 = d_diag[..., 0, :]
+    d2 = d_diag[..., 1, :]
+
+    k1 = (w0 * w0).unsqueeze(-1) * (s1 * s1) * d1
+    k2 = (w1 * w1).unsqueeze(-1) * (s2 * s2) * d2
+    k12 = (w0 * w1).unsqueeze(-1) * (s1 * s2) * torch.sqrt(
+        torch.clamp(d1 * d2, min=0.0)
+    )
+
+    k = torch.stack(
+        [torch.stack([k1, k12], dim=-1), torch.stack([k12, k2], dim=-1)], dim=-2
+    )
+    return k, directions, bnd_cond
+
+
+def _map_ls_edge_blocks_to_voxels(wvtv, x_arr, like, edge_blocks, epsilon: float):
+    """Pull per-direction LS edge blocks back to per-voxel SPD blocks."""
+    k, directions, bnd_cond = _directional_scaling_blocks(wvtv, x_arr, like)
+    if k is None:
+        out = torch.zeros((*like.shape[:-2], 2, 2), device=like.device, dtype=like.dtype)
+        eye = torch.eye(2, device=out.device, dtype=out.dtype)
+        return out + epsilon * eye
+
+    if edge_blocks.ndim == k.ndim - 1:
+        edge_blocks = edge_blocks.unsqueeze(-3).expand_as(k)
+
+    t = torch.matmul(k, edge_blocks)
+    t = 0.5 * (t + t.transpose(-1, -2))
+    p_block = _accumulate_over_neighborhood_block(t, directions, bnd_cond)
+    p_block = 0.5 * (p_block + p_block.transpose(-1, -2))
+    p_block = torch.nan_to_num(p_block, nan=0.0, posinf=0.0, neginf=0.0)
+    return _spd_floor_blocks(p_block, epsilon)
 
 
 def compute_precond_block(wvtv, x_arr, method: str, epsilon: float = 1e-8):
@@ -419,6 +670,12 @@ def compute_precond_block(wvtv, x_arr, method: str, epsilon: float = 1e-8):
     Canonical methods from dtnv_preconditioner_corrected.tex:
     - mm_diag_block_maj: fully-majorising block surrogate (Method 1 chain).
     - mm_diag_block_tight: tight block-Jacobi pullback (Method 2 style).
+
+    Lewis-Sendov voxel-block methods (tnv_preconditioners_1_.md, Sections E-H):
+    - ls_block_diag: per-direction diagonal blocks of the full LS Hessian
+      (curvature estimate, not a majoriser).
+    - ls_block_gershgorin: ls_block_diag with Gershgorin spectral-norm
+      inflation from off-diagonal blocks (provable Loewner majoriser).
     """
     method = _canonical_method_name(method)
     if method not in _BLOCK_METHODS:
@@ -439,12 +696,20 @@ def compute_precond_block(wvtv, x_arr, method: str, epsilon: float = 1e-8):
         W = _mm_block_weight(A, wvtv.smoothing, wvtv.vtv.eps)
         return _map_mm_block_projector_to_voxels(wvtv, x_arr, A, W, epsilon)
 
+    if method in {"ls_block_diag", "ls_block_gershgorin"}:
+        J_mat = A.transpose(-2, -1)
+        B_dir = _ls_blocks_lowmem(J_mat, wvtv.vtv.eps, method)
+        return _map_ls_edge_blocks_to_voxels(wvtv, x_arr, A, B_dir, epsilon)
+
     raise ValueError(f"Unhandled block preconditioner method: {method}.")
 
 
 __all__ = [
     "compute_precond_diag",
     "compute_precond_block",
+    "_ls_hessian_matrix",
+    "_ls_blocks_from_hessian",
+    "_ls_blocks_lowmem",
     "_ALL_METHODS",
     "_DIAG_METHODS",
     "_BLOCK_METHODS",

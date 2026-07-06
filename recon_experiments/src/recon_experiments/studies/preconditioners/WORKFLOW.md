@@ -258,3 +258,34 @@ ls output/precond_1bpos/*/result.csv | wc -l
 ```bash
 pip install pandas matplotlib tabulate
 ```
+
+## LS-Only Sweep Rows (Lewis-Sendov block preconditioners)
+
+`ls_block_diag` and `ls_block_gershgorin` (the Lewis-Sendov voxel-block preconditioners,
+using the full per-voxel SVD; `ls_block_diag` is what thesis Chapter 8's w-dTNV runs used)
+are not in `parameters/precond_types.csv` — adding them there would resubmit every
+existing sweep row. Instead they live in `parameters/precond_types_ls.csv` and are
+submitted via a separate sweep config that reuses the same `sweep_name` as the main
+sweep, so results land in the same output directory and are analysed against the
+same baselines.
+
+**Submit LS-only jobs** (no baseline rerun needed — objective is unchanged, existing
+baselines/references are reused):
+```bash
+cd recon_experiments/src/recon_experiments/studies/preconditioners
+printf 'y\n' | SWEEP_REPEATS=5 ./launch_precond_sweep.sh precond_sweep_1bpos_ls.yaml full
+printf 'y\n' | SWEEP_REPEATS=5 ./launch_precond_sweep.sh precond_sweep_2bpos_ls.yaml full
+```
+Use `test` mode first for a single sanity job on each dataset.
+
+Notes:
+- Repo on the comic cluster: `/cluster/project2/synergistic_Y90/SETR2`. Sync by pushing
+  this branch and running `git pull` over `ssh comic` (not through the sshfs mount —
+  it's slow; use the mount only for browsing results).
+- Monitor with `qstat -u sporter` / `./check_status.sh`; logs under
+  `output/precond_{1,2}bpos/_logs/`.
+- Analyse with the same baseline as the main sweep:
+  ```bash
+  python scripts/analyze_precond_sweep.py --sweep precond_1bpos --baseline baselines_1bpos
+  python scripts/analyze_precond_sweep.py --sweep precond_2bpos --baseline baselines_2bpos
+  ```
