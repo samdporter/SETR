@@ -1,0 +1,40 @@
+# LS-only Lehmer q=0.1 rerun for the one-bed preconditioner comparison.
+# The sweep_name intentionally matches the harmonic/majoriser LS run so the
+# new combine_lehmer directories sit beside the existing combine_majoriser rows.
+sweep_name: "precond_1bpos"
+base_config: "config_1bpos_anthro.yaml"
+script: "run_precond_sweep_single.py"
+
+sge:
+  runtime: "48:00:00"
+  memory: "95G"
+  cores: 1
+  queue: null
+  gpu: true
+  exclude_nodes:
+    - fozzie.local
+
+parameters:
+  precond_types_file: "precond_types_ls_lehmer.csv"
+  alphas_file: "alphas.csv"
+  step_sizes_file: "step_sizes.csv"
+
+fixed_params:
+  emulate_subset_selection: true
+  subset_mode: "separate"
+  prior_mode: "always"
+  num_epochs: 25
+  gamma_tnv: 0.02
+  relaxation_eta: 0.002
+  use_tof: false
+  support_mask_from_sensitivity: true
+  support_mask_rel_threshold: 0.001
+  support_mask_abs_threshold: 0.0
+  em_precond_smooth: true
+  em_precond_smoothing_fwhm: [5, 5, 5]
+  em_precond_cap_to_initial_max: false
+  em_precond_cap_to_initial_max_factor: 2.0
+  precond_cap_to_initial_max: false
+  precond_cap_to_initial_max_factor: 2.0
+  lehmer_p: 0.1
+  block_scalar_reduction: "mean"

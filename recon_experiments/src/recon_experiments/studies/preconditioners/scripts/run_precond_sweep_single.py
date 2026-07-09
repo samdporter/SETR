@@ -65,6 +65,15 @@ def _has_override(overrides: list[str], key: str) -> bool:
     return False
 
 
+def _override_value(overrides: list[str], key: str, default: str | None = None) -> str | None:
+    value = default
+    for override in overrides:
+        parsed = _split_override(override)
+        if parsed is not None and parsed[0] == key:
+            value = parsed[1]
+    return value
+
+
 def _subset_selection_config(base_dir: Path, bpos: int) -> Path:
     config_name = "base_config_anthro.yaml" if bpos == 1 else "base_config_2bpos.yaml"
     return (
@@ -137,8 +146,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--block-scalar-reduction",
         choices=["mean", "geometric", "diag"],
-        default="diag",
-        help="Scalar reduction for block blend (default: diag)",
+        default=None,
+        help="Scalar reduction for block blend. Leave unset to use config/fixed overrides.",
     )
     parser.add_argument(
         "--override",
@@ -181,6 +190,16 @@ def main() -> int:
         raise FileNotFoundError(f"Runner script not found: {runner_path}")
 
     overrides = _build_override_list(args)
+    effective_lehmer_p = _override_value(
+        overrides,
+        "lehmer_p",
+        None if args.lehmer_p is None else str(args.lehmer_p),
+    )
+    effective_block_scalar_reduction = _override_value(
+        overrides,
+        "block_scalar_reduction",
+        args.block_scalar_reduction,
+    )
     emulate_subset_selection, overrides = _consume_bool_override(
         overrides,
         "emulate_subset_selection",
@@ -234,6 +253,8 @@ def main() -> int:
         "run_time": elapsed,
         "status": status,
         "error": None if status == "success" else f"returncode={proc.returncode}",
+        "lehmer_p": effective_lehmer_p,
+        "block_scalar_reduction": effective_block_scalar_reduction,
     }
 
     with result_path.open("w", newline="", encoding="utf-8") as f:
