@@ -1,0 +1,6 @@
+precond_type,combine
+bsrem,none
+ls_block_diag,majoriser
+mm_diag_block_tight,majoriser
+mm_diag_gershgorin_maj,majoriser
+mm_diag_tight,majoriser
