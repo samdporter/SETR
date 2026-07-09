@@ -12,11 +12,12 @@ except Exception as exc:  # pragma: no cover
     )
 
 
-def _make_blender(p=0.1, epsilon=1e-12, max_value=np.inf):
+def _make_blender(p=0.1, epsilon=1e-12, max_value=np.inf, output_scale=1.0):
     obj = object.__new__(BlockLehmerMeanPreconditioner)
     obj.p = float(p)
     obj.epsilon = float(epsilon)
     obj.max_value = float(max_value)
+    obj.output_scale = float(output_scale)
     return obj
 
 
@@ -84,3 +85,15 @@ def test_block_lehmer_harmonic_with_diag_scalar():
     assert np.allclose(out[..., 1, 1], expected_11)
     assert np.allclose(out[..., 0, 1], 0.0)
     assert np.allclose(out[..., 1, 0], 0.0)
+
+
+def test_block_lehmer_output_scale_halves_blend():
+    block = np.zeros((1, 1, 2, 2), dtype=np.float64)
+    block[..., 0, 0] = 2.0
+    block[..., 1, 1] = 4.0
+    scalar = np.full((1, 1), 3.0, dtype=np.float64)
+
+    unscaled = _make_blender(p=0.1, output_scale=1.0)._blend_block_and_scalar(block, scalar)
+    scaled = _make_blender(p=0.1, output_scale=0.5)._blend_block_and_scalar(block, scalar)
+
+    assert np.allclose(scaled, 0.5 * unscaled)

@@ -252,6 +252,7 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         update_interval=1,
         freeze_iter=np.inf,
         scalar_reduction: str = "mean",
+        output_scale: float = 1.0,
     ):
         super().__init__(update_interval, freeze_iter)
         self.block_preconditioner = block_preconditioner
@@ -260,8 +261,11 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         self.epsilon = float(epsilon)
         self.max_value = float(max_value)
         self.scalar_reduction = scalar_reduction
+        self.output_scale = float(output_scale)
         if scalar_reduction not in {"mean", "geometric", "diag"}:
             raise ValueError("scalar_reduction must be one of {'mean', 'geometric', 'diag'}.")
+        if not np.isfinite(self.output_scale) or self.output_scale <= 0:
+            raise ValueError("output_scale must be finite and > 0.")
 
     def _compute_scalar_field(self, algorithm) -> np.ndarray:
         scalar_precond = self.scalar_preconditioner.compute_preconditioner(algorithm)
@@ -329,7 +333,7 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
             blended = (eigvecs_b * eigvals_b[..., None, :]) @ np.swapaxes(
                 eigvecs_b, -1, -2
             )
-            return _symmetrise_blocks(blended)
+            return self.output_scale * _symmetrise_blocks(blended)
 
         eigvals, eigvecs = np.linalg.eigh(block_arr)
         eigvals = np.maximum(eigvals, self.epsilon)
@@ -343,7 +347,7 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
             if np.isfinite(self.max_value):
                 blended_eigs = np.minimum(blended_eigs, self.max_value)
             blended = (eigvecs * blended_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
-            return _symmetrise_blocks(blended)
+            return self.output_scale * _symmetrise_blocks(blended)
 
         lam_p = np.power(lam, self.p)[..., None]
         lam_pm1 = np.power(lam, self.p - 1.0)[..., None]
@@ -357,7 +361,7 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
             blended_eigs = np.minimum(blended_eigs, self.max_value)
 
         blended = (eigvecs * blended_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
-        return _symmetrise_blocks(blended)
+        return self.output_scale * _symmetrise_blocks(blended)
 
     def compute_preconditioner(self, algorithm, out=None):
         block_arr = self.block_preconditioner._compute_block_preconditioner(algorithm.solution)
@@ -1040,10 +1044,14 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         update_interval=np.inf,
         freeze_iter=np.inf,
         scales=None,
+        output_scale=1.0,
     ):
         super().__init__(update_interval, freeze_iter)
         self.preconds = preconds
         self.p = float(p)
+        self.output_scale = float(output_scale)
+        if not np.isfinite(self.output_scale) or self.output_scale <= 0:
+            raise ValueError("output_scale must be finite and > 0.")
 
         if p < 1 and epsilon <= 0:
             epsilon = 1e-12
@@ -1081,8 +1089,10 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
                 den += v.power(-1)
             den = den.maximum(eps)
             if out is None:
-                return 1 / den
+                return (1 / den) * self.output_scale
             den.power(-1, out=out)
+            if self.output_scale != 1.0:
+                out.sapyb(self.output_scale, out, 0, out=out)
             return out
 
         # 3) Lehmer numerator and denominator:
@@ -1099,8 +1109,10 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         # 4) Final safeguard on denominator and division
         den = den.maximum(eps)
         if out is None:
-            return num / den
+            return (num / den) * self.output_scale
         num.divide(den, out=out)
+        if self.output_scale != 1.0:
+            out.sapyb(self.output_scale, out, 0, out=out)
         return out
 
 

@@ -671,6 +671,10 @@ def get_preconditioners(
         )
         combine = "majoriser"
     lehmer_p = float(getattr(args, "lehmer_p", 0.0))
+    lehmer_scale = float(getattr(args, "lehmer_scale", 1.0))
+    if not np.isfinite(lehmer_scale) or lehmer_scale <= 0:
+        logging.warning("Invalid lehmer_scale=%s; using 1.0.", lehmer_scale)
+        lehmer_scale = 1.0
     scalar_reduction = getattr(args, "block_scalar_reduction", "diag")
     if scalar_reduction == "diag" and combine not in {"majoriser", "none"}:
         logging.warning(
@@ -883,6 +887,7 @@ def get_preconditioners(
                 update_interval=epoch_update_interval,
                 freeze_iter=precond_freeze_iter,
                 scalar_reduction=scalar_reduction,
+                output_scale=lehmer_scale,
             )
 
     # Diagonal preconditioner path (single TNV prior)
@@ -949,6 +954,7 @@ def get_preconditioners(
         freeze_iter=precond_freeze_iter,
         epsilon=0,
         p=lehmer_p,
+        output_scale=lehmer_scale,
     )
 
 

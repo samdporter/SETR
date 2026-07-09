@@ -200,6 +200,7 @@ def main() -> int:
         "block_scalar_reduction",
         args.block_scalar_reduction,
     )
+    effective_lehmer_scale = _override_value(overrides, "lehmer_scale", "1.0")
     emulate_subset_selection, overrides = _consume_bool_override(
         overrides,
         "emulate_subset_selection",
@@ -254,6 +255,7 @@ def main() -> int:
         "status": status,
         "error": None if status == "success" else f"returncode={proc.returncode}",
         "lehmer_p": effective_lehmer_p,
+        "lehmer_scale": effective_lehmer_scale,
         "block_scalar_reduction": effective_block_scalar_reduction,
     }
 
