@@ -37,4 +37,4 @@ fixed_params:
   save_preconditioners: false
   lehmer_p: 0.1
   lehmer_scale: 0.5
-  block_scalar_reduction: "mean"
+  block_scalar_reduction: "diag"

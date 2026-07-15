@@ -106,12 +106,20 @@ was restored from the comic source; the analysis also now skips unreadable snaps
 ## Exp 1 — Lehmer mean vs harmonic mean ⏳
 
 Harmonic combine (= inverse-sum majoriser, `combine=majoriser`) converges cleanly on
-both bpos. Lehmer p=0.1 as first run **diverged** (J 2.6e6 → 8.9e12) because the Lehmer
-general branch ≈ **2× the parallel-sum majoriser** as p→0 (the missing 1/n between
-"parallel sum" and "harmonic mean"). Confirmed numerically: `0.5·L₀.₁ / majoriser` is
-1.00 (equal curvatures) → 1.10 (10:1) → 1.29 (100:1). The committed `lehmer_scale=0.5`
-therefore lands Lehmer p=0.1 essentially on the harmonic majoriser. **Awaiting the
-scaled reruns** (comic was 2 commits behind; the deployed runs were unscaled).
+both bpos. The first Lehmer p=0.1 runs **diverged** (J 2.6e6 → 8.9e12). The cause was
+not the factor of two alone: the block path reduced the modality-specific data
+preconditioner to one scalar. In the 1bpos initialization the SPECT/PET data-
+preconditioner ratio has median ~3917, so its arithmetic reduction grossly oversteps
+the PET channel. The old scaled Lehmer block had a generalized maximum eigenvalue
+relative to the parallel-sum majoriser of 178× at the median and 811× at p95.
+
+The corrected path retains both full 2×2 prior/data operands. It uses the standard
+Lehmer normalization, so `0.5·L₀` is exactly the parallel sum; on the saved SETR2
+initialization the arrays are bitwise identical. For p=0.1 the remaining departure is
+the genuine Lehmer-order bias under extreme operand contrast (generalized maximum
+eigenvalue 6.49× median, 9.93× p95, 15.89× maximum), not modality scalarisation. Use
+p=0 for exact majoriser equivalence; positive p is intentionally more aggressive and
+still requires a stability rerun.
 
 ---
 

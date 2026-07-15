@@ -36,7 +36,6 @@ from recon_core.cil_extensions.functions import BlockIndicatorBox
 from recon_core.cil_extensions.operators import ScalingOperator
 from recon_core.cil_extensions.preconditioners import (
     BSREMPreconditioner,
-    BlockDiagonalPriorPreconditioner,
     BlockLehmerMeanPreconditioner,
     HarmonicMeanPreconditioner,
     ImageFunctionPreconditioner,
@@ -675,12 +674,9 @@ def get_preconditioners(
     if not np.isfinite(lehmer_scale) or lehmer_scale <= 0:
         logging.warning("Invalid lehmer_scale=%s; using 1.0.", lehmer_scale)
         lehmer_scale = 1.0
-    scalar_reduction = getattr(args, "block_scalar_reduction", "diag")
-    if scalar_reduction == "diag" and combine not in {"majoriser", "none"}:
-        logging.warning(
-            "Diagonal scalar blending requires p=0 inverse-sum; forcing combine='majoriser'."
-        )
-        combine = "majoriser"
+    scalar_reduction = (
+        str(getattr(args, "block_scalar_reduction", "diag")).strip().lower()
+    )
     precond_data_epsilon = float(getattr(args, "precond_data_epsilon", 1e-8))
     precond_safety_scale = float(getattr(args, "precond_safety_scale", 1.0))
     if not np.isfinite(precond_safety_scale) or precond_safety_scale <= 0:
@@ -845,42 +841,26 @@ def get_preconditioners(
                     len(supported_priors),
                 )
             composite_prior = _SummedPriorCurvature(supported_priors, hessian_floor=1e-8)
-            block_precond = BlockDiagonalPriorPreconditioner(
-                composite_prior,
+            majoriser_precond = MajorisingHessianBlockPreconditioner(
+                s_inv=s_inv,
+                prior=composite_prior,
                 update_interval=epoch_update_interval,
                 freeze_iter=precond_freeze_iter,
-                epsilon=1e-8,
+                x_epsilon=precond_data_epsilon,
+                hessian_floor=1e-8,
                 max_value=max_precond_value,
+                safety_scale=precond_safety_scale,
             )
             if combine == "majoriser":
-                return MajorisingHessianBlockPreconditioner(
-                    s_inv=s_inv,
-                    prior=composite_prior,
-                    update_interval=epoch_update_interval,
-                    freeze_iter=precond_freeze_iter,
-                    x_epsilon=precond_data_epsilon,
-                    hessian_floor=1e-8,
-                    max_value=max_precond_value,
-                    safety_scale=precond_safety_scale,
-                )
+                return majoriser_precond
             if combine == "magez":
                 logging.warning(
                     "MaGeZ averaging is diagonal-only; using block majoriser path instead."
                 )
-                return MajorisingHessianBlockPreconditioner(
-                    s_inv=s_inv,
-                    prior=composite_prior,
-                    update_interval=epoch_update_interval,
-                    freeze_iter=precond_freeze_iter,
-                    x_epsilon=precond_data_epsilon,
-                    hessian_floor=1e-8,
-                    max_value=max_precond_value,
-                    safety_scale=precond_safety_scale,
-                )
+                return majoriser_precond
             p_val = 0.0 if combine == "harmonic" else lehmer_p
             return BlockLehmerMeanPreconditioner(
-                block_preconditioner=block_precond,
-                scalar_preconditioner=bsrem_precond,
+                hessian_preconditioner=majoriser_precond,
                 p=p_val,
                 epsilon=1e-12,
                 max_value=max_precond_value,

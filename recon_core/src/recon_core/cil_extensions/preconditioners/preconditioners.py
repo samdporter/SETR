@@ -227,36 +227,43 @@ class BlockDiagonalPriorPreconditioner(PreconditionerWithInterval):
 
 class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
     """
-    Matrix Lehmer-mean blend of a block preconditioner with a scalar one.
+    Matrix Lehmer mean of two voxel-wise SPD preconditioners.
 
-    The scalar preconditioner is converted to a per-voxel scalar field λ and blended
-    with block SPD matrix B using
+    For two SPD matrices B and D, define C = D^{-1/2} B D^{-1/2} and
 
-        L_p(B, λI) = (B^p + (λI)^p) @ (B^(p-1) + (λI)^(p-1))^{-1}
+        L_p(B, D) = D^{1/2} f_p(C) D^{1/2},
+        f_p(t) = (t^p + 1) / (t^(p-1) + 1).
 
-    which reduces to an eigenvalue-wise Lehmer mean because B and I commute.
+    This congruence formulation is symmetric and positive definite even when B and D
+    do not commute.  It agrees with the scalar Lehmer mean on commuting matrices and
+    has the important limits
 
-    Note:
-        For p=0 this implementation uses the inverse-sum blend
-            (B^{-1} + (λI)^{-1})^{-1}
-        (parallel sum), matching the intended Hessian-addition interpretation.
+        L_0(B, D) = 2 (B^{-1} + D^{-1})^{-1},
+        L_1(B, D) = (B + D) / 2.
+
+    Thus ``output_scale=0.5`` at ``p=0`` is exactly the parallel sum.  Production
+    callers should provide ``hessian_preconditioner`` so both this class and the
+    parallel-sum majoriser use identical prior/data Hessian components.  The legacy
+    preconditioner operands remain supported for compatibility.
     """
 
     def __init__(
         self,
-        block_preconditioner: BlockDiagonalPriorPreconditioner,
-        scalar_preconditioner: Preconditioner,
+        block_preconditioner: Optional[BlockDiagonalPriorPreconditioner] = None,
+        scalar_preconditioner: Optional[Preconditioner] = None,
         p: float = 1e-1,
         epsilon: float = 1e-12,
         max_value: float = np.inf,
         update_interval=1,
         freeze_iter=np.inf,
-        scalar_reduction: str = "mean",
+        scalar_reduction: str = "diag",
         output_scale: float = 1.0,
+        hessian_preconditioner=None,
     ):
         super().__init__(update_interval, freeze_iter)
         self.block_preconditioner = block_preconditioner
         self.scalar_preconditioner = scalar_preconditioner
+        self.hessian_preconditioner = hessian_preconditioner
         self.p = float(p)
         self.epsilon = float(epsilon)
         self.max_value = float(max_value)
@@ -266,6 +273,88 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
             raise ValueError("scalar_reduction must be one of {'mean', 'geometric', 'diag'}.")
         if not np.isfinite(self.output_scale) or self.output_scale <= 0:
             raise ValueError("output_scale must be finite and > 0.")
+        if self.epsilon <= 0 or not np.isfinite(self.epsilon):
+            raise ValueError("epsilon must be finite and > 0.")
+        if self.hessian_preconditioner is None and (
+            self.block_preconditioner is None or self.scalar_preconditioner is None
+        ):
+            raise ValueError(
+                "Provide hessian_preconditioner or both block_preconditioner and "
+                "scalar_preconditioner."
+            )
+
+    @staticmethod
+    def _reconstruct_from_eigendecomposition(eigvals, eigvecs):
+        return (eigvecs * eigvals[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
+
+    def _project_spd(self, blocks: np.ndarray, floor: Optional[float] = None) -> np.ndarray:
+        blocks = _symmetrise_blocks(np.asarray(blocks, dtype=np.float64))
+        eigvals, eigvecs = np.linalg.eigh(blocks)
+        np.maximum(eigvals, self.epsilon if floor is None else float(floor), out=eigvals)
+        projected = self._reconstruct_from_eigendecomposition(eigvals, eigvecs)
+        return _symmetrise_blocks(projected)
+
+    def _invert_spd(self, blocks: np.ndarray, floor: Optional[float] = None) -> np.ndarray:
+        blocks = _symmetrise_blocks(np.asarray(blocks, dtype=np.float64))
+        eigvals, eigvecs = np.linalg.eigh(blocks)
+        np.maximum(eigvals, self.epsilon if floor is None else float(floor), out=eigvals)
+        inverse = self._reconstruct_from_eigendecomposition(1.0 / eigvals, eigvecs)
+        return _symmetrise_blocks(inverse)
+
+    def _finalise_blocks(self, blocks: np.ndarray) -> np.ndarray:
+        """Apply Lehmer scaling, final cap, then the provider safety scale."""
+        blocks = self.output_scale * _symmetrise_blocks(blocks)
+        # ``getattr`` keeps the numerical helper usable in lightweight unit tests
+        # that construct an instance without running the dependency-heavy init.
+        provider = getattr(self, "hessian_preconditioner", None)
+        max_value = self.max_value if provider is None else float(provider.max_value)
+        if np.isfinite(max_value):
+            eigvals, eigvecs = np.linalg.eigh(blocks)
+            np.minimum(eigvals, max_value, out=eigvals)
+            blocks = self._reconstruct_from_eigendecomposition(eigvals, eigvecs)
+            blocks = _symmetrise_blocks(blocks)
+        if provider is not None and provider.safety_scale != 1.0:
+            blocks = blocks * provider.safety_scale
+        return blocks
+
+    def _blend_blocks(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        """Return the scaled two-operand matrix Lehmer mean of SPD block fields."""
+        if left.shape != right.shape or left.shape[-2:] != (2, 2):
+            raise ValueError(
+                f"Lehmer block operands must have matching (..., 2, 2) shapes, "
+                f"got {left.shape} and {right.shape}."
+            )
+
+        left = self._project_spd(left)
+        right = self._project_spd(right)
+
+        if self.p == 0.0:
+            # Standard two-operand L_0 is the harmonic mean: twice parallel sum.
+            inverse_sum = self._invert_spd(left) + self._invert_spd(right)
+            raw_mean = 2.0 * self._invert_spd(inverse_sum)
+            return self._finalise_blocks(raw_mean)
+
+        d_eigvals, d_eigvecs = np.linalg.eigh(right)
+        np.maximum(d_eigvals, self.epsilon, out=d_eigvals)
+        d_sqrt = self._reconstruct_from_eigendecomposition(np.sqrt(d_eigvals), d_eigvecs)
+        d_inv_sqrt = self._reconstruct_from_eigendecomposition(
+            1.0 / np.sqrt(d_eigvals), d_eigvecs
+        )
+
+        relative = _symmetrise_blocks(d_inv_sqrt @ left @ d_inv_sqrt)
+        rel_eigvals, rel_eigvecs = np.linalg.eigh(relative)
+        # The relative eigenvalues are dimensionless.  Use machine tiny rather than
+        # the absolute preconditioner floor so high modality contrasts are retained.
+        np.maximum(rel_eigvals, np.finfo(np.float64).tiny, out=rel_eigvals)
+        log_rel = np.log(rel_eigvals)
+        log_mean_eigvals = np.logaddexp(self.p * log_rel, 0.0) - np.logaddexp(
+            (self.p - 1.0) * log_rel, 0.0
+        )
+        mean_relative = self._reconstruct_from_eigendecomposition(
+            np.exp(log_mean_eigvals), rel_eigvecs
+        )
+        raw_mean = d_sqrt @ mean_relative @ d_sqrt
+        return self._finalise_blocks(_symmetrise_blocks(raw_mean))
 
     def _compute_scalar_field(self, algorithm) -> np.ndarray:
         scalar_precond = self.scalar_preconditioner.compute_preconditioner(algorithm)
@@ -292,84 +381,50 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
             raise TypeError(
                 f"Unsupported scalar preconditioner output type {type(scalar_precond)}."
             )
-        scalar = np.maximum(scalar, self.epsilon)
-        if np.isfinite(self.max_value):
-            scalar = np.minimum(scalar, self.max_value)
+        if scalar.ndim >= 2 and scalar.shape[-2:] == (2, 2):
+            scalar = self._project_spd(scalar)
+        else:
+            scalar = np.maximum(scalar, self.epsilon)
         return scalar
 
     def _blend_block_and_scalar(self, block_arr: np.ndarray, scalar: np.ndarray) -> np.ndarray:
-        block_arr = _symmetrise_blocks(block_arr.astype(np.float64, copy=False))
-
-        # If scalar is provided as a diagonal matrix per voxel, only harmonic (p=0) is valid.
+        block_arr = np.asarray(block_arr, dtype=np.float64)
         if scalar.ndim == block_arr.ndim:
-            if self.p != 0.0:
-                raise ValueError(
-                    "Diagonal scalar blending is only supported for harmonic mean (p=0)."
-                )
-            diag = np.diagonal(scalar, axis1=-2, axis2=-1)
-            diag = np.maximum(diag, self.epsilon)
-            scalar_inv = np.zeros_like(scalar)
-            scalar_inv[..., 0, 0] = 1.0 / diag[..., 0]
-            scalar_inv[..., 1, 1] = 1.0 / diag[..., 1]
+            data_blocks = np.asarray(scalar, dtype=np.float64)
+        else:
+            lam = np.maximum(np.asarray(scalar, dtype=np.float64), self.epsilon)
+            data_blocks = np.zeros_like(block_arr, dtype=np.float64)
+            data_blocks[..., 0, 0] = lam
+            data_blocks[..., 1, 1] = lam
+        return self._blend_blocks(block_arr, data_blocks)
 
-            eigvals, eigvecs = np.linalg.eigh(block_arr)
-            eigvals = np.maximum(eigvals, self.epsilon)
-            inv_eigs = 1.0 / eigvals
-            block_inv = (eigvecs * inv_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
+    def _compute_from_hessian_provider(self, algorithm) -> np.ndarray:
+        provider = self.hessian_preconditioner
+        image = algorithm.solution
 
-            sum_inv = _symmetrise_blocks(block_inv + scalar_inv)
-            eigvals_s, eigvecs_s = np.linalg.eigh(sum_inv)
-            eigvals_s = np.maximum(eigvals_s, self.epsilon)
-            inv_sum = (eigvecs_s * (1.0 / eigvals_s)[..., None, :]) @ np.swapaxes(
-                eigvecs_s, -1, -2
-            )
-            blended = inv_sum
-            blended = _symmetrise_blocks(blended)
+        # This is the exact equality contract requested by the experiment: use the
+        # identical summed-Hessian inversion, cap, and safety scale as the majoriser.
+        if self.p == 0.0 and self.output_scale == 0.5:
+            return provider.compute_preconditioner(algorithm)
 
-            eigvals_b, eigvecs_b = np.linalg.eigh(blended)
-            eigvals_b = np.maximum(eigvals_b, self.epsilon)
-            if np.isfinite(self.max_value):
-                eigvals_b = np.minimum(eigvals_b, self.max_value)
-            blended = (eigvecs_b * eigvals_b[..., None, :]) @ np.swapaxes(
-                eigvecs_b, -1, -2
-            )
-            return self.output_scale * _symmetrise_blocks(blended)
-
-        eigvals, eigvecs = np.linalg.eigh(block_arr)
-        eigvals = np.maximum(eigvals, self.epsilon)
-
-        lam = np.maximum(scalar, self.epsilon)
-        if self.p == 0.0:
-            den = (1.0 / eigvals) + (1.0 / lam)[..., None]
-            den = np.maximum(den, self.epsilon)
-            blended_eigs = 1.0 / den
-            blended_eigs = np.maximum(blended_eigs, self.epsilon)
-            if np.isfinite(self.max_value):
-                blended_eigs = np.minimum(blended_eigs, self.max_value)
-            blended = (eigvecs * blended_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
-            return self.output_scale * _symmetrise_blocks(blended)
-
-        lam_p = np.power(lam, self.p)[..., None]
-        lam_pm1 = np.power(lam, self.p - 1.0)[..., None]
-
-        num = np.power(eigvals, self.p) + lam_p
-        den = np.power(eigvals, self.p - 1.0) + lam_pm1
-        den = np.maximum(den, self.epsilon)
-        blended_eigs = num / den
-        blended_eigs = np.maximum(blended_eigs, self.epsilon)
-        if np.isfinite(self.max_value):
-            blended_eigs = np.minimum(blended_eigs, self.max_value)
-
-        blended = (eigvecs * blended_eigs[..., None, :]) @ np.swapaxes(eigvecs, -1, -2)
-        return self.output_scale * _symmetrise_blocks(blended)
+        prior_h = provider._compute_prior_hessian_block(image)
+        data_h = provider._compute_data_hessian_block(image)
+        floor = provider.hessian_floor
+        prior_precond = self._invert_spd(prior_h, floor=floor)
+        data_precond = self._invert_spd(data_h, floor=floor)
+        return self._blend_blocks(prior_precond, data_precond)
 
     def compute_preconditioner(self, algorithm, out=None):
+        if self.hessian_preconditioner is not None:
+            return self._compute_from_hessian_provider(algorithm)
+
         block_arr = self.block_preconditioner._compute_block_preconditioner(algorithm.solution)
         scalar = self._compute_scalar_field(algorithm)
         if scalar.ndim == block_arr.ndim:
             if scalar.shape != block_arr.shape:
                 raise ValueError(
-                    f"Scalar/block geometry mismatch: scalar {scalar.shape}, block {block_arr.shape}."
+                    "Scalar/block geometry mismatch: "
+                    f"scalar {scalar.shape}, block {block_arr.shape}."
                 )
         elif scalar.shape != block_arr.shape[:-2]:
             raise ValueError(
@@ -386,9 +441,8 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
             if self.freeze is None:
                 self.freeze = self.compute_preconditioner(algorithm)
             current_block = self.freeze
-        return self.block_preconditioner._apply_block_preconditioner(
-            gradient, current_block, out=out
-        )
+        applier = self.block_preconditioner or self.hessian_preconditioner
+        return applier._apply_block_preconditioner(gradient, current_block, out=out)
 
 
 class MajorisingHessianDiagonalPreconditioner(PreconditionerWithInterval):
@@ -1026,7 +1080,7 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         L_p(x_1, ..., x_n) = (Σ x_i^p) / (Σ x_i^(p-1))
 
     so that:
-        p = 0  -> inverse-sum blend (parallel sum)
+        p = 0  -> harmonic mean; for two inputs, 0.5 * L_0 is the parallel sum
         p = 1  -> arithmetic mean
         p > 1  -> biased toward max
         p < 0  -> biased toward min (not recommended here)
@@ -1082,18 +1136,6 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         # 2) Apply a symmetric floor to all inputs
         #    This guarantees x >= eps everywhere for all subsequent powers.
         clamped = [v.maximum(eps) for v in values]
-
-        if p == 0.0:
-            den = clamped[0].power(-1)
-            for v in clamped[1:]:
-                den += v.power(-1)
-            den = den.maximum(eps)
-            if out is None:
-                return (1 / den) * self.output_scale
-            den.power(-1, out=out)
-            if self.output_scale != 1.0:
-                out.sapyb(self.output_scale, out, 0, out=out)
-            return out
 
         # 3) Lehmer numerator and denominator:
         #      num = Σ x^p

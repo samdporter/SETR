@@ -601,7 +601,11 @@ def _write_report(
         "## Caveats",
         "",
         "- This is only a direct Lehmer-vs-harmonic A/B test once matching `precond_combine=lehmer` runs exist beside the harmonic/majoriser rows.",
-        "- For block LS runs, Lehmer with `p>0` requires scalarising the data preconditioner (`block_scalar_reduction=mean` or `geometric`); `diag` is only implemented for `p=0`.",
+        (
+            "- Block LS Lehmer uses aligned full 2x2 prior/data operands. `p=0` with "
+            "`lehmer_scale=0.5` is exactly Hessian-sum inversion; `p>0` retains "
+            "modality-specific data curvature but is intentionally more aggressive."
+        ),
         "- The 1 percent relative-to-objective criterion is not used because the initial iterate already satisfies it.",
         "- `n_runs` counts attempted run directories; objective statistics use only runs with finite objective traces.",
         "- PET final-image RMSE/NRMSE is reported only when `--with-image-metrics` is used and Interfile grids match; SPECT final images are not compared here because saved baseline/run grids differ in the available outputs.",

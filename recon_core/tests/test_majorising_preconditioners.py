@@ -12,7 +12,9 @@ if str(SRC) not in sys.path:
 
 try:
     from cil.framework import BlockDataContainer
+
     from recon_core.cil_extensions.preconditioners.preconditioners import (
+        BlockLehmerMeanPreconditioner,
         BSREMPreconditioner,
         MajorisingHessianBlockPreconditioner,
         MajorisingHessianDiagonalPreconditioner,
@@ -39,6 +41,9 @@ class ArrayContainer:
 
     def copy(self):
         return ArrayContainer(self._arr.copy())
+
+    def max(self):
+        return float(np.max(self._arr))
 
     def abs(self, out=None):
         arr = np.abs(self._arr)
@@ -357,6 +362,76 @@ def test_get_preconditioners_threads_safety_scale_into_block_majoriser():
     assert isinstance(precond, MajorisingHessianBlockPreconditioner)
     assert precond.safety_scale == pytest.approx(0.3)
     assert precond.update_interval == 7
+
+
+def test_block_lehmer_p0_half_scale_is_exact_factory_parallel_sum():
+    """The production Lehmer path must share the exact majoriser operands."""
+    exp_src = ROOT.parent / "recon_experiments" / "src"
+    if str(exp_src) not in sys.path:
+        sys.path.insert(0, str(exp_src))
+
+    try:
+        from recon_experiments.runners.dtnv_common import get_preconditioners
+    except (ImportError, OSError) as exc:  # pragma: no cover
+        pytest.skip(f"recon_experiments unavailable: {exc}")
+
+    class _Prior:
+        @staticmethod
+        def preconditioner_block(*_args, **_kwargs):
+            return np.array(
+                [
+                    [[4.0, 0.7], [0.7, 2.5]],
+                    [[1.5, -0.2], [-0.2, 3.0]],
+                ],
+                dtype=np.float64,
+            )
+
+    common_args = dict(
+        precond_type="mm_diag_block_maj",
+        precond_safety_scale=0.35,
+        block_scalar_reduction="diag",
+        precond_data_epsilon=1e-8,
+        precond_freeze_epochs=None,
+        lehmer_p=0.0,
+        lehmer_scale=0.5,
+        em_precond_smooth=False,
+    )
+    s_inv = BlockDataContainer(
+        ArrayContainer([0.02, 2.0]),
+        ArrayContainer([8.0, 0.05]),
+    )
+    initial_estimates = SimpleNamespace(
+        containers=[ArrayContainer([12.0, 3.0]), ArrayContainer([2.0, 20.0])]
+    )
+    image = BlockDataContainer(
+        ArrayContainer([10.0, 1.0]),
+        ArrayContainer([1.5, 15.0]),
+    )
+    algorithm = SimpleNamespace(solution=image, iteration=0)
+
+    lehmer = get_preconditioners(
+        args=SimpleNamespace(**common_args, precond_combine="lehmer"),
+        s_inv=s_inv,
+        all_funs=[object(), object(), object()],
+        update_interval=3,
+        priors_list=[_Prior()],
+        initial_estimates=initial_estimates,
+    )
+    parallel_sum = get_preconditioners(
+        args=SimpleNamespace(**common_args, precond_combine="majoriser"),
+        s_inv=s_inv,
+        all_funs=[object(), object(), object()],
+        update_interval=3,
+        priors_list=[_Prior()],
+        initial_estimates=initial_estimates,
+    )
+
+    assert isinstance(lehmer, BlockLehmerMeanPreconditioner)
+    assert isinstance(parallel_sum, MajorisingHessianBlockPreconditioner)
+    assert np.array_equal(
+        lehmer.compute_preconditioner(algorithm),
+        parallel_sum.compute_preconditioner(algorithm),
+    )
 
 
 def test_get_preconditioners_mm_diag_returns_diagonal_majoriser_with_safety_scale():

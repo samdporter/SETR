@@ -38,4 +38,4 @@ fixed_params:
   precond_cap_to_initial_max_factor: 2.0
   lehmer_p: 0.1
   lehmer_scale: 0.5
-  block_scalar_reduction: "mean"
+  block_scalar_reduction: "diag"
