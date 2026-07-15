@@ -6,7 +6,11 @@ bpos: 1
 # Baseline-equivalent weighting: alpha=beta=1 with gamma_tnv=0.01.
 alpha: 1
 beta: 1
-delta: null
+# Pinned to the 1bpos preconditioner-baseline delta (baselines_1bpos_gersh_eta0001_gamma002)
+# so subset-selection runs minimise the SAME objective as the ground-truth baseline.
+# Auto-estimation via the subset runner mis-scales SPECT at delta-time and yields
+# ~0.0019 (a 26x-less-smoothed prior); see OBJECTIVE_CONSISTENCY_GATING.md.
+delta: 0.05000608682632448
 dynamic_percentile: 95.0
 delta_divisor: 20.0
 epsilon_divisor: 100.0

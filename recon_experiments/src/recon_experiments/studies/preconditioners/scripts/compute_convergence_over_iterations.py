@@ -2,12 +2,16 @@
 """
 Compute convergence-over-iterations metrics with PET-space VOIs.
 
+The reconstructions (both PET modality 0 and SPECT modality 1) are performed
+directly on the PET grid, so the saved image_1_*.hv snapshots are already in
+PET space. Metrics and figures therefore use these arrays directly -- we must
+NOT re-apply the SPECT->PET transform, which would double-warp them.
+
 For each sweep run:
-1. Load PET and SPECT intermediate images per saved iteration.
-2. Resample SPECT to PET space using the no-zoom SPECT->PET transform.
-3. Compute RMSE and normalized RMSE (NRMSE) versus baseline final images inside PET-space VOIs.
-4. Aggregate repeated runs with mean/min/max and percentile summaries.
-5. Save convergence CSVs, convergence plots (with run envelopes), and a VOI overlay image.
+1. Load PET and SPECT intermediate images per saved iteration (both already PET-space).
+2. Compute RMSE and normalized RMSE (NRMSE) versus baseline final images inside PET-space VOIs.
+3. Aggregate repeated runs with mean/min/max and percentile summaries.
+4. Save convergence CSVs, convergence plots (with run envelopes), and a VOI overlay image.
 """
 
 from __future__ import annotations
@@ -39,12 +43,24 @@ DEFAULT_VOIS = (
 DEFAULT_SUMMARY_PERCENTILES = (10, 50, 90)
 DEFAULT_CURVE_BAND = (10, 90)
 MODALITY_PET = "pet"
-MODALITY_SPECT_RESAMPLED = "spect_resampled_pet"
+# SPECT is reconstructed on the PET grid; the label reflects PET-space SPECT
+# (no resampling is applied). The constant name is retained for compatibility.
+MODALITY_SPECT_RESAMPLED = "spect_pet"
+
+# Preconditioners excluded from the analysis by default. mm_diag_block_maj has a
+# zero SPECT preconditioner block, so its SPECT iterate never updates and its
+# convergence curve is a meaningless flat line. Override via --exclude-precond.
+EXCLUDED_PRECOND_TYPES = {"ls_block_gershgorin", "mm_diag_block_maj"}
+
+
+def _is_excluded_precond(precond_type: object) -> bool:
+    return str(precond_type or "").strip().lower() in EXCLUDED_PRECOND_TYPES
 PRECOND_LABEL_MAP = {
     "mm_diag_block_maj": r"$\left(P_{\mathcal{D}}^{-1}+P_{\mathrm{blk,maj}}^{-1}\right)^{-1}$",
     "mm_diag_block_tight": r"$\left(P_{\mathcal{D}}^{-1}+P_{\mathrm{blk}}^{-1}\right)^{-1}$",
     "mm_diag_tight": r"$\left(P_{\mathcal{D}}^{-1}+P_{\mathrm{diag}}^{-1}\right)^{-1}$",
     "mm_diag_gershgorin_maj": r"$\left(P_{\mathcal{D}}^{-1}+P_{\mathrm{diag,maj}}^{-1}\right)^{-1}$",
+    "ls_block_diag": r"$\left(\mathcal{P}_{D}^{-1}+\mathcal{P}_{\mathcal{LS}}^{-1}\right)^{-1}$",
     "bsrem": r"$P_{\mathcal{D}}$",
 }
 
@@ -55,9 +71,12 @@ class BaselineContext:
     pet_final_path: Path
     spect_final_path: Path
     pet_final_array: np.ndarray
+    # PET-space SPECT baseline (image_1 is already on the PET grid; no resampling).
     spect_resampled_final_array: np.ndarray
-    resampler: NiftyResampleOperator
-    transform_path: Path
+    # Resampler/transform are only retained for the optional native-SPECT-umap
+    # overlay; they are NOT used for metrics or the main figures.
+    resampler: Optional[NiftyResampleOperator]
+    transform_path: Optional[Path]
     baseline_dir: Path
     pet_support_mask: Optional[np.ndarray]
     pet_umap_array: Optional[np.ndarray]
@@ -97,6 +116,29 @@ def _parse_repeat_metadata(result_dir_name: str) -> Tuple[str, Optional[int]]:
     if match:
         return match.group(1), int(match.group(2))
     return result_dir_name, None
+
+
+def _parse_subset_metadata(result_dir_name: str) -> Dict[str, str]:
+    match = re.match(
+        r"^subset_(?P<subset_mode>.+?)_prior_(?P<prior_mode>.+?)_precond_(?P<precond_type>.+?)_gamma_(?P<gamma_tnv>.+)$",
+        result_dir_name,
+    )
+    if not match:
+        return {}
+    return match.groupdict()
+
+
+RUN_METADATA_KEYS = (
+    "subset_mode",
+    "prior_mode",
+    "gamma_tnv",
+    "alpha_scaled",
+    "beta_scaled",
+)
+
+
+def _run_metadata_fields(run_info: Dict[str, str]) -> Dict[str, object]:
+    return {key: run_info.get(key, "") for key in RUN_METADATA_KEYS}
 
 
 def _parse_percentiles(spec: Optional[str], default: Tuple[int, ...]) -> Tuple[int, ...]:
@@ -662,11 +704,11 @@ def _collect_mean_images_from_sweep(
         pet_arrays.append(pet_arr.astype(np.float64))
         pet_ref = pet_ref or pet_path
 
-        spect_img = ImageData(str(spect_path))
-        spect_resampled = resampler.direct(spect_img).as_array()
-        if spect_resampled.shape != pet_shape:
+        # image_1 is already reconstructed on the PET grid; use it directly.
+        spect_arr = ImageData(str(spect_path)).as_array()
+        if spect_arr.shape != pet_shape:
             continue
-        spect_arrays.append(spect_resampled.astype(np.float64))
+        spect_arrays.append(spect_arr.astype(np.float64))
         spect_ref = spect_ref or spect_path
 
     if not pet_arrays:
@@ -723,21 +765,27 @@ def _build_baseline_context(
         return None
 
     args_row = _read_first_csv_row(baseline_path / "args.csv")
-    transform_path = _resolve_nozoom_transform(explicit_transform, args_row)
-    if transform_path is None:
-        print(
-            "Warning: could not infer SPECT->PET no-zoom transform. "
-            "Provide --spect2pet-transform explicitly."
-        )
-        return None
 
     pet_final_img = ImageData(str(pet_final))
     spect_final_img = ImageData(str(spect_final))
     pet_shape = pet_final_img.as_array().shape
     pet_support_mask = _load_pet_support_mask_from_umap(args_row, pet_shape)
-    resampler = _build_resampler(pet_final_img, spect_final_img, transform_path)
+
+    # The SPECT->PET transform is NOT needed for metrics: image_1 is already on
+    # the PET grid. We only build a resampler (if a transform is available) for
+    # the optional native-SPECT-umap display overlay; its absence is non-fatal.
+    transform_path = _resolve_nozoom_transform(explicit_transform, args_row)
+    resampler = (
+        _build_resampler(pet_final_img, spect_final_img, transform_path)
+        if transform_path is not None
+        else None
+    )
     pet_umap_array = _load_pet_umap_for_overlay(args_row, pet_shape)
-    spect_registered_umap_array = _load_spect_registered_umap_for_overlay(args_row, pet_shape, resampler)
+    spect_registered_umap_array = (
+        _load_spect_registered_umap_for_overlay(args_row, pet_shape, resampler)
+        if resampler is not None
+        else None
+    )
     pet_ref_path = pet_final
     spect_ref_path = spect_final
 
@@ -760,10 +808,12 @@ def _build_baseline_context(
             if spect_mean_ref is not None:
                 spect_ref_path = spect_mean_ref
         else:
-            spect_res_arr = resampler.direct(spect_final_img).as_array()
+            # image_1 already PET-space; use directly (no resampling).
+            spect_res_arr = spect_final_img.as_array()
     else:
         pet_arr = pet_final_img.as_array()
-        spect_res_arr = resampler.direct(spect_final_img).as_array()
+        # image_1 already PET-space; use directly (no resampling).
+        spect_res_arr = spect_final_img.as_array()
 
     return BaselineContext(
         alpha=alpha,
@@ -781,17 +831,40 @@ def _build_baseline_context(
 
 
 def _gather_runs(sweep_dir: Path) -> List[Path]:
-    return sorted([d for d in sweep_dir.iterdir() if d.is_dir() and d.name.startswith("precond_")])
+    return sorted(
+        [
+            d
+            for d in sweep_dir.iterdir()
+            if d.is_dir() and (d.name.startswith("precond_") or d.name.startswith("subset_"))
+        ]
+    )
 
 
 def _load_run_info(run_dir: Path) -> Optional[Dict[str, str]]:
     row = _read_first_csv_row(run_dir / "result.csv")
     if row is None:
-        return None
+        row = _read_first_csv_row(run_dir / "args.csv")
+        if row is None:
+            return None
+        row.update({k: v for k, v in _parse_subset_metadata(run_dir.name).items() if v})
+
+        # Subset-selection args.csv stores scaled objective weights in alpha/beta.
+        # Baseline directories are keyed by the sweep/unscaled alpha value.
+        row["alpha_scaled"] = row.get("alpha", "")
+        row["beta_scaled"] = row.get("beta", "")
+        row["alpha"] = row.get("alpha_initial") or row.get("alpha", "")
+        row["beta"] = row.get("beta_initial") or row.get("beta", "")
+        row.setdefault("step_size", row.get("initial_step_size", ""))
+        row.setdefault("precond_combine", row.get("precond_combine", ""))
 
     precond_type = row.get("precond_type", "unknown")
     precond_combine = _normalise_combine(row.get("precond_combine", "")) or _normalise_combine(row.get("combine", ""))
     precond_label = f"{precond_type}:{precond_combine}" if precond_combine else precond_type
+    subset_mode = str(row.get("subset_mode", "")).strip()
+    prior_mode = str(row.get("prior_mode", "")).strip()
+    if subset_mode or prior_mode:
+        subset_label = "+".join(part for part in (subset_mode, prior_mode) if part)
+        precond_label = f"{subset_label}:{precond_type}"
     setting_id, repeat_id = _parse_repeat_metadata(run_dir.name)
     row["precond_combine"] = precond_combine
     row["precond_label"] = precond_label
@@ -821,11 +894,20 @@ def compute_convergence_rows_for_run(
         if max_iterations is not None and it > max_iterations:
             break
 
-        pet_img = ImageData(str(pet_images[it]))
-        spect_img = ImageData(str(spect_images[it]))
-
-        pet_arr = pet_img.as_array()
-        spect_res_arr = baseline_ctx.resampler.direct(spect_img).as_array()
+        # Defensively skip snapshots whose Interfile binary is unreadable
+        # (e.g. a truncated *.v from an interrupted sync) rather than aborting
+        # the whole analysis on one bad file.
+        try:
+            pet_arr = ImageData(str(pet_images[it])).as_array()
+            # image_1 is already reconstructed on the PET grid: use directly, do
+            # NOT re-apply the SPECT->PET transform (that would double-warp it).
+            spect_res_arr = ImageData(str(spect_images[it])).as_array()
+        except Exception as exc:  # pragma: no cover - depends on filesystem state
+            print(
+                f"Warning: skipping unreadable snapshot iter {it} in "
+                f"{run_dir.name}: {exc}"
+            )
+            continue
 
         modality_arrays = {
             MODALITY_PET: (pet_arr, baseline_ctx.pet_final_array),
@@ -843,6 +925,7 @@ def compute_convergence_rows_for_run(
                         "precond_type": run_info.get("precond_type", "unknown"),
                         "precond_combine": run_info.get("precond_combine", ""),
                         "precond_label": run_info.get("precond_label", "unknown"),
+                        **_run_metadata_fields(run_info),
                         "alpha": _coerce_float(run_info.get("alpha")),
                         "step_size": _coerce_float(run_info.get("step_size")),
                         "iteration": int(it),
@@ -866,6 +949,7 @@ def compute_convergence_rows_for_run(
                         "precond_type": run_info.get("precond_type", "unknown"),
                         "precond_combine": run_info.get("precond_combine", ""),
                         "precond_label": run_info.get("precond_label", "unknown"),
+                        **_run_metadata_fields(run_info),
                         "alpha": _coerce_float(run_info.get("alpha")),
                         "step_size": _coerce_float(run_info.get("step_size")),
                         "iteration": int(it),
@@ -949,6 +1033,7 @@ def compute_objective_rows_for_run(
                 "precond_type": run_info.get("precond_type", "unknown"),
                 "precond_combine": run_info.get("precond_combine", ""),
                 "precond_label": run_info.get("precond_label", "unknown"),
+                **_run_metadata_fields(run_info),
                 "alpha": _coerce_float(run_info.get("alpha")),
                 "step_size": _coerce_float(run_info.get("step_size")),
                 "iteration": int(it),
@@ -970,6 +1055,9 @@ def aggregate_rows(
         "precond_type",
         "precond_combine",
         "precond_label",
+        "subset_mode",
+        "prior_mode",
+        "gamma_tnv",
         "alpha",
         "step_size",
         "iteration",
@@ -1029,6 +1117,9 @@ def aggregate_objective_rows(
         "precond_type",
         "precond_combine",
         "precond_label",
+        "subset_mode",
+        "prior_mode",
+        "gamma_tnv",
         "alpha",
         "step_size",
         "iteration",
@@ -1074,6 +1165,10 @@ def _write_rows_csv(path: Path, rows: List[Dict[str, object]]) -> None:
         print(f"Warning: no rows to write for {path}")
         return
     fieldnames = list(rows[0].keys())
+    for row in rows[1:]:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -1098,6 +1193,8 @@ def _row_matches_cached_filters(
     include_bsrem: bool,
 ) -> bool:
     precond_type = str(row.get("precond_type", "")).strip().lower()
+    if _is_excluded_precond(precond_type):
+        return False
     if precond_type == "bsrem" and not include_bsrem:
         return False
 
@@ -1197,15 +1294,18 @@ def _blend_with_white(color: object, fraction: float) -> Tuple[float, float, flo
     return (float(mixed[0]), float(mixed[1]), float(mixed[2]))
 
 
-def _compute_uniform_ylim(
+def _compute_plot_ylim(
     lower_values: Sequence[float],
     upper_values: Sequence[float],
     initial_values: Sequence[float],
     initial_cap_factor: float,
     *,
     log_scale: bool,
+    pad_fraction: float = 0.05,
 ) -> Optional[Tuple[float, float]]:
     finite_uppers = [float(v) for v in upper_values if np.isfinite(v)]
+    if log_scale:
+        finite_uppers = [v for v in finite_uppers if v > 0]
     if not finite_uppers:
         return None
 
@@ -1227,23 +1327,46 @@ def _compute_uniform_ylim(
         lower = max(lower, float(np.finfo(float).tiny))
         if lower >= upper:
             lower = max(float(np.finfo(float).tiny), upper / 10.0)
-        return lower, upper
+        log_lower = float(np.log10(lower))
+        log_upper = float(np.log10(upper))
+        log_span = max(log_upper - log_lower, 1e-6)
+        lower = 10 ** (log_lower - pad_fraction * log_span)
+        upper = 10 ** (log_upper + pad_fraction * log_span)
+        return max(lower, float(np.finfo(float).tiny)), upper
 
     finite_lowers = [float(v) for v in lower_values if np.isfinite(v)]
     lower = float(min(finite_lowers)) if finite_lowers else 0.0
     if lower >= upper:
         span = max(abs(upper), 1.0)
         upper = lower + 0.01 * span
+    span = upper - lower
+    pad = pad_fraction * span if span > 0 else pad_fraction * max(abs(upper), 1.0)
+    lower -= pad
+    upper += pad
+    if finite_lowers and min(finite_lowers) >= 0:
+        lower = max(0.0, lower)
     return lower, upper
 
 
 def _format_precond_plot_label(precond_label: object) -> str:
     raw = str(precond_label)
     precond_type = raw.split(":", 1)[0].strip().lower()
-    return PRECOND_LABEL_MAP.get(precond_type, raw)
+    if precond_type in PRECOND_LABEL_MAP:
+        return PRECOND_LABEL_MAP[precond_type]
+    if ":" in raw:
+        strategy, precond = raw.split(":", 1)
+        strategy_label = strategy.replace("+", " + ")
+        precond_label = PRECOND_LABEL_MAP.get(precond.strip().lower(), precond.strip())
+        return f"{strategy_label} | {precond_label}"
+    return raw
 
 
 def _precond_family_key_from_row(row: Dict[str, object]) -> str:
+    subset_mode = str(row.get("subset_mode", "")).strip()
+    prior_mode = str(row.get("prior_mode", "")).strip()
+    if subset_mode or prior_mode:
+        return str(row.get("precond_label", "unknown"))
+
     precond_type = str(row.get("precond_type", "")).strip().lower()
     if precond_type:
         return precond_type
@@ -1257,6 +1380,17 @@ def _format_step_legend_label(step_key: object) -> str:
     if step_num is not None:
         return f"step={step_num:g}"
     return f"step={step_key}"
+
+
+def _x_values_from_iterations(rows: Sequence[Dict[str, object]], subsets: Optional[float]) -> np.ndarray:
+    x = np.array([int(r["iteration"]) for r in rows], dtype=float)
+    if subsets is not None:
+        x = x / subsets
+    return x
+
+
+def _x_axis_label(subsets: Optional[float]) -> str:
+    return "Epoch" if subsets is not None else "Iteration"
 
 
 def _build_precond_legend_handles(
@@ -1384,6 +1518,7 @@ def plot_convergence_bands(
     curve_band: Tuple[int, int],
     nrmse_threshold: float,
     initial_cap_factor: float,
+    subsets: Optional[float] = None,
 ) -> None:
     if not aggregated_rows:
         return
@@ -1398,69 +1533,6 @@ def plot_convergence_bands(
             continue
         key = (alpha, str(row["modality"]), str(row["voi"]))
         by_alpha_mod_voi.setdefault(key, []).append(row)
-
-    metric_lower_values: Dict[str, List[float]] = {metric: [] for metric in metrics}
-    metric_upper_values: Dict[str, List[float]] = {metric: [] for metric in metrics}
-    metric_initial_values: Dict[str, List[float]] = {metric: [] for metric in metrics}
-
-    # Pass 1: compute shared y-limits for each metric across all alpha/modality/VOI plots.
-    for group_rows in by_alpha_mod_voi.values():
-        by_setting: Dict[str, List[Dict[str, object]]] = {}
-        for row in group_rows:
-            setting_key = f"{row['precond_label']}|{row['step_size']}|{row['setting_id']}"
-            by_setting.setdefault(setting_key, []).append(row)
-
-        for setting_rows in by_setting.values():
-            setting_rows = sorted(setting_rows, key=lambda r: int(r["iteration"]))
-            if not setting_rows:
-                continue
-
-            if "nrmse_mean" in setting_rows[0]:
-                y_nrmse_mean = np.array([float(r["nrmse_mean"]) for r in setting_rows], dtype=float)
-            else:
-                # Legacy aggregated CSVs may only expose relative_error_mean.
-                y_nrmse_mean = np.array([float(r["relative_error_mean"]) for r in setting_rows], dtype=float)
-
-            stop_idx: Optional[int] = None
-            if np.isfinite(nrmse_threshold):
-                crossing = np.where(np.isfinite(y_nrmse_mean) & (y_nrmse_mean <= nrmse_threshold))[0]
-                if crossing.size > 0:
-                    stop_idx = int(crossing[0]) + 1
-
-            for metric in metrics:
-                y_mean = np.array([float(r[f"{metric}_mean"]) for r in setting_rows], dtype=float)
-                y_min = np.array([float(r[f"{metric}_min"]) for r in setting_rows], dtype=float)
-                y_max = np.array([float(r[f"{metric}_max"]) for r in setting_rows], dtype=float)
-
-                if stop_idx is not None:
-                    y_mean = y_mean[:stop_idx]
-                    y_min = y_min[:stop_idx]
-                    y_max = y_max[:stop_idx]
-
-                finite_mean = y_mean[np.isfinite(y_mean)]
-                if finite_mean.size > 0:
-                    metric_initial_values[metric].append(float(finite_mean[0]))
-
-                finite_y_min = y_min[np.isfinite(y_min)]
-                if finite_y_min.size > 0:
-                    metric_lower_values[metric].append(float(np.min(finite_y_min)))
-
-                finite_y_max = y_max[np.isfinite(y_max)]
-                if finite_y_max.size > 0:
-                    metric_upper_values[metric].append(float(np.max(finite_y_max)))
-
-    shared_metric_ylims: Dict[str, Tuple[float, float]] = {}
-    for metric in metrics:
-        ylim = _compute_uniform_ylim(
-            lower_values=metric_lower_values[metric],
-            upper_values=metric_upper_values[metric],
-            initial_values=metric_initial_values[metric],
-            initial_cap_factor=initial_cap_factor,
-            log_scale=(metric == "nrmse"),
-        )
-        if ylim is not None:
-            shared_metric_ylims[metric] = ylim
-            print(f"Shared y-axis for {metric}: [{ylim[0]:.6g}, {ylim[1]:.6g}]")
 
     for (alpha, modality, voi), group_rows in sorted(by_alpha_mod_voi.items()):
         by_setting: Dict[str, List[Dict[str, object]]] = {}
@@ -1481,10 +1553,13 @@ def plot_convergence_bands(
 
         for metric in metrics:
             fig, ax = plt.subplots(figsize=(5, 3))
+            plot_lower_values: List[float] = []
+            plot_upper_values: List[float] = []
+            plot_initial_values: List[float] = []
 
             for setting_key, setting_rows in sorted(by_setting.items()):
                 setting_rows = sorted(setting_rows, key=lambda r: int(r["iteration"]))
-                x = np.array([int(r["iteration"]) for r in setting_rows], dtype=float)
+                x = _x_values_from_iterations(setting_rows, subsets)
                 y_mean = np.array([float(r[f"{metric}_mean"]) for r in setting_rows], dtype=float)
                 y_min = np.array([float(r[f"{metric}_min"]) for r in setting_rows], dtype=float)
                 y_max = np.array([float(r[f"{metric}_max"]) for r in setting_rows], dtype=float)
@@ -1513,12 +1588,24 @@ def plot_convergence_bands(
                         y_low = y_low[:stop_idx]
                         y_high = y_high[:stop_idx]
 
+                finite_mean = y_mean[np.isfinite(y_mean)]
+                if finite_mean.size > 0:
+                    plot_initial_values.append(float(finite_mean[0]))
+
+                finite_y_min = y_min[np.isfinite(y_min)]
+                if finite_y_min.size > 0:
+                    plot_lower_values.append(float(np.min(finite_y_min)))
+
+                finite_y_max = y_max[np.isfinite(y_max)]
+                if finite_y_max.size > 0:
+                    plot_upper_values.append(float(np.max(finite_y_max)))
+
                 ax.fill_between(x, y_min, y_max, color=outer_color, alpha=0.14, linewidth=0)
                 ax.fill_between(x, y_low, y_high, color=inner_color, alpha=0.24, linewidth=0)
                 ax.plot(x, y_mean, color=line_color, linestyle=linestyle, linewidth=2)
 
             metric_label = "NRMSE" if metric == "nrmse" else "RMSE"
-            ax.set_xlabel("Iteration")
+            ax.set_xlabel(_x_axis_label(subsets))
             ax.set_ylabel(metric_label)
             #ax.set_title(
             #    f"Convergence ({metric_label}) | alpha={alpha}, {modality}, VOI={voi}\n"
@@ -1528,9 +1615,15 @@ def plot_convergence_bands(
             if metric == "nrmse":
                 ax.set_yscale("log")
 
-            shared_ylim = shared_metric_ylims.get(metric)
-            if shared_ylim is not None:
-                ax.set_ylim(shared_ylim[0], shared_ylim[1])
+            plot_ylim = _compute_plot_ylim(
+                lower_values=plot_lower_values,
+                upper_values=plot_upper_values,
+                initial_values=plot_initial_values,
+                initial_cap_factor=initial_cap_factor,
+                log_scale=(metric == "nrmse"),
+            )
+            if plot_ylim is not None:
+                ax.set_ylim(plot_ylim[0], plot_ylim[1])
 
             plt.tight_layout()
 
@@ -1551,6 +1644,7 @@ def plot_objective_bands(
     output_dir: Path,
     curve_band: Tuple[int, int],
     initial_cap_factor: float,
+    subsets: Optional[float] = None,
 ) -> None:
     if not aggregated_objective_rows:
         return
@@ -1562,48 +1656,6 @@ def plot_objective_bands(
         if alpha is None:
             continue
         by_alpha.setdefault(alpha, []).append(row)
-
-    objective_lower_values: List[float] = []
-    objective_upper_values: List[float] = []
-    objective_initial_values: List[float] = []
-
-    # Pass 1: compute shared y-limits for objective plots across all alphas.
-    for rows_alpha in by_alpha.values():
-        by_setting: Dict[str, List[Dict[str, object]]] = {}
-        for row in rows_alpha:
-            setting_key = f"{row['precond_label']}|{row['step_size']}|{row['setting_id']}"
-            by_setting.setdefault(setting_key, []).append(row)
-
-        for setting_rows in by_setting.values():
-            setting_rows = sorted(setting_rows, key=lambda r: int(r["iteration"]))
-            if not setting_rows:
-                continue
-
-            y_mean = np.array([float(r["objective_mean"]) for r in setting_rows], dtype=float)
-            y_min = np.array([float(r["objective_min"]) for r in setting_rows], dtype=float)
-            y_max = np.array([float(r["objective_max"]) for r in setting_rows], dtype=float)
-
-            finite_mean = y_mean[np.isfinite(y_mean)]
-            if finite_mean.size > 0:
-                objective_initial_values.append(float(finite_mean[0]))
-
-            finite_y_min = y_min[np.isfinite(y_min)]
-            if finite_y_min.size > 0:
-                objective_lower_values.append(float(np.min(finite_y_min)))
-
-            finite_y_max = y_max[np.isfinite(y_max)]
-            if finite_y_max.size > 0:
-                objective_upper_values.append(float(np.max(finite_y_max)))
-
-    shared_objective_ylim = _compute_uniform_ylim(
-        lower_values=objective_lower_values,
-        upper_values=objective_upper_values,
-        initial_values=objective_initial_values,
-        initial_cap_factor=initial_cap_factor,
-        log_scale=False,
-    )
-    if shared_objective_ylim is not None:
-        print(f"Shared y-axis for objective: [{shared_objective_ylim[0]:.6g}, {shared_objective_ylim[1]:.6g}]")
 
     for alpha, rows_alpha in sorted(by_alpha.items()):
         by_setting: Dict[str, List[Dict[str, object]]] = {}
@@ -1620,10 +1672,16 @@ def plot_objective_bands(
         )
 
         fig, ax = plt.subplots(figsize=(6, 3.5))
+        plot_lower_values: List[float] = []
+        plot_upper_values: List[float] = []
+        plot_initial_values: List[float] = []
 
         for setting_key, setting_rows in sorted(by_setting.items()):
             setting_rows = sorted(setting_rows, key=lambda r: int(r["iteration"]))
-            x = np.array([int(r["iteration"]) for r in setting_rows], dtype=float)
+            # Objective callbacks are written once per epoch, whereas image
+            # snapshots are indexed by subset updates.  Do not divide the
+            # objective callback index by ``subsets`` a second time.
+            x = _x_values_from_iterations(setting_rows, subsets=None)
             y_mean = np.array([float(r["objective_mean"]) for r in setting_rows], dtype=float)
             y_min = np.array([float(r["objective_min"]) for r in setting_rows], dtype=float)
             y_max = np.array([float(r["objective_max"]) for r in setting_rows], dtype=float)
@@ -1636,11 +1694,23 @@ def plot_objective_bands(
             outer_color = _blend_with_white(base_color, min(0.75, shade_shift + 0.35))
             inner_color = _blend_with_white(base_color, min(0.65, shade_shift + 0.20))
 
+            finite_mean = y_mean[np.isfinite(y_mean)]
+            if finite_mean.size > 0:
+                plot_initial_values.append(float(finite_mean[0]))
+
+            finite_y_min = y_min[np.isfinite(y_min)]
+            if finite_y_min.size > 0:
+                plot_lower_values.append(float(np.min(finite_y_min)))
+
+            finite_y_max = y_max[np.isfinite(y_max)]
+            if finite_y_max.size > 0:
+                plot_upper_values.append(float(np.max(finite_y_max)))
+
             ax.fill_between(x, y_min, y_max, color=outer_color, alpha=0.14, linewidth=0)
             ax.fill_between(x, y_low, y_high, color=inner_color, alpha=0.24, linewidth=0)
             ax.plot(x, y_mean, color=line_color, linestyle=linestyle, linewidth=2)
 
-        ax.set_xlabel("Iteration")
+        ax.set_xlabel("Epoch" if subsets is not None else "Iteration")
         ax.set_ylabel("Objective")
         #ax.set_title(
         #    f"Convergence (objective) | alpha={alpha}\n"
@@ -1648,14 +1718,136 @@ def plot_objective_bands(
         #)
         ax.grid(True, alpha=0.3)
 
-        if shared_objective_ylim is not None:
-            ax.set_ylim(shared_objective_ylim[0], shared_objective_ylim[1])
+        plot_ylim = _compute_plot_ylim(
+            lower_values=plot_lower_values,
+            upper_values=plot_upper_values,
+            initial_values=plot_initial_values,
+            initial_cap_factor=initial_cap_factor,
+            log_scale=False,
+        )
+        if plot_ylim is not None:
+            ax.set_ylim(plot_ylim[0], plot_ylim[1])
 
         plt.tight_layout()
         out_path = output_dir / f"convergence_objective_alpha_{alpha}.png"
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved plot: {out_path}")
+
+
+SUBSET_SELECTION_STYLE = {
+    ("paired", "always"): ("Paired subsets; prior always", "#1976d2"),
+    ("paired", "subset"): ("Paired subsets; prior once/epoch", "#12b886"),
+    ("separate", "always"): ("Separate subsets; prior always", "#f0642f"),
+    ("separate", "subset"): ("Separate subsets; prior once/epoch", "#4c3fa3"),
+}
+
+
+def _subset_selection_data_passes(
+    rows: Sequence[Dict[str, object]],
+    subset_mode: str,
+    prior_mode: str,
+    total_separate_subsets: float,
+) -> np.ndarray:
+    """Convert optimiser updates to full PET+SPECT data passes.
+
+    A separate data update has 18 PET + 18 SPECT subsets (36 updates/pass),
+    while a paired data update has 18 paired subsets (18 updates/pass).  When
+    the prior is sampled as its own subset, it adds 18 updates/pass.  Hence the
+    denominators are 18 (paired/always), 36 (paired/subset or
+    separate/always), and 54 (separate/subset).
+    """
+    paired_subsets = total_separate_subsets / 2.0
+    updates_per_data_pass = (
+        paired_subsets if subset_mode == "paired" else total_separate_subsets
+    )
+    if prior_mode == "subset":
+        updates_per_data_pass += paired_subsets
+    iterations = np.asarray([int(row["iteration"]) for row in rows], dtype=float)
+    return iterations / updates_per_data_pass
+
+
+def plot_subset_selection_summary(
+    aggregated_rows: List[Dict[str, object]],
+    figures_dir: Path,
+    curve_band: Tuple[int, int],
+    subsets: Optional[float],
+    *,
+    bpos_label: str = "1bpos",
+    panel_specs: Sequence[Tuple[str, str]] = (
+        ("whole_image", "Whole image"),
+        ("hot_sphere", "Hot sphere"),
+        ("cold_sphere", "Cold sphere"),
+    ),
+) -> None:
+    """Save the paper-style three-panel subset-selection convergence figure."""
+    if not aggregated_rows:
+        return
+
+    p_low, p_high = curve_band
+    # This summary deliberately uses PET NRMSE only, matching exp3's panels.
+    by_alpha: Dict[float, List[Dict[str, object]]] = {}
+    for row in aggregated_rows:
+        alpha = _coerce_float(row.get("alpha"))
+        if alpha is not None and str(row.get("modality", "")) == MODALITY_PET:
+            by_alpha.setdefault(alpha, []).append(row)
+
+    for alpha, rows_alpha in sorted(by_alpha.items()):
+        if not any(str(row.get("subset_mode", "")).strip() for row in rows_alpha):
+            continue
+
+        precond_types = sorted({str(row.get("precond_type", "")).strip() for row in rows_alpha})
+        for precond_type in precond_types:
+            rows_precond = [row for row in rows_alpha if str(row.get("precond_type", "")).strip() == precond_type]
+            fig, axes = plt.subplots(1, len(panel_specs), figsize=(14, 4.6), sharey=True)
+            all_lower: List[float] = []
+            all_upper: List[float] = []
+            legend_handles: List[Line2D] = []
+
+            for ax, (voi, title) in zip(axes, panel_specs):
+                ax.set_title(title)
+                for (subset_mode, prior_mode), (label, color) in SUBSET_SELECTION_STYLE.items():
+                    series = [
+                        row for row in rows_precond
+                        if str(row.get("voi", "")) == voi
+                        and str(row.get("subset_mode", "")).strip() == subset_mode
+                        and str(row.get("prior_mode", "")).strip() == prior_mode
+                    ]
+                    if not series:
+                        continue
+                    series.sort(key=lambda row: int(row["iteration"]))
+                    if subsets is None:
+                        raise ValueError("Subset-selection summary requires --subsets.")
+                    x = _subset_selection_data_passes(series, subset_mode, prior_mode, subsets)
+                    mean = np.asarray([float(row["nrmse_mean"]) for row in series], dtype=float)
+                    low = np.asarray([float(row[f"nrmse_p{p_low}"]) for row in series], dtype=float)
+                    high = np.asarray([float(row[f"nrmse_p{p_high}"]) for row in series], dtype=float)
+                    finite_low = low[np.isfinite(low) & (low > 0)]
+                    finite_high = high[np.isfinite(high) & (high > 0)]
+                    all_lower.extend(finite_low.tolist())
+                    all_upper.extend(finite_high.tolist())
+                    ax.fill_between(x, low, high, color=color, alpha=0.14, linewidth=0)
+                    ax.plot(x, mean, color=color, linewidth=2.5, marker="o", markersize=4)
+
+                ax.set_xlabel("Data passes")
+                ax.set_yscale("log")
+                ax.grid(True, alpha=0.3)
+
+            axes[0].set_ylabel("NRMSE to converged baseline")
+            plot_ylim = _compute_plot_ylim(all_lower, all_upper, [], 0.0, log_scale=True)
+            if plot_ylim is not None:
+                for ax in axes:
+                    ax.set_ylim(plot_ylim)
+
+            for _key, (label, color) in SUBSET_SELECTION_STYLE.items():
+                legend_handles.append(Line2D([0], [0], color=color, linewidth=2.5, marker="o", markersize=5, label=label))
+            fig.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="lower center", ncol=2, frameon=False)
+            fig.tight_layout(rect=(0, 0.12, 1, 1))
+            figures_dir.mkdir(parents=True, exist_ok=True)
+            out_path = figures_dir / f"exp_subset_selection_{bpos_label}_{_sanitize_token(precond_type)}_alpha_{alpha:g}.png"
+            fig.savefig(out_path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            print(f"Saved subset-selection summary figure: {out_path}")
 
 
 def _choose_slice_for_overlay(pet_image: np.ndarray, voi_masks: Dict[str, np.ndarray]) -> int:
@@ -1850,10 +2042,10 @@ def save_final_pet_spect_pair_figure(
 
     pet_img = ImageData(str(pet_final))
     spect_img = ImageData(str(spect_final))
-    spect_res = baseline_ctx.resampler.direct(spect_img)
 
     pet_arr = pet_img.as_array()
-    spect_res_arr = spect_res.as_array()
+    # image_1 already PET-space; use directly (no resampling / double-warp).
+    spect_res_arr = spect_img.as_array()
 
     if coronal_y < 0 or coronal_y >= pet_arr.shape[1]:
         coronal_y = int(np.clip(coronal_y, 0, pet_arr.shape[1] - 1))
@@ -1956,8 +2148,8 @@ def _collect_mean_final_images_for_setting(
             continue
         pet_arrays.append(pet_arr.astype(np.float64))
 
-        spect_img = ImageData(str(spect_path))
-        spect_res_arr = baseline_ctx.resampler.direct(spect_img).as_array()
+        # image_1 already PET-space; use directly (no resampling / double-warp).
+        spect_res_arr = ImageData(str(spect_path)).as_array()
         if tuple(spect_res_arr.shape) != tuple(pet_shape):
             continue
         spect_arrays.append(spect_res_arr.astype(np.float64))
@@ -2247,11 +2439,27 @@ def generate_mean_final_and_difference_images_per_preconditioner(
 
 
 def main() -> None:
+    global EXCLUDED_PRECOND_TYPES
     parser = argparse.ArgumentParser(
         description="Compute convergence-over-iterations with PET-space VOIs and SPECT resampling."
     )
-    parser.add_argument("--sweep", type=str, required=True, help="Sweep directory name, e.g. precond_1bpos")
-    parser.add_argument("--baseline", type=str, required=True, help="Baseline directory name, e.g. baselines_1bpos")
+    parser.add_argument("--sweep", type=str, default=None, help="Sweep directory name under the base output directory, e.g. precond_1bpos")
+    parser.add_argument("--baseline", type=str, default=None, help="Baseline directory name under the base output directory, e.g. baselines_1bpos")
+    parser.add_argument(
+        "--sweep-dir",
+        action="append",
+        default=None,
+        help=(
+            "Explicit sweep directory to analyse. May be supplied multiple times; "
+            "run directories from all supplied sweep dirs are pooled."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-dir",
+        type=str,
+        default=None,
+        help="Explicit baseline directory containing baseline_alpha_<alpha> subdirectories.",
+    )
     parser.add_argument("--output", type=str, default=None, help="Output directory (default: <sweep>_analysis)")
     parser.add_argument("--masks", type=str, default=None, help="Mask directory containing <voi>_pet.hv")
     parser.add_argument("--vois", nargs="+", default=list(DEFAULT_VOIS), help="VOI names to evaluate")
@@ -2274,6 +2482,12 @@ def main() -> None:
         help="Comma-separated step-size filter (e.g. 1 or 1,0.5). If omitted, all step sizes are used.",
     )
     parser.add_argument(
+        "--subsets",
+        type=float,
+        default=None,
+        help="If provided, plot x-axis as epochs using iteration/subsets.",
+    )
+    parser.add_argument(
         "--summary-percentiles",
         type=str,
         default="10,50,90",
@@ -2294,6 +2508,16 @@ def main() -> None:
         "--include-bsrem",
         action="store_true",
         help="Include BSREM runs in analysis (default excludes BSREM).",
+    )
+    parser.add_argument(
+        "--exclude-precond",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated precond_type values to exclude "
+            f"(default: {','.join(sorted(EXCLUDED_PRECOND_TYPES))}). "
+            "Pass 'none' or '' to exclude nothing."
+        ),
     )
     parser.add_argument(
         "--max-runs",
@@ -2323,7 +2547,7 @@ def main() -> None:
         "--initial-cap-factor",
         type=float,
         default=1.1,
-        help="Upper y-limit cap as multiplier of initial mean value (default: 1.1, set <=0 to disable).",
+        help="Per-plot upper y-limit cap as multiplier of initial mean value (default: 1.1, set <=0 to disable).",
     )
     parser.add_argument(
         "--figures-only",
@@ -2365,6 +2589,13 @@ def main() -> None:
         help="Force recomputation even when cached convergence/objective CSVs already exist.",
     )
     args = parser.parse_args()
+    subsets = float(args.subsets) if args.subsets is not None else None
+    if subsets is not None and subsets <= 0:
+        raise ValueError("--subsets must be positive")
+    if args.exclude_precond is not None:
+        tokens = [t.strip().lower() for t in args.exclude_precond.split(",") if t.strip()]
+        EXCLUDED_PRECOND_TYPES = set() if tokens == ["none"] else set(tokens)
+        print(f"Excluded preconditioners: {sorted(EXCLUDED_PRECOND_TYPES) or '<none>'}")
     if args.nrmse_threshold is not None:
         nrmse_threshold = float(args.nrmse_threshold)
         if args.relative_error_threshold is not None:
@@ -2373,7 +2604,9 @@ def main() -> None:
         nrmse_threshold = float(args.relative_error_threshold)
         print("Note: --relative-error-threshold is deprecated; use --nrmse-threshold instead.")
     else:
-        nrmse_threshold = 1e-2
+        # Default: no truncation -- plot NRMSE for all iterations. Pass a finite
+        # --nrmse-threshold to truncate curves once they drop below it.
+        nrmse_threshold = float("inf")
 
     summary_percentiles = _parse_percentiles(args.summary_percentiles, DEFAULT_SUMMARY_PERCENTILES)
     curve_band = _parse_percentiles(args.curve_inner_band, DEFAULT_CURVE_BAND)
@@ -2381,6 +2614,10 @@ def main() -> None:
         raise ValueError("--curve-inner-band must contain exactly two values, e.g. 10,90")
     curve_band_tuple = (curve_band[0], curve_band[1])
     include_whole_image = not args.no_whole_image
+    if len(args.vois) == 1 and str(args.vois[0]).strip().lower() in {"none", "whole_image", "whole-image"}:
+        args.vois = []
+    if not args.vois and not include_whole_image:
+        raise ValueError("No metrics requested: --vois none cannot be combined with --no-whole-image.")
 
     study_dir = Path(__file__).resolve().parent.parent
     allowed_alphas = _parse_alpha_values(args.alpha_values)
@@ -2389,9 +2626,22 @@ def main() -> None:
     allowed_step_sizes = _parse_step_sizes(args.step_sizes)
 
     base_output_dir = study_dir / "output"
-    sweep_dir = base_output_dir / args.sweep
-    baseline_dir = base_output_dir / args.baseline
-    output_dir = Path(args.output) if args.output else base_output_dir / f"{args.sweep}_analysis"
+    if args.sweep_dir:
+        sweep_dirs = [Path(p).expanduser().resolve() for p in args.sweep_dir]
+    elif args.sweep:
+        sweep_dirs = [base_output_dir / args.sweep]
+    else:
+        raise ValueError("Provide either --sweep or at least one --sweep-dir.")
+
+    if args.baseline_dir:
+        baseline_dir = Path(args.baseline_dir).expanduser().resolve()
+    elif args.baseline:
+        baseline_dir = base_output_dir / args.baseline
+    else:
+        raise ValueError("Provide either --baseline or --baseline-dir.")
+
+    output_name = args.sweep if args.sweep else "convergence_over_iterations_analysis"
+    output_dir = Path(args.output) if args.output else base_output_dir / f"{output_name}_analysis"
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_csv = output_dir / "convergence_over_iterations_voi.csv"
     agg_csv = output_dir / "convergence_over_iterations_voi_aggregated.csv"
@@ -2452,6 +2702,7 @@ def main() -> None:
             curve_band=curve_band_tuple,
             nrmse_threshold=nrmse_threshold,
             initial_cap_factor=float(args.initial_cap_factor),
+            subsets=subsets,
         )
         if aggregated_objective_rows:
             plot_objective_bands(
@@ -2459,9 +2710,16 @@ def main() -> None:
                 output_dir=output_dir,
                 curve_band=curve_band_tuple,
                 initial_cap_factor=float(args.initial_cap_factor),
+                subsets=subsets,
             )
         else:
             print(f"Warning: cached objective aggregated CSV is empty: {objective_agg_csv}")
+        plot_subset_selection_summary(
+            aggregated_rows=aggregated_rows,
+            figures_dir=output_dir.parent / "figures",
+            curve_band=curve_band_tuple,
+            subsets=subsets,
+        )
 
         print("=" * 70)
         print("Convergence plots refreshed from cached CSVs (after applying filters).")
@@ -2473,22 +2731,27 @@ def main() -> None:
         print("=" * 70)
         return
 
-    mask_dir = _resolve_mask_dir(study_dir, args.masks)
-    if mask_dir is None:
+    mask_dir = _resolve_mask_dir(study_dir, args.masks) if args.vois else None
+    if args.vois and mask_dir is None:
         raise FileNotFoundError(
             "Could not locate mask directory. Provide --masks with a directory containing <voi>_pet.hv."
         )
 
-    if not sweep_dir.exists():
-        raise FileNotFoundError(f"Sweep directory not found: {sweep_dir}")
+    missing_sweep_dirs = [sweep_dir for sweep_dir in sweep_dirs if not sweep_dir.exists()]
+    if missing_sweep_dirs:
+        raise FileNotFoundError(
+            "Sweep directory not found: " + ", ".join(str(p) for p in missing_sweep_dirs)
+        )
     if not baseline_dir.exists():
         raise FileNotFoundError(f"Baseline directory not found: {baseline_dir}")
 
-    print(f"Sweep directory: {sweep_dir}")
+    print("Sweep directories:")
+    for sweep_dir in sweep_dirs:
+        print(f"  {sweep_dir}")
     print(f"Baseline directory: {baseline_dir}")
     print(f"Output directory: {output_dir}")
-    print(f"Mask directory: {mask_dir}")
-    print(f"VOIs: {args.vois}")
+    print(f"Mask directory: {mask_dir if mask_dir is not None else '<none>'}")
+    print(f"VOIs: {args.vois if args.vois else '<none; whole-image only>'}")
     print(f"Include BSREM: {bool(args.include_bsrem)}")
     if allowed_alphas is not None:
         print(f"Alpha filter: {allowed_alphas}")
@@ -2498,8 +2761,12 @@ def main() -> None:
         print(f"Step-size filter: {allowed_step_sizes}")
     else:
         print("Step-size filter: <none>")
+    if subsets is not None:
+        print(f"Epoch x-axis: iteration/{subsets:g}")
 
-    run_dirs = _gather_runs(sweep_dir)
+    run_dirs: List[Path] = []
+    for sweep_dir in sweep_dirs:
+        run_dirs.extend(_gather_runs(sweep_dir))
     if args.max_runs is not None:
         run_dirs = run_dirs[: args.max_runs]
     print(f"Found {len(run_dirs)} sweep run directories")
@@ -2518,6 +2785,9 @@ def main() -> None:
             print(f"[{idx}/{len(run_dirs)}] Skipping {run_dir.name}: no result.csv")
             continue
         precond_type = str(run_info.get("precond_type", "")).strip().lower()
+        if _is_excluded_precond(precond_type):
+            print(f"[{idx}/{len(run_dirs)}] Skipping {run_dir.name}: precond '{precond_type}' excluded")
+            continue
         if precond_type == "bsrem" and not args.include_bsrem:
             print(f"[{idx}/{len(run_dirs)}] Skipping {run_dir.name}: BSREM excluded by default")
             continue
@@ -2537,12 +2807,15 @@ def main() -> None:
                 baseline_dir=baseline_dir,
                 alpha=alpha,
                 explicit_transform=args.spect2pet_transform,
-                sweep_dir=sweep_dir,
+                sweep_dir=sweep_dirs[0] if len(sweep_dirs) == 1 else None,
                 mean_baseline_from=args.mean_baseline_from,
             )
             ctx = baseline_cache[alpha]
             if ctx is not None:
-                print(f"alpha={alpha}: using transform {ctx.transform_path}")
+                print(
+                    f"alpha={alpha}: SPECT metrics computed in PET space directly "
+                    f"(no resampling); overlay transform: {ctx.transform_path}"
+                )
                 print(f"alpha={alpha}: baseline PET image {ctx.pet_final_path}")
                 print(f"alpha={alpha}: baseline SPECT image {ctx.spect_final_path}")
                 if ctx.pet_support_mask is not None:
@@ -2553,12 +2826,15 @@ def main() -> None:
             continue
 
         if alpha not in masks_cache:
-            masks_cache[alpha] = load_pet_voi_masks(
-                mask_dir=mask_dir,
-                voi_names=args.vois,
-                pet_shape=baseline_ctx.pet_final_array.shape,
-                support_mask=baseline_ctx.pet_support_mask,
-            )
+            if args.vois:
+                masks_cache[alpha] = load_pet_voi_masks(
+                    mask_dir=mask_dir,
+                    voi_names=args.vois,
+                    pet_shape=baseline_ctx.pet_final_array.shape,
+                    support_mask=baseline_ctx.pet_support_mask,
+                )
+            else:
+                masks_cache[alpha] = {}
             if not masks_cache[alpha]:
                 print(f"Warning: no VOI masks loaded for alpha={alpha}")
         voi_masks = masks_cache[alpha]
@@ -2566,7 +2842,7 @@ def main() -> None:
             print(f"[{idx}/{len(run_dirs)}] Skipping {run_dir.name}: no VOI masks loaded")
             continue
 
-        if not overlay_done_for_alpha.get(alpha, False):
+        if voi_masks and not overlay_done_for_alpha.get(alpha, False):
             pet_overlay_bg = (
                 baseline_ctx.pet_umap_array
                 if baseline_ctx.pet_umap_array is not None
@@ -2671,12 +2947,20 @@ def main() -> None:
         curve_band=curve_band_tuple,
         nrmse_threshold=nrmse_threshold,
         initial_cap_factor=float(args.initial_cap_factor),
+        subsets=subsets,
     )
     plot_objective_bands(
         aggregated_objective_rows=aggregated_objective_rows,
         output_dir=output_dir,
         curve_band=curve_band_tuple,
         initial_cap_factor=float(args.initial_cap_factor),
+        subsets=subsets,
+    )
+    plot_subset_selection_summary(
+        aggregated_rows=aggregated_rows,
+        figures_dir=output_dir.parent / "figures",
+        curve_band=curve_band_tuple,
+        subsets=subsets,
     )
 
     print("=" * 70)

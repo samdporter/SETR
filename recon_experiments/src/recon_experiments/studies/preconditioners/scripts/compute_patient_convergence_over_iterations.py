@@ -74,6 +74,9 @@ def _resolve_lesion_method_dir(
             return method_dir, lesion_method
         return None, None
 
+    if any(patient_dir.glob("lesion_*.hv")) or any(patient_dir.glob("lesion_*_intensity_mask.hv")):
+        return patient_dir, "direct"
+
     for method in PREFERRED_LESION_METHODS:
         method_dir = patient_dir / method
         if method_dir.exists():
@@ -94,8 +97,12 @@ def _lesion_sort_key(lesion_name: str) -> Tuple[int, str]:
 
 def _discover_lesion_paths(lesion_method_dir: Path) -> Dict[str, Path]:
     out: Dict[str, Path] = {}
-    for lesion_path in lesion_method_dir.glob("lesion_*.hv"):
-        out[lesion_path.stem] = lesion_path
+    for lesion_path in sorted(lesion_method_dir.glob("lesion_*.hv")):
+        lesion_name = lesion_path.stem
+        intensity_match = re.match(r"^(lesion_\d+)_intensity_mask$", lesion_name)
+        if intensity_match:
+            lesion_name = intensity_match.group(1)
+        out[lesion_name] = lesion_path
     return dict(sorted(out.items(), key=lambda item: _lesion_sort_key(item[0])))
 
 
@@ -133,6 +140,19 @@ def _build_background_mask(background_roi_path: Path, pet_shape: Tuple[int, ...]
     return background_mask.astype(bool)
 
 
+def _load_background_mask(lesion_method_dir: Path, pet_shape: Tuple[int, ...]) -> Optional[np.ndarray]:
+    candidates = (
+        lesion_method_dir / "background_intensity_mask.hv",
+        lesion_method_dir / "background_mask.hv",
+        lesion_method_dir.parent / "background_intensity_mask.hv",
+        lesion_method_dir.parent / "background_mask.hv",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return _load_mask_hv(candidate, pet_shape, "background")
+    return _build_background_mask(lesion_method_dir.parent / "background_roi.json", pet_shape)
+
+
 def _default_patient_vois(lesion_method_dir: Path) -> List[str]:
     lesion_paths = _discover_lesion_paths(lesion_method_dir)
     voi_names = list(lesion_paths.keys())
@@ -161,7 +181,7 @@ def load_patient_voi_masks(
     else:
         lesion_union = None
 
-    background_mask = _build_background_mask(lesion_method_dir.parent / "background_roi.json", pet_shape)
+    background_mask = _load_background_mask(lesion_method_dir, pet_shape)
 
     if support_mask is not None and tuple(support_mask.shape) != tuple(pet_shape):
         raise ValueError(
@@ -204,8 +224,23 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compute patient convergence-over-iterations with lesion/background VOIs."
     )
-    parser.add_argument("--sweep", type=str, required=True, help="Sweep directory name, e.g. precond_2bpos")
-    parser.add_argument("--baseline", type=str, required=True, help="Baseline directory name, e.g. baselines_2bpos")
+    parser.add_argument("--sweep", type=str, default=None, help="Sweep directory name under the base output directory, e.g. precond_2bpos")
+    parser.add_argument("--baseline", type=str, default=None, help="Baseline directory name under the base output directory, e.g. baselines_2bpos")
+    parser.add_argument(
+        "--sweep-dir",
+        action="append",
+        default=None,
+        help=(
+            "Explicit sweep directory to analyse. May be supplied multiple times; "
+            "run directories from all supplied sweep dirs are pooled."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-dir",
+        type=str,
+        default=None,
+        help="Explicit baseline directory containing baseline_alpha_<alpha> subdirectories.",
+    )
     parser.add_argument(
         "--output",
         type=str,
@@ -258,6 +293,12 @@ def _parse_args() -> argparse.Namespace:
         help="Comma-separated step-size filter (e.g. 1 or 1,0.5). If omitted, all step sizes are used.",
     )
     parser.add_argument(
+        "--subsets",
+        type=float,
+        default=None,
+        help="If provided, plot x-axis as epochs using iteration/subsets.",
+    )
+    parser.add_argument(
         "--summary-percentiles",
         type=str,
         default="10,50,90",
@@ -278,6 +319,15 @@ def _parse_args() -> argparse.Namespace:
         "--include-bsrem",
         action="store_true",
         help="Include BSREM runs in analysis (default excludes BSREM).",
+    )
+    parser.add_argument(
+        "--exclude-precond",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated precond_type values to exclude. "
+            "Use 'none' to include every preconditioner."
+        ),
     )
     parser.add_argument(
         "--max-runs",
@@ -353,6 +403,9 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    subsets = float(args.subsets) if args.subsets is not None else None
+    if subsets is not None and subsets <= 0:
+        raise ValueError("--subsets must be positive")
 
     if args.nrmse_threshold is not None:
         nrmse_threshold = float(args.nrmse_threshold)
@@ -362,7 +415,9 @@ def main() -> None:
         nrmse_threshold = float(args.relative_error_threshold)
         print("Note: --relative-error-threshold is deprecated; use --nrmse-threshold instead.")
     else:
-        nrmse_threshold = 1e-2
+        # Default: no truncation -- plot NRMSE for all iterations. Pass a finite
+        # --nrmse-threshold to truncate curves once they drop below it.
+        nrmse_threshold = float("inf")
 
     summary_percentiles = base._parse_percentiles(args.summary_percentiles, base.DEFAULT_SUMMARY_PERCENTILES)
     curve_band = base._parse_percentiles(args.curve_inner_band, base.DEFAULT_CURVE_BAND)
@@ -370,6 +425,10 @@ def main() -> None:
         raise ValueError("--curve-inner-band must contain exactly two values, e.g. 10,90")
     curve_band_tuple = (curve_band[0], curve_band[1])
     include_whole_image = not args.no_whole_image
+    if args.exclude_precond is not None:
+        tokens = [t.strip().lower() for t in args.exclude_precond.split(",") if t.strip()]
+        base.EXCLUDED_PRECOND_TYPES = set() if tokens == ["none"] else set(tokens)
+        print(f"Excluded preconditioners: {sorted(base.EXCLUDED_PRECOND_TYPES) or '<none>'}")
 
     study_dir = Path(__file__).resolve().parent.parent
     allowed_alphas = base._parse_alpha_values(args.alpha_values)
@@ -378,9 +437,22 @@ def main() -> None:
     allowed_step_sizes = base._parse_step_sizes(args.step_sizes)
 
     base_output_dir = study_dir / "output"
-    sweep_dir = base_output_dir / args.sweep
-    baseline_dir = base_output_dir / args.baseline
-    output_dir = Path(args.output) if args.output else base_output_dir / f"{args.sweep}_analysis_patient"
+    if args.sweep_dir:
+        sweep_dirs = [Path(p).expanduser().resolve() for p in args.sweep_dir]
+    elif args.sweep:
+        sweep_dirs = [base_output_dir / args.sweep]
+    else:
+        raise ValueError("Provide either --sweep or at least one --sweep-dir.")
+
+    if args.baseline_dir:
+        baseline_dir = Path(args.baseline_dir).expanduser().resolve()
+    elif args.baseline:
+        baseline_dir = base_output_dir / args.baseline
+    else:
+        raise ValueError("Provide either --baseline or --baseline-dir.")
+
+    output_name = args.sweep if args.sweep else "convergence_over_iterations_patient"
+    output_dir = Path(args.output) if args.output else base_output_dir / f"{output_name}_analysis_patient"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     raw_csv = output_dir / "convergence_over_iterations_voi.csv"
@@ -443,6 +515,7 @@ def main() -> None:
             curve_band=curve_band_tuple,
             nrmse_threshold=nrmse_threshold,
             initial_cap_factor=float(args.initial_cap_factor),
+            subsets=subsets,
         )
         if aggregated_objective_rows:
             base.plot_objective_bands(
@@ -450,9 +523,22 @@ def main() -> None:
                 output_dir=output_dir,
                 curve_band=curve_band_tuple,
                 initial_cap_factor=float(args.initial_cap_factor),
+                subsets=subsets,
             )
         else:
             print(f"Warning: cached objective aggregated CSV is empty: {objective_agg_csv}")
+        base.plot_subset_selection_summary(
+            aggregated_rows=aggregated_rows,
+            figures_dir=output_dir.parent / "figures",
+            curve_band=curve_band_tuple,
+            subsets=subsets,
+            bpos_label="2bpos",
+            panel_specs=(
+                ("whole_image", "Whole image"),
+                ("lesion_union", "Lesion union"),
+                ("background", "Background"),
+            ),
+        )
 
         print("=" * 70)
         print("Convergence plots refreshed from cached CSVs (after applying filters).")
@@ -467,12 +553,17 @@ def main() -> None:
     lesion_masks_root = Path(args.lesion_masks_root)
     if not lesion_masks_root.exists():
         raise FileNotFoundError(f"Lesion mask root not found: {lesion_masks_root}")
-    if not sweep_dir.exists():
-        raise FileNotFoundError(f"Sweep directory not found: {sweep_dir}")
+    missing_sweep_dirs = [sweep_dir for sweep_dir in sweep_dirs if not sweep_dir.exists()]
+    if missing_sweep_dirs:
+        raise FileNotFoundError(
+            "Sweep directory not found: " + ", ".join(str(p) for p in missing_sweep_dirs)
+        )
     if not baseline_dir.exists():
         raise FileNotFoundError(f"Baseline directory not found: {baseline_dir}")
 
-    print(f"Sweep directory: {sweep_dir}")
+    print("Sweep directories:")
+    for sweep_dir in sweep_dirs:
+        print(f"  {sweep_dir}")
     print(f"Baseline directory: {baseline_dir}")
     print(f"Output directory: {output_dir}")
     print(f"Lesion masks root: {lesion_masks_root}")
@@ -483,8 +574,12 @@ def main() -> None:
     else:
         print("VOIs override: <auto>")
     print(f"Include BSREM: {bool(args.include_bsrem)}")
+    if subsets is not None:
+        print(f"Epoch x-axis: iteration/{subsets:g}")
 
-    run_dirs = base._gather_runs(sweep_dir)
+    run_dirs: List[Path] = []
+    for sweep_dir in sweep_dirs:
+        run_dirs.extend(base._gather_runs(sweep_dir))
     if args.max_runs is not None:
         run_dirs = run_dirs[: args.max_runs]
     print(f"Found {len(run_dirs)} sweep run directories")
@@ -505,6 +600,9 @@ def main() -> None:
             continue
 
         precond_type = str(run_info.get("precond_type", "")).strip().lower()
+        if base._is_excluded_precond(precond_type):
+            print(f"[{idx}/{len(run_dirs)}] Skipping {run_dir.name}: precond '{precond_type}' excluded")
+            continue
         if precond_type == "bsrem" and not args.include_bsrem:
             print(f"[{idx}/{len(run_dirs)}] Skipping {run_dir.name}: BSREM excluded by default")
             continue
@@ -525,7 +623,7 @@ def main() -> None:
                 baseline_dir=baseline_dir,
                 alpha=alpha,
                 explicit_transform=args.spect2pet_transform,
-                sweep_dir=sweep_dir,
+                sweep_dir=sweep_dirs[0] if len(sweep_dirs) == 1 else None,
                 mean_baseline_from=args.mean_baseline_from,
             )
             ctx = baseline_cache[alpha]
@@ -690,6 +788,7 @@ def main() -> None:
         curve_band=curve_band_tuple,
         nrmse_threshold=nrmse_threshold,
         initial_cap_factor=float(args.initial_cap_factor),
+        subsets=subsets,
     )
     if aggregated_objective_rows:
         base.plot_objective_bands(
@@ -697,9 +796,22 @@ def main() -> None:
             output_dir=output_dir,
             curve_band=curve_band_tuple,
             initial_cap_factor=float(args.initial_cap_factor),
+            subsets=subsets,
         )
     else:
         print("Warning: no objective rows were generated.")
+    base.plot_subset_selection_summary(
+        aggregated_rows=aggregated_rows,
+        figures_dir=output_dir.parent / "figures",
+        curve_band=curve_band_tuple,
+        subsets=subsets,
+        bpos_label="2bpos",
+        panel_specs=(
+            ("whole_image", "Whole image"),
+            ("lesion_union", "Lesion union"),
+            ("background", "Background"),
+        ),
+    )
 
     print("=" * 70)
     print("Patient convergence-over-iterations with VOIs complete.")

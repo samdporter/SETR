@@ -1,0 +1,37 @@
+# 2bpos patient preconditioner sweep, 100 epochs, TRIMMED for the 25-vs-100 epoch
+# comparison (experiment 4): step 1.0 only, five legend methods, 3 reps
+# (launch with SWEEP_REPEATS=3) => 5 x 1 x 3 = 15 jobs.
+# Objective matches baselines_2bpos_gersh_eta0001_gamma002 and the 25-epoch
+# precond_2bpos_step1_2 sweep (gamma_tnv=0.02, support_mask_from_sensitivity=false).
+sweep_name: "precond_2bpos_patient_100ep_step1_5preconds"
+base_config: "config_2bpos.yaml"
+script: "run_precond_sweep_single.py"
+
+sge:
+  runtime: "72:00:00"
+  memory: "95G"
+  cores: 1
+  queue: null
+  gpu: true
+
+parameters:
+  precond_types_file: "precond_types_legend5.csv"
+  alphas_file: "alphas.csv"
+  step_sizes_file: "step_sizes.csv"
+
+fixed_params:
+  num_epochs: 100
+  gamma_tnv: 0.02
+  relaxation_eta: 0.002
+  use_tof: false
+  support_mask_from_sensitivity: false
+  support_mask_rel_threshold: 0.001
+  support_mask_abs_threshold: 0.0
+  em_precond_smooth: true
+  em_precond_smoothing_fwhm: [5, 5, 5]
+  em_precond_cap_to_initial_max: false
+  em_precond_cap_to_initial_max_factor: 2.0
+  precond_cap_to_initial_max: false
+  precond_cap_to_initial_max_factor: 2.0
+  save_gradients: false
+  save_preconditioners: false
