@@ -27,9 +27,12 @@ relaxation_eta: 0.002
 variance_reduction: "svrg"
 prior_updates_per_epoch: null
 snapshot_interval_factor: 1.0
-precond_combine: "majoriser"
+precond_combine: "majoriser"  # per-precond override via precond_types.csv "type,combine"
 block_scalar_reduction: "diag"
 precond_safety_scale: 1.0
+# Lehmer parameters (used only by combine=lehmer runs, e.g. ls_block_diag).
+lehmer_p: 0.01
+lehmer_scale: 0.5
 
 # Kappa weighting
 use_kappa: false

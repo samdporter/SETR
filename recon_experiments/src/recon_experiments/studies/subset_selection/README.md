@@ -15,9 +15,25 @@ This experiment investigates how different subset organization schemes and prior
 - `separate`: 18 PET subsets + 18 SPECT subsets sampled independently (36 total)
 - `paired`: 18 SumFunction(PET, SPECT) pairs sampled together (18 total)
 
-**2. Prior Update Strategy (2 variants)**
-- `always`: Prior in outer SumFunction, evaluated every iteration
-- `subset`: Prior as separate function in SVRG sampler with adjusted probability
+**2. Prior Update Strategy (3 variants)**
+
+All three keep the SVRG/SAGA sampler UNIFORM — the only regime in which CIL's
+`num_functions` gradient scaling is unbiased — and encode the prior-update
+frequency in the stochastic function list, which always sums exactly to
+(data + prior). With N data functions:
+
+- `folded`: prior/N folded into each data function (n = N). Full prior
+  gradient difference enters every update.
+- `half`: N copies of prior/N appended (n = 2N). Prior drawn with probability
+  1/2 (every other update), each draw applying 2x the prior gradient difference.
+- `epoch`: full prior appended as one extra function (n = N+1). Prior drawn
+  with probability 1/(N+1) (about once per data pass), each draw applying
+  (N+1)x the prior gradient difference.
+
+Legacy modes (kept for reproducibility): `always` (prior outside the sampler,
+evaluated every iteration) and `subset` (prior sampled with a NON-uniform
+probability — BIASED with CIL's uniform gradient scaling, overweights the
+prior by ~prior_updates_per_epoch; do not use for new experiments).
 
 **3. Preconditioner Type**
 - Defined in `parameters/precond_types.csv`
@@ -26,13 +42,11 @@ This experiment investigates how different subset organization schemes and prior
 - Defined in `parameters/gammas.csv`
 - Current baseline-aligned setting: `gamma_tnv=0.01` with `alpha=beta=1`
 
-### Prior Sampling Probabilities
+### Preconditioner types
 
-To maintain approximately equal prior gradient evaluations across configurations:
-
-- **separate + always**: 1 prior eval per 1 data subset eval
-- **paired + subset**: prob(prior) = 1/2, ratio 1:2 data
-- **separate + subset**: prob(prior) = 1/3, ratio 1:3 data
+`parameters/precond_types.csv` lines may be `type` or `type,combine`; the
+optional second column overrides `precond_combine` for that run (e.g.
+`ls_block_diag,lehmer` with `lehmer_p`/`lehmer_scale` from the base config).
 
 ### Total Experiments
 
@@ -41,7 +55,7 @@ To maintain approximately equal prior gradient evaluations across configurations
 **Convergence references**: one run per gamma @ 1,000 epochs each
 - Configuration: separate, always, mm_diag_block_maj
 
-With the current parameter files this is 8 main runs and 1 convergence reference per dataset.
+With the current parameter files this is 18 main runs (2 subset modes x 3 prior modes x 3 preconditioners) and 1 convergence reference per dataset.
 
 ## Directory Structure
 

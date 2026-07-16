@@ -1,3 +1,4 @@
-precond_type
+precond_type,combine
 bsrem
-mm_diag_tight
+mm_diag_tight,majoriser
+ls_block_diag,lehmer

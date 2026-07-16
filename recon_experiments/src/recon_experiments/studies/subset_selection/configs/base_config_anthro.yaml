@@ -25,9 +25,13 @@ relaxation_eta: 0.002
 variance_reduction: "svrg"
 prior_updates_per_epoch: null
 snapshot_interval_factor: 1.0
-precond_combine: "majoriser"
+precond_combine: "majoriser"  # per-precond override via precond_types.csv "type,combine"
 block_scalar_reduction: "diag"
 precond_safety_scale: 1.0
+# Lehmer parameters (used only by combine=lehmer runs, e.g. ls_block_diag).
+# Match the preconditioner-study LS runs (precond_1bpos_lehmer_q001).
+lehmer_p: 0.01
+lehmer_scale: 0.5
 
 # Kappa weighting
 use_kappa: false
@@ -89,5 +93,6 @@ metrics_normalization: "range"  # Normalization for NRMSE/NMAE
 
 # Experimental parameters (set by sweep)
 # subset_mode: "separate" or "paired"
-# prior_mode: "always" or "subset"
-# precond_type: "bsrem", "mm_diag_gershgorin_maj", or "mm_diag_block_maj"
+# prior_mode: "folded", "half", or "epoch" (unbiased uniform-sampling modes);
+#             "always"/"subset" are legacy ("subset" is biased - see runner warning)
+# precond_type: "bsrem", "mm_diag_tight", "ls_block_diag", ... (optionally "type,combine" in CSV)

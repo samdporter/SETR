@@ -29,7 +29,7 @@ report_failure() {
 
     if [ -n "${OUTPUT_DIR:-}" ]; then
         cat > "$OUTPUT_DIR/job_completion.txt" <<EOF
-subset_mode=${SUBSET_MODE:-unknown},prior_mode=${PRIOR_MODE:-unknown},precond_type=${PRECOND_TYPE:-unknown},gamma=${GAMMA:-unknown},status=failed,return_code=$exit_code,end_time=$(date),host=$HOSTNAME,failure_reason=$failure_reason,failure_type=$failure_type,start_time=$START_TIME
+subset_mode=${SUBSET_MODE:-unknown},prior_mode=${PRIOR_MODE:-unknown},precond_type=${PRECOND_TYPE:-unknown},precond_combine=${PRECOND_COMBINE:-},gamma=${GAMMA:-unknown},status=failed,return_code=$exit_code,end_time=$(date),host=$HOSTNAME,failure_reason=$failure_reason,failure_type=$failure_type,start_time=$START_TIME
 EOF
     fi
 }
@@ -155,13 +155,14 @@ if [ -n "${PRIOR_MODES_FILE:-}" ]; then
     log_with_timestamp "Loaded $NUM_PRIOR_MODES prior modes"
 fi
 
-# Read precond types if file specified
+# Read precond types if file specified.
+# Lines may be "type" or "type,combine" (combine overrides precond_combine).
 if [ -n "${PRECOND_TYPES_FILE:-}" ]; then
     if [ ! -f "$PARAM_DIR/$PRECOND_TYPES_FILE" ]; then
         report_failure 1 "Precond types file not found: $PARAM_DIR/$PRECOND_TYPES_FILE" "config"
         exit 1
     fi
-    mapfile -t PRECOND_TYPES < <(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | awk 'NF{print $1}')
+    mapfile -t PRECOND_TYPES < <(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | sed 's/\r$//' | awk 'NF')
     NUM_PRECOND_TYPES=${#PRECOND_TYPES[@]}
     log_with_timestamp "Loaded $NUM_PRECOND_TYPES preconditioner types"
 fi
@@ -208,10 +209,13 @@ else
     PRIOR_MODE="always"  # default
 fi
 
+PRECOND_COMBINE=""
 if [ -n "${FIXED_PRECOND_TYPE:-}" ]; then
     PRECOND_TYPE="$FIXED_PRECOND_TYPE"
 elif [ ${#PRECOND_TYPES[@]} -gt 0 ]; then
-    PRECOND_TYPE=${PRECOND_TYPES[$PRECOND_INDEX]}
+    IFS=',' read -r PRECOND_TYPE PRECOND_COMBINE <<< "${PRECOND_TYPES[$PRECOND_INDEX]}"
+    PRECOND_TYPE="${PRECOND_TYPE//[$'\t\r\n ']/}"
+    PRECOND_COMBINE="${PRECOND_COMBINE//[$'\t\r\n ']/}"
 else
     PRECOND_TYPE="bsrem"  # default
 fi
@@ -222,10 +226,14 @@ else
     GAMMA="50"  # default
 fi
 
-log_with_timestamp "Task $TASK_ID: subset_mode=$SUBSET_MODE, prior_mode=$PRIOR_MODE, precond_type=$PRECOND_TYPE, gamma=$GAMMA"
+log_with_timestamp "Task $TASK_ID: subset_mode=$SUBSET_MODE, prior_mode=$PRIOR_MODE, precond_type=$PRECOND_TYPE, combine=${PRECOND_COMBINE:-<config>}, gamma=$GAMMA"
 
 # --- Paths for this job ---
-OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/subset_${SUBSET_MODE}_prior_${PRIOR_MODE}_precond_${PRECOND_TYPE}_gamma_${GAMMA}"
+PRECOND_NAME="$PRECOND_TYPE"
+if [ -n "$PRECOND_COMBINE" ]; then
+    PRECOND_NAME="${PRECOND_TYPE}_combine_${PRECOND_COMBINE}"
+fi
+OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/subset_${SUBSET_MODE}_prior_${PRIOR_MODE}_precond_${PRECOND_NAME}_gamma_${GAMMA}"
 WORKING_DIR="$OUTPUT_DIR/tmp"
 
 log_with_timestamp "Creating output directories..."
@@ -251,6 +259,11 @@ for attempt in $(seq 1 $MAX_RETRIES); do
     attempt_start_time=$(date '+%Y-%m-%d %H:%M:%S')
     log_with_timestamp "Starting reconstruction at: $attempt_start_time"
 
+    COMBINE_OVERRIDE=()
+    if [ -n "$PRECOND_COMBINE" ]; then
+        COMBINE_OVERRIDE=(precond_combine="$PRECOND_COMBINE")
+    fi
+
     if python "$SCRIPTS_DIR/run_subset_selection.py" \
         --config "$CONFIG_DIR/$BASE_CONFIG_FILE" \
         --override \
@@ -260,6 +273,7 @@ for attempt in $(seq 1 $MAX_RETRIES); do
             subset_mode="$SUBSET_MODE" \
             prior_mode="$PRIOR_MODE" \
             precond_type="$PRECOND_TYPE" \
+            ${COMBINE_OVERRIDE[@]+"${COMBINE_OVERRIDE[@]}"} \
             gamma_tnv="$GAMMA"; then
         RETURN_CODE=0
         log_with_timestamp "Reconstruction completed successfully"
@@ -291,7 +305,7 @@ if [ $RETURN_CODE -eq 0 ]; then
     log_with_timestamp "Job completed successfully at: $END_TIME"
 
     cat > "$OUTPUT_DIR/job_completion.txt" <<EOF
-subset_mode=$SUBSET_MODE,prior_mode=$PRIOR_MODE,precond_type=$PRECOND_TYPE,gamma=$GAMMA,status=completed,end_time=$END_TIME,host=$HOSTNAME,start_time=$START_TIME
+subset_mode=$SUBSET_MODE,prior_mode=$PRIOR_MODE,precond_type=$PRECOND_TYPE,precond_combine=${PRECOND_COMBINE:-},gamma=$GAMMA,status=completed,end_time=$END_TIME,host=$HOSTNAME,start_time=$START_TIME
 EOF
 else
     log_with_timestamp "Job failed with return code: $RETURN_CODE at: $END_TIME"

@@ -324,8 +324,15 @@ def plot_convergence_curves(
             print(f"No convergence reference for gamma={gamma}, skipping plot")
             continue
         
-        # Create subplot for each factor combination
-        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        # Create subplot for each factor combination (rows: subset mode,
+        # columns: one per prior mode present in the results)
+        prior_modes = sorted(
+            {result.get('prior_mode', 'unknown') for _, result in results}
+        )
+        num_cols = max(len(prior_modes), 1)
+        fig, axes = plt.subplots(
+            2, num_cols, figsize=(8 * num_cols, 12), squeeze=False
+        )
         fig.suptitle(f'Convergence Comparison (γ={gamma})', fontsize=16)
         
         # Plot reference on all subplots
@@ -347,8 +354,8 @@ def plot_convergence_curves(
             
             # Determine which subplot
             row = 0 if subset_mode == 'separate' else 1
-            col = 0 if prior_mode == 'always' else 1
-            
+            col = prior_modes.index(prior_mode) if prior_mode in prior_modes else 0
+
             ax = axes[row, col]
             ax.plot(
                 result['objective_history'],

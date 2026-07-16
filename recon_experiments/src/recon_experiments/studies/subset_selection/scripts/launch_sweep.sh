@@ -196,8 +196,9 @@ case "$MODE" in
         else
             _PRIOR_MODES=("")
         fi
+        # Precond lines may be "type" or "type,combine" (see precond_types.csv).
         if [ -n "${PRECOND_TYPES_FILE:-}" ]; then
-            mapfile -t _PRECOND_TYPES < <(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | awk '{print $1}')
+            mapfile -t _PRECOND_TYPES < <(tail -n +2 "$PARAM_DIR/$PRECOND_TYPES_FILE" | sed 's/\r$//' | awk 'NF')
         else
             _PRECOND_TYPES=("")
         fi
@@ -214,8 +215,11 @@ case "$MODE" in
 
         for SUBSET_MODE in "${_SUBSET_MODES[@]}"; do
         for PRIOR_MODE in "${_PRIOR_MODES[@]}"; do
-        for PRECOND_TYPE in "${_PRECOND_TYPES[@]}"; do
+        for PRECOND_LINE in "${_PRECOND_TYPES[@]}"; do
         for GAMMA in "${_GAMMAS[@]}"; do
+            IFS=',' read -r PRECOND_TYPE PRECOND_COMBINE <<< "$PRECOND_LINE"
+            PRECOND_TYPE="${PRECOND_TYPE//[$'\t\r\n ']/}"
+            PRECOND_COMBINE="${PRECOND_COMBINE//[$'\t\r\n ']/}"
             JOB_NUM=$((JOB_NUM + 1))
             OVERRIDES=""
             RUN_NAME="subset"
@@ -237,6 +241,10 @@ case "$MODE" in
             if [ -n "$PRECOND_TYPE" ]; then
                 OVERRIDES="$OVERRIDES precond_type=$PRECOND_TYPE"
                 RUN_NAME="${RUN_NAME}_precond_${PRECOND_TYPE}"
+                if [ -n "$PRECOND_COMBINE" ]; then
+                    OVERRIDES="$OVERRIDES precond_combine=$PRECOND_COMBINE"
+                    RUN_NAME="${RUN_NAME}_combine_${PRECOND_COMBINE}"
+                fi
             elif [ -n "${FIXED_PRECOND_TYPE:-}" ]; then
                 OVERRIDES="$OVERRIDES precond_type=$FIXED_PRECOND_TYPE"
             fi

@@ -1017,6 +1017,20 @@ def build_variance_reduced_function(
         data_probs = [p * data_scale for p in data_probs]
         probs = data_probs + [prior_prob]
         stochastic_functions.append(prior)
+        # CIL's SVRG/SAGA scale each sampled gradient difference by
+        # num_functions, which is only unbiased under UNIFORM sampling.
+        uniform_prob = 1.0 / len(stochastic_functions)
+        if not np.isclose(prior_prob, uniform_prob, rtol=1e-6, atol=0.0):
+            logging.warning(
+                "Prior sampling probability %.6g != uniform %.6g: CIL's "
+                "num_functions gradient scaling makes this estimator BIASED "
+                "(prior over/under-weighted by ~%.3gx relative to the data). "
+                "Use prior_updates_per_epoch=1 (uniform) or restructure the "
+                "function list to keep sampling uniform.",
+                prior_prob,
+                uniform_prob,
+                prior_prob / uniform_prob,
+            )
     else:
         probs = data_probs
 

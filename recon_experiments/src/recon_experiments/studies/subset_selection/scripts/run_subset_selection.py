@@ -4,7 +4,7 @@ Subset selection experiment script for DTNV reconstruction.
 
 Tests different combinations of:
 - Subset organization (paired vs separate)
-- Prior update frequency (always vs as subset)
+- Prior update strategy (folded / half / epoch, plus legacy always / subset)
 - Preconditioner types (data-only vs TNV-aware majorisers)
 
 This script reuses code from run_dtnv_1bpos.py and shared modules,
@@ -629,9 +629,63 @@ def get_preconditioner(args, s_inv, all_funs, update_interval, priors_list, init
     )
 
 
+# Prior modes with UNIFORM sampling (unbiased with CIL's num_functions scaling).
+UNIFORM_PRIOR_MODES = ("folded", "half", "epoch")
+# Legacy modes kept for reproducibility of earlier sweeps.
+LEGACY_PRIOR_MODES = ("always", "subset")
+VALID_PRIOR_MODES = UNIFORM_PRIOR_MODES + LEGACY_PRIOR_MODES
+
+
+def build_prior_mode_functions(prior_mode, all_funs, prior):
+    """
+    Build the stochastic function list for the uniform-sampling prior modes.
+
+    CIL's SVRG/SAGA scale the sampled gradient-difference term by
+    ``num_functions``, which is only an unbiased estimator when the sampler is
+    uniform. All three modes therefore keep the sampler uniform and instead
+    encode the prior-update frequency in the function list itself. In every
+    mode the list sums exactly to (sum of data functions + prior), so all
+    modes minimise the same objective:
+
+    - ``folded``: prior/N is folded into each of the N data functions.
+      Epoch = N iterations; the full prior gradient difference enters every
+      update.
+    - ``half``: N copies of prior/N are appended to the N data functions
+      (n = 2N). The prior is drawn with probability 1/2 (every other update in
+      expectation), each draw applying 2x the prior gradient difference.
+    - ``epoch``: the full prior is appended as a single extra function
+      (n = N + 1), drawn with probability 1/(N+1) (about once per data pass),
+      each draw applying (N+1)x the prior gradient difference.
+
+    Returns:
+        stochastic_functions: Function list summing to data + prior.
+        epoch_length: Iterations per epoch (one expected data pass).
+    """
+    num_data = len(all_funs)
+    if num_data == 0:
+        raise ValueError("At least one data function is required.")
+    scaled_prior = (1.0 / num_data) * prior
+    if prior_mode == "folded":
+        return [SumFunction(fun, scaled_prior) for fun in all_funs], num_data
+    if prior_mode == "half":
+        return list(all_funs) + [scaled_prior] * num_data, 2 * num_data
+    if prior_mode == "epoch":
+        return list(all_funs) + [prior], num_data + 1
+    raise ValueError(
+        f"Unknown uniform prior_mode: {prior_mode}. Options: {UNIFORM_PRIOR_MODES}"
+    )
+
+
 def calculate_epoch_length_and_prior_updates(subset_mode, prior_mode, num_data_funs, args):
     """
-    EXPERIMENTAL: Calculate epoch length and prior updates based on experimental modes.
+    LEGACY: Calculate epoch length and prior updates for the 'always'/'subset' modes.
+
+    WARNING: prior_mode='subset' gives the prior a non-uniform sampling
+    probability while CIL's SVRG/SAGA scale sampled gradients by
+    ``num_functions`` (a uniform-sampling assumption), so its gradient
+    estimates are biased: the prior is overweighted relative to the data by a
+    factor of ``prior_updates_per_epoch``. Kept only to reproduce earlier
+    sweeps; prefer the uniform modes in ``build_prior_mode_functions``.
 
     This translates the experimental subset_mode and prior_mode into parameters
     that the shared build_variance_reduced_function can understand.
@@ -701,8 +755,18 @@ def main(args) -> None:
 
     if subset_mode not in ["separate", "paired"]:
         raise ValueError(f"subset_mode must be 'separate' or 'paired', got {subset_mode}")
-    if prior_mode not in ["always", "subset"]:
-        raise ValueError(f"prior_mode must be 'always' or 'subset', got {prior_mode}")
+    if prior_mode not in VALID_PRIOR_MODES:
+        raise ValueError(
+            f"prior_mode must be one of {VALID_PRIOR_MODES}, got {prior_mode}"
+        )
+    if prior_mode == "subset":
+        logging.warning(
+            "prior_mode='subset' is BIASED: non-uniform sampling probabilities are "
+            "combined with CIL's uniform num_functions gradient scaling, overweighting "
+            "the prior relative to the data by ~prior_updates_per_epoch. "
+            "Prefer prior_mode in %s.",
+            UNIFORM_PRIOR_MODES,
+        )
     if subset_mode == "paired":
         _validate_paired_subset_configuration(bpos, args.num_subsets)
 
@@ -839,51 +903,99 @@ def main(args) -> None:
         priors_list = get_prior(args, umap, combined, kappas)
         prior = -SumFunction(*priors_list)
 
-    # Calculate epoch length and prior updates based on EXPERIMENTAL modes
+    # Build the stochastic objective based on the EXPERIMENTAL prior mode.
+    # NOTE: the preconditioner below keeps receiving the RAW data functions
+    # (all_funs), so all prior modes share identical preconditioners.
     data_epoch_length = len(all_funs)
-    epoch_length, prior_updates_per_epoch = calculate_epoch_length_and_prior_updates(
-        subset_mode, prior_mode, data_epoch_length, args
-    )
-    data_probs = get_data_sampling_probabilities(all_funs)
-
-    # Temporarily set prior_updates_per_epoch for build_variance_reduced_function
-    original_prior_updates = getattr(args, "prior_updates_per_epoch", None)
-    args.prior_updates_per_epoch = prior_updates_per_epoch
-
-    # Build variance-reduced function (shared function from dtnv_common)
-    # This handles the prior sampling logic based on prior_updates_per_epoch
-    f_obj, probs, prior_prob, prior_in_sampler = build_variance_reduced_function(
-        args,
-        all_funs,
-        prior,
-        num_subsets,
-        data_epoch_length,
-        bpos=bpos,
-        data_probs=data_probs,
-    )
-
-    # Restore original value
-    args.prior_updates_per_epoch = original_prior_updates
-
     variance_reduction = getattr(args, "variance_reduction", "svrg")
-    logging.info(
-        "Variance reduction: %s | data functions: %d | stochastic functions: %d",
-        variance_reduction,
-        len(all_funs),
-        getattr(f_obj, "num_functions", len(all_funs) + int(prior_in_sampler)),
-    )
 
-    if prior_in_sampler and prior_prob is not None:
-        expected_updates = prior_prob * epoch_length
-        logging.info(
-            "Prior mode: subset (sampled) | prob=%.6f | expected updates/epoch≈%.3f",
-            prior_prob,
-            expected_updates,
+    if prior is not None and prior_mode in UNIFORM_PRIOR_MODES:
+        # Uniform sampling over a function list that sums to data + prior:
+        # the only regime in which CIL's num_functions scaling is unbiased.
+        stochastic_funs, epoch_length = build_prior_mode_functions(
+            prior_mode, all_funs, prior
         )
-    elif prior is not None:
-        logging.info("Prior mode: always (evaluated deterministically each iteration)")
+        data_probs = get_data_sampling_probabilities(stochastic_funs)
+        f_obj, _probs, _prior_prob, _prior_in_sampler = build_variance_reduced_function(
+            args,
+            stochastic_funs,
+            None,
+            num_subsets,
+            epoch_length,
+            bpos=bpos,
+            data_probs=data_probs,
+        )
+        objective = -f_obj
 
-    objective = -f_obj if prior_in_sampler or prior is None else -SumFunction(f_obj, prior)
+        num_prior_slots = len(stochastic_funs) - data_epoch_length
+        expected_prior_draws = (
+            float(epoch_length)
+            if prior_mode == "folded"
+            else epoch_length * num_prior_slots / len(stochastic_funs)
+        )
+        logging.info(
+            "Variance reduction: %s | data functions: %d | stochastic functions: %d "
+            "(uniform sampling)",
+            variance_reduction,
+            data_epoch_length,
+            len(stochastic_funs),
+        )
+        logging.info(
+            "Prior mode: %s | epoch length: %d | expected prior updates/epoch≈%.3f",
+            prior_mode,
+            epoch_length,
+            expected_prior_draws,
+        )
+    else:
+        # Legacy modes ('always' outside the sampler; biased 'subset' sampling).
+        # With no prior, any mode reduces to plain data sampling ('always').
+        legacy_prior_mode = (
+            prior_mode if prior is not None and prior_mode in LEGACY_PRIOR_MODES else "always"
+        )
+        epoch_length, prior_updates_per_epoch = calculate_epoch_length_and_prior_updates(
+            subset_mode, legacy_prior_mode, data_epoch_length, args
+        )
+        data_probs = get_data_sampling_probabilities(all_funs)
+
+        # Temporarily set prior_updates_per_epoch for build_variance_reduced_function
+        original_prior_updates = getattr(args, "prior_updates_per_epoch", None)
+        args.prior_updates_per_epoch = prior_updates_per_epoch
+
+        # Build variance-reduced function (shared function from dtnv_common)
+        # This handles the prior sampling logic based on prior_updates_per_epoch
+        f_obj, probs, prior_prob, prior_in_sampler = build_variance_reduced_function(
+            args,
+            all_funs,
+            prior,
+            num_subsets,
+            data_epoch_length,
+            bpos=bpos,
+            data_probs=data_probs,
+        )
+
+        # Restore original value
+        args.prior_updates_per_epoch = original_prior_updates
+
+        logging.info(
+            "Variance reduction: %s | data functions: %d | stochastic functions: %d",
+            variance_reduction,
+            len(all_funs),
+            getattr(f_obj, "num_functions", len(all_funs) + int(prior_in_sampler)),
+        )
+
+        if prior_in_sampler and prior_prob is not None:
+            expected_updates = prior_prob * epoch_length
+            logging.info(
+                "Prior mode: subset (sampled) | prob=%.6f | expected updates/epoch≈%.3f",
+                prior_prob,
+                expected_updates,
+            )
+        elif prior is not None:
+            logging.info("Prior mode: always (evaluated deterministically each iteration)")
+
+        objective = (
+            -f_obj if prior_in_sampler or prior is None else -SumFunction(f_obj, prior)
+        )
 
     # Set up EXPERIMENTAL preconditioner
     ui = getattr(args, "update_interval", None)
