@@ -269,7 +269,7 @@ def plot_final_panel(c: BaselineConv, out_path: Path) -> None:
         m = c.velocity > 0
         ax.semilogy(
             c.vel_epochs[m], c.velocity[m], color=color, lw=2.0,
-            marker="o", ms=3.2, label=f"{c.label}: PET iterate velocity",
+            marker="o", ms=3.2, label="PET iterate velocity",
         )
     axt.plot(c.epochs, c.step, color="#4c78a8", lw=1.8, ls="--", label="relaxed step size")
     ax.set_xlabel("epoch")
@@ -285,6 +285,30 @@ def plot_final_panel(c: BaselineConv, out_path: Path) -> None:
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved final convergence panel: {out_path}")
+
+
+def plot_final_objective_panel(c: BaselineConv, out_path: Path, log_y: bool = True) -> None:
+    """Plot the remaining objective decrease and relaxed step for one baseline."""
+    fig, ax = plt.subplots(figsize=(7.2, 5.2))
+    axt = ax.twinx()
+    color = "#1f77b4"
+    m = c.gap > 0
+    plot = ax.semilogy if log_y else ax.plot
+    plot(c.epochs[m], c.gap[m], color=color, lw=2.0, label="objective decrease")
+    axt.plot(c.epochs, c.step, color="#4c78a8", lw=1.8, ls="--", label="relaxed step size")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel(r"$\mathcal{O}_k - \mathcal{O}^*$")
+    axt.set_ylabel("relaxed step size")
+    axt.set_ylim(bottom=0)
+    ax.grid(True, which="both", alpha=0.25)
+    lines, labels = ax.get_legend_handles_labels()
+    lines2, labels2 = axt.get_legend_handles_labels()
+    ax.legend(lines + lines2, labels + labels2, loc="upper right", fontsize=9)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved final objective convergence panel: {out_path}")
 
 
 def write_metrics(convs: Sequence[BaselineConv], out_csv: Path) -> None:
@@ -363,7 +387,12 @@ def main() -> None:
     )
     p.add_argument("--output-dir", type=Path, required=True, help="Directory for figure + metrics CSV.")
     p.add_argument("--velocity-points", type=int, default=120, help="Number of log-spaced snapshots for the PET velocity curve (0 to skip).")
-    p.add_argument("--panel", choices=("all", "final"), default="all", help="Render all panels or only the final solution-velocity panel.")
+    p.add_argument(
+        "--panel",
+        choices=("all", "final", "final-objective", "final-objective-linear"),
+        default="all",
+        help="Render all panels, the final solution-velocity panel, or a log/linear final objective-decrease panel.",
+    )
     args = p.parse_args()
 
     convs: List[BaselineConv] = []
@@ -374,10 +403,21 @@ def main() -> None:
         convs.append(compute_baseline_conv(d, label, velocity_points=args.velocity_points))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    if args.panel == "final":
+    if args.panel in ("final", "final-objective", "final-objective-linear"):
         if len(convs) != 1:
-            raise ValueError("--panel final requires exactly one --baseline")
-        plot_final_panel(convs[0], args.output_dir / "baseline_convergence_final_panel.png")
+            raise ValueError(f"--panel {args.panel} requires exactly one --baseline")
+        if args.panel == "final":
+            plot_final_panel(convs[0], args.output_dir / "baseline_convergence_final_panel.png")
+        elif args.panel == "final-objective":
+            plot_final_objective_panel(
+                convs[0], args.output_dir / "baseline_convergence_final_objective_panel.png"
+            )
+        else:
+            plot_final_objective_panel(
+                convs[0],
+                args.output_dir / "baseline_convergence_final_objective_panel_linear.png",
+                log_y=False,
+            )
     else:
         plot_convergence(convs, args.output_dir / "baseline_convergence.png")
     write_metrics(convs, args.output_dir / "baseline_convergence_metrics.csv")

@@ -354,27 +354,27 @@ def _load_pet_support_mask_from_umap(
 def _load_pet_umap_for_overlay(
     baseline_args_row: Optional[Dict[str, str]],
     pet_shape: Tuple[int, ...],
+    fallback_dirs: Sequence[Path] = (),
 ) -> Optional[np.ndarray]:
-    if baseline_args_row is None:
-        return None
+    # Search the recon's own pet_data_path first, then any fallback dirs
+    # (e.g. the mask/study dir) so overlays still render when the recorded
+    # cluster path is not reachable locally.
+    search_dirs: List[Path] = []
+    if baseline_args_row is not None:
+        pet_data_path = str(baseline_args_row.get("pet_data_path", "")).strip()
+        if pet_data_path:
+            search_dirs.append(Path(pet_data_path))
+    search_dirs.extend(Path(d) for d in fallback_dirs)
 
-    pet_data_path = str(baseline_args_row.get("pet_data_path", "")).strip()
-    if not pet_data_path:
-        return None
-
-    pet_data_dir = Path(pet_data_path)
-    candidates = (
-        pet_data_dir / "umap_zoomed.hv",
-        pet_data_dir / "umap.hv",
-    )
-    for c in candidates:
-        if not c.exists():
-            continue
-        arr = ImageData(str(c)).as_array()
-        if tuple(arr.shape) != tuple(pet_shape):
-            continue
-        print(f"Loaded PET umap overlay from {c}")
-        return arr.astype(np.float64, copy=False)
+    for base in search_dirs:
+        for c in (base / "umap_zoomed.hv", base / "umap.hv"):
+            if not c.exists():
+                continue
+            arr = ImageData(str(c)).as_array()
+            if tuple(arr.shape) != tuple(pet_shape):
+                continue
+            print(f"Loaded PET umap overlay from {c}")
+            return arr.astype(np.float64, copy=False)
     return None
 
 
@@ -741,6 +741,7 @@ def _build_baseline_context(
     explicit_transform: Optional[str],
     sweep_dir: Optional[Path] = None,
     mean_baseline_from: Optional[str] = None,
+    umap_fallback_dirs: Sequence[Path] = (),
 ) -> Optional[BaselineContext]:
     baseline_path = baseline_dir / f"baseline_alpha_{alpha}"
     if not baseline_path.exists():
@@ -780,7 +781,7 @@ def _build_baseline_context(
         if transform_path is not None
         else None
     )
-    pet_umap_array = _load_pet_umap_for_overlay(args_row, pet_shape)
+    pet_umap_array = _load_pet_umap_for_overlay(args_row, pet_shape, umap_fallback_dirs)
     spect_registered_umap_array = (
         _load_spect_registered_umap_for_overlay(args_row, pet_shape, resampler)
         if resampler is not None
@@ -1774,22 +1775,28 @@ def plot_subset_selection_summary(
     subsets: Optional[float],
     *,
     bpos_label: str = "1bpos",
+    modality: str = MODALITY_PET,
+    filename_suffix: str = "",
     panel_specs: Sequence[Tuple[str, str]] = (
         ("whole_image", "Whole image"),
         ("hot_sphere", "Hot sphere"),
         ("cold_sphere", "Cold sphere"),
     ),
 ) -> None:
-    """Save the paper-style three-panel subset-selection convergence figure."""
+    """Save the paper-style three-panel subset-selection convergence figure.
+
+    ``modality`` selects PET (default, matching exp3's panels) or the
+    PET-space SPECT metric; ``filename_suffix`` is appended before the
+    extension so PET and SPECT variants can coexist.
+    """
     if not aggregated_rows:
         return
 
     p_low, p_high = curve_band
-    # This summary deliberately uses PET NRMSE only, matching exp3's panels.
     by_alpha: Dict[float, List[Dict[str, object]]] = {}
     for row in aggregated_rows:
         alpha = _coerce_float(row.get("alpha"))
-        if alpha is not None and str(row.get("modality", "")) == MODALITY_PET:
+        if alpha is not None and str(row.get("modality", "")) == modality:
             by_alpha.setdefault(alpha, []).append(row)
 
     for alpha, rows_alpha in sorted(by_alpha.items()):
@@ -1844,7 +1851,7 @@ def plot_subset_selection_summary(
             fig.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="lower center", ncol=2, frameon=False)
             fig.tight_layout(rect=(0, 0.12, 1, 1))
             figures_dir.mkdir(parents=True, exist_ok=True)
-            out_path = figures_dir / f"exp_subset_selection_{bpos_label}_{_sanitize_token(precond_type)}_alpha_{alpha:g}.png"
+            out_path = figures_dir / f"exp_subset_selection_{bpos_label}_{_sanitize_token(precond_type)}_alpha_{alpha:g}{filename_suffix}.png"
             fig.savefig(out_path, dpi=300, bbox_inches="tight")
             plt.close(fig)
             print(f"Saved subset-selection summary figure: {out_path}")
@@ -2462,6 +2469,16 @@ def main() -> None:
     )
     parser.add_argument("--output", type=str, default=None, help="Output directory (default: <sweep>_analysis)")
     parser.add_argument("--masks", type=str, default=None, help="Mask directory containing <voi>_pet.hv")
+    parser.add_argument(
+        "--umap-path",
+        type=str,
+        default=None,
+        help=(
+            "Directory to search for the overlay umap (umap_zoomed.hv/umap.hv) "
+            "when the recon's recorded pet_data_path is not reachable locally. "
+            "Falls back to the mask directory if unset."
+        ),
+    )
     parser.add_argument("--vois", nargs="+", default=list(DEFAULT_VOIS), help="VOI names to evaluate")
     parser.add_argument(
         "--spect2pet-transform",
@@ -2737,6 +2754,15 @@ def main() -> None:
             "Could not locate mask directory. Provide --masks with a directory containing <voi>_pet.hv."
         )
 
+    # Extra directories to search for the overlay umap when the recon's own
+    # (possibly cluster-only) pet_data_path is not reachable locally. An
+    # explicit --umap-path dir wins; the mask/study dir is the default fallback.
+    umap_fallback_dirs: List[Path] = []
+    if getattr(args, "umap_path", None):
+        umap_fallback_dirs.append(Path(args.umap_path))
+    if mask_dir is not None:
+        umap_fallback_dirs.append(mask_dir)
+
     missing_sweep_dirs = [sweep_dir for sweep_dir in sweep_dirs if not sweep_dir.exists()]
     if missing_sweep_dirs:
         raise FileNotFoundError(
@@ -2809,6 +2835,7 @@ def main() -> None:
                 explicit_transform=args.spect2pet_transform,
                 sweep_dir=sweep_dirs[0] if len(sweep_dirs) == 1 else None,
                 mean_baseline_from=args.mean_baseline_from,
+                umap_fallback_dirs=umap_fallback_dirs,
             )
             ctx = baseline_cache[alpha]
             if ctx is not None:

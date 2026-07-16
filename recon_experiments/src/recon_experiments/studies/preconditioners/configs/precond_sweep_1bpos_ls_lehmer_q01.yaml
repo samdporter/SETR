@@ -15,7 +15,7 @@ sge:
     - fozzie.local
 
 parameters:
-  precond_types_file: "precond_types_ls_lehmer.csv"
+  precond_types_file: "precond_types_ls_lehmer_diag.csv"
   alphas_file: "alphas.csv"
   step_sizes_file: "step_sizes.csv"
 
