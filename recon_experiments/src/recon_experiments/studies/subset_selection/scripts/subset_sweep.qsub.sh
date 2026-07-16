@@ -29,7 +29,7 @@ report_failure() {
 
     if [ -n "${OUTPUT_DIR:-}" ]; then
         cat > "$OUTPUT_DIR/job_completion.txt" <<EOF
-subset_mode=${SUBSET_MODE:-unknown},prior_mode=${PRIOR_MODE:-unknown},precond_type=${PRECOND_TYPE:-unknown},precond_combine=${PRECOND_COMBINE:-},gamma=${GAMMA:-unknown},status=failed,return_code=$exit_code,end_time=$(date),host=$HOSTNAME,failure_reason=$failure_reason,failure_type=$failure_type,start_time=$START_TIME
+subset_mode=${SUBSET_MODE:-unknown},prior_mode=${PRIOR_MODE:-unknown},precond_type=${PRECOND_TYPE:-unknown},precond_combine=${PRECOND_COMBINE:-},gamma=${GAMMA:-unknown},seed=${SEED:-unknown},status=failed,return_code=$exit_code,end_time=$(date),host=$HOSTNAME,failure_reason=$failure_reason,failure_type=$failure_type,start_time=$START_TIME
 EOF
     fi
 }
@@ -127,11 +127,13 @@ declare -a SUBSET_MODES=()
 declare -a PRIOR_MODES=()
 declare -a PRECOND_TYPES=()
 declare -a GAMMAS=()
+declare -a SEEDS=()
 
 NUM_SUBSET_MODES=1
 NUM_PRIOR_MODES=1
 NUM_PRECOND_TYPES=1
 NUM_GAMMAS=1
+NUM_SEEDS=1
 
 # Read subset modes if file specified
 if [ -n "${SUBSET_MODES_FILE:-}" ]; then
@@ -178,15 +180,27 @@ if [ -n "${GAMMAS_FILE:-}" ]; then
     log_with_timestamp "Loaded $NUM_GAMMAS gamma values"
 fi
 
+# Read seeds if file specified
+if [ -n "${SEEDS_FILE:-}" ]; then
+    if [ ! -f "$PARAM_DIR/$SEEDS_FILE" ]; then
+        report_failure 1 "Seeds file not found: $PARAM_DIR/$SEEDS_FILE" "config"
+        exit 1
+    fi
+    mapfile -t SEEDS < <(tail -n +2 "$PARAM_DIR/$SEEDS_FILE" | awk 'NF{print $1}')
+    NUM_SEEDS=${#SEEDS[@]}
+    log_with_timestamp "Loaded $NUM_SEEDS seeds"
+fi
+
 # Calculate multi-dimensional indices
-# Iteration order: gamma (fastest) -> precond -> prior -> subset (slowest)
-GAMMA_INDEX=$(( (TASK_ID - 1) % NUM_GAMMAS ))
-PRECOND_INDEX=$(( ((TASK_ID - 1) / NUM_GAMMAS) % NUM_PRECOND_TYPES ))
-PRIOR_INDEX=$(( ((TASK_ID - 1) / (NUM_GAMMAS * NUM_PRECOND_TYPES)) % NUM_PRIOR_MODES ))
-SUBSET_INDEX=$(( (TASK_ID - 1) / (NUM_GAMMAS * NUM_PRECOND_TYPES * NUM_PRIOR_MODES) ))
+# Iteration order: seed (fastest) -> gamma -> precond -> prior -> subset (slowest)
+SEED_INDEX=$(( (TASK_ID - 1) % NUM_SEEDS ))
+GAMMA_INDEX=$(( ((TASK_ID - 1) / NUM_SEEDS) % NUM_GAMMAS ))
+PRECOND_INDEX=$(( ((TASK_ID - 1) / (NUM_SEEDS * NUM_GAMMAS)) % NUM_PRECOND_TYPES ))
+PRIOR_INDEX=$(( ((TASK_ID - 1) / (NUM_SEEDS * NUM_GAMMAS * NUM_PRECOND_TYPES)) % NUM_PRIOR_MODES ))
+SUBSET_INDEX=$(( (TASK_ID - 1) / (NUM_SEEDS * NUM_GAMMAS * NUM_PRECOND_TYPES * NUM_PRIOR_MODES) ))
 
 # Check if task exceeds parameter space
-TOTAL_COMBINATIONS=$((NUM_SUBSET_MODES * NUM_PRIOR_MODES * NUM_PRECOND_TYPES * NUM_GAMMAS))
+TOTAL_COMBINATIONS=$((NUM_SUBSET_MODES * NUM_PRIOR_MODES * NUM_PRECOND_TYPES * NUM_GAMMAS * NUM_SEEDS))
 if [ $TASK_ID -gt $TOTAL_COMBINATIONS ]; then
     log_with_timestamp "Task ID $TASK_ID exceeds available parameter combinations ($TOTAL_COMBINATIONS). Exiting."
     exit 0
@@ -226,14 +240,20 @@ else
     GAMMA="50"  # default
 fi
 
-log_with_timestamp "Task $TASK_ID: subset_mode=$SUBSET_MODE, prior_mode=$PRIOR_MODE, precond_type=$PRECOND_TYPE, combine=${PRECOND_COMBINE:-<config>}, gamma=$GAMMA"
+if [ ${#SEEDS[@]} -gt 0 ]; then
+    SEED=${SEEDS[$SEED_INDEX]}
+else
+    SEED="42"
+fi
+
+log_with_timestamp "Task $TASK_ID: subset_mode=$SUBSET_MODE, prior_mode=$PRIOR_MODE, precond_type=$PRECOND_TYPE, combine=${PRECOND_COMBINE:-<config>}, gamma=$GAMMA, seed=$SEED"
 
 # --- Paths for this job ---
 PRECOND_NAME="$PRECOND_TYPE"
 if [ -n "$PRECOND_COMBINE" ]; then
     PRECOND_NAME="${PRECOND_TYPE}_combine_${PRECOND_COMBINE}"
 fi
-OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/subset_${SUBSET_MODE}_prior_${PRIOR_MODE}_precond_${PRECOND_NAME}_gamma_${GAMMA}"
+OUTPUT_DIR="$OUTPUT_BASE_DIR/${SWEEP_NAME}/subset_${SUBSET_MODE}_prior_${PRIOR_MODE}_precond_${PRECOND_NAME}_gamma_${GAMMA}_seed_${SEED}"
 WORKING_DIR="$OUTPUT_DIR/tmp"
 
 log_with_timestamp "Creating output directories..."
@@ -274,7 +294,8 @@ for attempt in $(seq 1 $MAX_RETRIES); do
             prior_mode="$PRIOR_MODE" \
             precond_type="$PRECOND_TYPE" \
             ${COMBINE_OVERRIDE[@]+"${COMBINE_OVERRIDE[@]}"} \
-            gamma_tnv="$GAMMA"; then
+            gamma_tnv="$GAMMA" \
+            seed="$SEED"; then
         RETURN_CODE=0
         log_with_timestamp "Reconstruction completed successfully"
         break
@@ -305,7 +326,7 @@ if [ $RETURN_CODE -eq 0 ]; then
     log_with_timestamp "Job completed successfully at: $END_TIME"
 
     cat > "$OUTPUT_DIR/job_completion.txt" <<EOF
-subset_mode=$SUBSET_MODE,prior_mode=$PRIOR_MODE,precond_type=$PRECOND_TYPE,precond_combine=${PRECOND_COMBINE:-},gamma=$GAMMA,status=completed,end_time=$END_TIME,host=$HOSTNAME,start_time=$START_TIME
+subset_mode=$SUBSET_MODE,prior_mode=$PRIOR_MODE,precond_type=$PRECOND_TYPE,precond_combine=${PRECOND_COMBINE:-},gamma=$GAMMA,seed=$SEED,status=completed,end_time=$END_TIME,host=$HOSTNAME,start_time=$START_TIME
 EOF
 else
     log_with_timestamp "Job failed with return code: $RETURN_CODE at: $END_TIME"

@@ -73,6 +73,8 @@ if 'precond_types_file' in params:
     param_files.append(('PRECOND_TYPES_FILE', params['precond_types_file']))
 if 'gammas_file' in params:
     param_files.append(('GAMMAS_FILE', params['gammas_file']))
+if 'seeds_file' in params:
+    param_files.append(('SEEDS_FILE', params['seeds_file']))
 
 for name, value in param_files:
     print(f'{name}={value}')
@@ -145,6 +147,16 @@ if [ -n "${GAMMAS_FILE:-}" ]; then
     echo "Gamma values: $NUM_GAMMAS"
 fi
 
+if [ -n "${SEEDS_FILE:-}" ]; then
+    if [ ! -f "$PARAM_DIR/$SEEDS_FILE" ]; then
+        echo "Error: Seeds file not found: $PARAM_DIR/$SEEDS_FILE"
+        exit 1
+    fi
+    NUM_SEEDS=$(tail -n +2 "$PARAM_DIR/$SEEDS_FILE" | wc -l)
+    NUM_COMBINATIONS=$((NUM_COMBINATIONS * NUM_SEEDS))
+    echo "Seeds: $NUM_SEEDS"
+fi
+
 TOTAL_JOBS=$NUM_COMBINATIONS
 
 echo "Total parameter combinations: $TOTAL_JOBS jobs"
@@ -169,6 +181,7 @@ ENV_VARS="SETR_BASE_DIR=$BASE_DIR,SWEEP_NAME=${SWEEP_NAME},BASE_CONFIG_FILE=$BAS
 [ -n "${PRIOR_MODES_FILE:-}" ] && ENV_VARS="$ENV_VARS,PRIOR_MODES_FILE=$PRIOR_MODES_FILE"
 [ -n "${PRECOND_TYPES_FILE:-}" ] && ENV_VARS="$ENV_VARS,PRECOND_TYPES_FILE=$PRECOND_TYPES_FILE"
 [ -n "${GAMMAS_FILE:-}" ] && ENV_VARS="$ENV_VARS,GAMMAS_FILE=$GAMMAS_FILE"
+[ -n "${SEEDS_FILE:-}" ] && ENV_VARS="$ENV_VARS,SEEDS_FILE=$SEEDS_FILE"
 [ -n "${FIXED_SUBSET_MODE:-}" ] && ENV_VARS="$ENV_VARS,FIXED_SUBSET_MODE=$FIXED_SUBSET_MODE"
 [ -n "${FIXED_PRIOR_MODE:-}" ] && ENV_VARS="$ENV_VARS,FIXED_PRIOR_MODE=$FIXED_PRIOR_MODE"
 [ -n "${FIXED_PRECOND_TYPE:-}" ] && ENV_VARS="$ENV_VARS,FIXED_PRECOND_TYPE=$FIXED_PRECOND_TYPE"
@@ -207,8 +220,13 @@ case "$MODE" in
         else
             _GAMMAS=("")
         fi
+        if [ -n "${SEEDS_FILE:-}" ]; then
+            mapfile -t _SEEDS < <(tail -n +2 "$PARAM_DIR/$SEEDS_FILE" | awk '{print $1}')
+        else
+            _SEEDS=("")
+        fi
 
-        TOTAL_LOCAL=$(( ${#_SUBSET_MODES[@]} * ${#_PRIOR_MODES[@]} * ${#_PRECOND_TYPES[@]} * ${#_GAMMAS[@]} ))
+        TOTAL_LOCAL=$(( ${#_SUBSET_MODES[@]} * ${#_PRIOR_MODES[@]} * ${#_PRECOND_TYPES[@]} * ${#_GAMMAS[@]} * ${#_SEEDS[@]} ))
         JOB_NUM=0
         echo "Total combinations: $TOTAL_LOCAL"
         echo ""
@@ -217,6 +235,7 @@ case "$MODE" in
         for PRIOR_MODE in "${_PRIOR_MODES[@]}"; do
         for PRECOND_LINE in "${_PRECOND_TYPES[@]}"; do
         for GAMMA in "${_GAMMAS[@]}"; do
+        for SEED in "${_SEEDS[@]}"; do
             IFS=',' read -r PRECOND_TYPE PRECOND_COMBINE <<< "$PRECOND_LINE"
             PRECOND_TYPE="${PRECOND_TYPE//[$'\t\r\n ']/}"
             PRECOND_COMBINE="${PRECOND_COMBINE//[$'\t\r\n ']/}"
@@ -253,6 +272,10 @@ case "$MODE" in
                 OVERRIDES="$OVERRIDES gamma_tnv=$GAMMA"
                 RUN_NAME="${RUN_NAME}_gamma_${GAMMA}"
             fi
+            if [ -n "$SEED" ]; then
+                OVERRIDES="$OVERRIDES seed=$SEED"
+                RUN_NAME="${RUN_NAME}_seed_${SEED}"
+            fi
 
             RUN_NAME="${RUN_NAME//[^A-Za-z0-9._-]/_}"
             OUTPUT_DIR="$SWEEP_OUT_DIR/$RUN_NAME"
@@ -265,6 +288,7 @@ case "$MODE" in
                 --override output_path="$OUTPUT_DIR" num_epochs="$NUM_EPOCHS" $OVERRIDES
             echo "[$JOB_NUM/$TOTAL_LOCAL] Done: $OUTPUT_DIR"
             echo ""
+        done
         done
         done
         done

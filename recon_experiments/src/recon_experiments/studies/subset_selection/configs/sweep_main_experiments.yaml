@@ -1,5 +1,6 @@
 # Main subset selection experiments sweep configuration
-# 2 (subset_mode) × 3 (prior_mode: folded/half/epoch) × 3 preconditioners × N gammas
+# 2 (subset_mode) × 3 (prior_mode: folded/half/epoch) × 3 preconditioners
+# × N gammas × N random seeds
 
 sweep_name: "subset_selection_main"
 base_config: "base_config_anthro.yaml"
@@ -19,6 +20,7 @@ parameters:
   prior_modes_file: "prior_modes.csv"
   precond_types_file: "precond_types.csv"
   gammas_file: "gammas.csv"
+  seeds_file: "seeds.csv"
 
 # Fixed parameters for main experiments
 fixed_params:
