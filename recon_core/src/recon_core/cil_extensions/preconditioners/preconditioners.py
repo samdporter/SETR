@@ -245,6 +245,31 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
     callers should provide ``hessian_preconditioner`` so both this class and the
     parallel-sum majoriser use identical prior/data Hessian components.  The legacy
     preconditioner operands remain supported for compatibility.
+
+    For ``p != 0``, ``f_p`` satisfies ``f_p(t) = t * f_p(1/t)``, so the blend
+    overshoots the parallel sum on whichever operand (B or D) is locally small by a
+    factor of roughly ``0.5 * contrast**p``, where ``contrast`` is the generalized
+    eigenvalue ratio between B and D at that voxel.  This is the *same* factor that
+    lifts a genuinely stagnant preconditioner (one operand near zero) off the floor,
+    so any positive ``p`` trades stagnation-escape against majoriser-safety violation
+    one-for-one, and a symmetric mean cannot tell the two cases apart (see
+    EXPERIMENT_FINDINGS.md Exp 1).
+
+    ``_blend_blocks(left, right)`` is always called as ``(prior, data)`` in production
+    (``_compute_from_hessian_provider``), and the observed failure mode is one-sided:
+    the data curvature collapsing (voxels where x~0), not the prior curvature. Set
+    ``max_relative_contrast`` (finite, > 1) to floor the data (right) operand's
+    generalized eigenvalue at ``left/max_relative_contrast`` before applying ``f_p``.
+    Capping only the *ratio* fed into ``f_p`` while leaving ``right``'s scale in the
+    final ``d_sqrt`` congruence untouched would not floor anything -- the result would
+    still collapse toward ``right`` as it degenerates, merely rescaled by a constant.
+    Flooring the eigenvalue itself (via a compensating scale factor folded into the
+    whitened-frame output before the congruence) gives a genuine plateau: once the
+    prior/data contrast exceeds the cap, the blend saturates at a value proportional
+    to the prior operand instead of continuing to shrink with the degenerate data
+    operand. This is intentionally asymmetric in (left, right) and does not preserve
+    ``blend(left, right) == blend(right, left)``; that symmetry is not required because
+    callers always pass (prior, data) in this fixed order.
     """
 
     def __init__(
@@ -259,6 +284,7 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         scalar_reduction: str = "diag",
         output_scale: float = 1.0,
         hessian_preconditioner=None,
+        max_relative_contrast: float = np.inf,
     ):
         super().__init__(update_interval, freeze_iter)
         self.block_preconditioner = block_preconditioner
@@ -269,12 +295,24 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         self.max_value = float(max_value)
         self.scalar_reduction = scalar_reduction
         self.output_scale = float(output_scale)
+        self.max_relative_contrast = float(max_relative_contrast)
         if scalar_reduction not in {"mean", "geometric", "diag"}:
             raise ValueError("scalar_reduction must be one of {'mean', 'geometric', 'diag'}.")
+        if scalar_reduction in {"mean", "geometric"} and self.p != 0.0:
+            logging.warning(
+                "scalar_reduction=%r collapses the modality-specific data preconditioner "
+                "to a single scalar before Lehmer blending. For p>0 this can inflate the "
+                "operand contrast by orders of magnitude and cause divergence (see "
+                "EXPERIMENT_FINDINGS.md Exp 1). Prefer scalar_reduction='diag', or provide "
+                "hessian_preconditioner so both operands stay full 2x2 blocks.",
+                scalar_reduction,
+            )
         if not np.isfinite(self.output_scale) or self.output_scale <= 0:
             raise ValueError("output_scale must be finite and > 0.")
         if self.epsilon <= 0 or not np.isfinite(self.epsilon):
             raise ValueError("epsilon must be finite and > 0.")
+        if self.max_relative_contrast <= 1.0:
+            raise ValueError("max_relative_contrast must be > 1 (use np.inf to disable).")
         if self.hessian_preconditioner is None and (
             self.block_preconditioner is None or self.scalar_preconditioner is None
         ):
@@ -328,8 +366,12 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         left = self._project_spd(left)
         right = self._project_spd(right)
 
-        if self.p == 0.0:
+        if self.p == 0.0 and not np.isfinite(self.max_relative_contrast):
             # Standard two-operand L_0 is the harmonic mean: twice parallel sum.
+            # A finite max_relative_contrast must fall through to the general
+            # eigenvalue path below (which handles p=0 correctly) so the cap is
+            # applied rather than silently ignored -- the scalar
+            # LehmerMeanPreconditioner applies its cap for every p, including 0.
             inverse_sum = self._invert_spd(left) + self._invert_spd(right)
             raw_mean = 2.0 * self._invert_spd(inverse_sum)
             return self._finalise_blocks(raw_mean)
@@ -346,9 +388,39 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
         # The relative eigenvalues are dimensionless.  Use machine tiny rather than
         # the absolute preconditioner floor so high modality contrasts are retained.
         np.maximum(rel_eigvals, np.finfo(np.float64).tiny, out=rel_eigvals)
-        log_rel = np.log(rel_eigvals)
-        log_mean_eigvals = np.logaddexp(self.p * log_rel, 0.0) - np.logaddexp(
-            (self.p - 1.0) * log_rel, 0.0
+        if np.isfinite(self.max_relative_contrast):
+            # t = generalized eigenvalue of (left, right); by this class's calling
+            # convention `left` is the prior operand and `right` the data operand
+            # (see `_compute_from_hessian_provider`), so t -> infinity is exactly the
+            # stagnation case (data curvature collapsing relative to prior).
+            #
+            # Capping t alone (leaving right's physical scale in d_sqrt untouched)
+            # would NOT floor the result: the reconstruction raw_mean = d_sqrt @
+            # mean_relative @ d_sqrt still carries right's true (near-zero) scale, so
+            # the output would still collapse to ~right rather than plateau. What we
+            # actually want is to floor the *right/data eigenvalue itself* at
+            # left/M, i.e. right' = max(right, left/M) = right * max(1, t/M). Doing
+            # that exactly would require re-forming d_sqrt from right', but the same
+            # effect is achieved more cheaply by inflating the output eigenvalue in
+            # the whitened (rel_eigvecs) frame by the same factor before applying
+            # d_sqrt: mean_relative_eigval = scale_factor * f_p(t / scale_factor),
+            # with t/scale_factor = min(t, M). At t -> infinity this gives
+            # raw_mean_eigval -> (right * t/M) * f_p(M) = (left/M) * f_p(M), a fixed
+            # floor proportional to the prior curvature rather than a value that
+            # keeps shrinking with the degenerate data curvature. See
+            # EXPERIMENT_FINDINGS.md Exp 1 for the unbounded-contrast failure this
+            # guards against. This is intentionally one-sided in (left, right); it
+            # does not preserve blend(left, right) == blend(right, left), because
+            # production code always calls this with (prior, data) in that order.
+            scale_factor = np.maximum(1.0, rel_eigvals / self.max_relative_contrast)
+        else:
+            scale_factor = 1.0
+        rel_eigvals_clipped = rel_eigvals / scale_factor
+        log_rel = np.log(rel_eigvals_clipped)
+        log_mean_eigvals = (
+            np.logaddexp(self.p * log_rel, 0.0)
+            - np.logaddexp((self.p - 1.0) * log_rel, 0.0)
+            + np.log(scale_factor)
         )
         mean_relative = self._reconstruct_from_eigendecomposition(
             np.exp(log_mean_eigvals), rel_eigvecs
@@ -404,7 +476,13 @@ class BlockLehmerMeanPreconditioner(PreconditionerWithInterval):
 
         # This is the exact equality contract requested by the experiment: use the
         # identical summed-Hessian inversion, cap, and safety scale as the majoriser.
-        if self.p == 0.0 and self.output_scale == 0.5:
+        # An explicitly finite max_relative_contrast is a request to deviate from
+        # that exact equality (floor the blend), so it disables the shortcut.
+        if (
+            self.p == 0.0
+            and self.output_scale == 0.5
+            and not np.isfinite(self.max_relative_contrast)
+        ):
             return provider.compute_preconditioner(algorithm)
 
         prior_h = provider._compute_prior_hessian_block(image)
@@ -1045,7 +1123,15 @@ class SubsetPoissonHessianPreconditioner(PreconditionerWithInterval):
 
 
 class HarmonicMeanPreconditioner(PreconditionerWithInterval):
-    """Preconditioner that combines two preconditioners via inverse-sum blend."""
+    """Preconditioner that combines two preconditioners via the parallel-sum blend.
+
+    Despite the class name, ``compute_preconditioner`` returns ``a*b/(a+b+eps)``,
+    which is the *parallel sum* of ``a`` and ``b`` -- i.e. ``0.5`` times their
+    harmonic mean, equivalent to ``LehmerMeanPreconditioner(..., p=0, output_scale=0.5)``
+    and to the inverse-sum majoriser. This matches how it is used (as the
+    ``combine='majoriser'``/``'harmonic'`` blend of data and prior curvature), but the
+    name should not be read as "returns the harmonic mean".
+    """
 
     def __init__(
         self,
@@ -1088,6 +1174,20 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
     We use an epsilon floor on the inputs to avoid 0^(p-1) when p < 1,
     and to ensure the combined preconditioner never collapses to exactly 0
     when at least one input preconditioner is positive.
+
+    For two inputs, ``L_p`` overshoots the parallel sum on whichever operand is
+    locally small by ~``0.5 * contrast**p``, where ``contrast`` is the ratio between
+    the two operands -- the same factor that lifts a stagnant (near-zero) operand off
+    the floor. A symmetric mean cannot distinguish "genuinely stuck" from "genuinely
+    large curvature elsewhere", so any p > 0 trades stagnation-escape against
+    majoriser-safety one-for-one (see BlockLehmerMeanPreconditioner and
+    EXPERIMENT_FINDINGS.md Exp 1). Set ``max_relative_contrast`` (finite, > 1, two
+    inputs only) to floor the smaller operand at ``(larger operand) /
+    max_relative_contrast`` before applying ``f_p``: once the contrast between the two
+    operands exceeds the cap, ``L_p`` plateaus at a value proportional to the larger
+    operand instead of continuing to shrink with the degenerate one. Value-based
+    (max/min), not index-based, so it works regardless of which operand -- data or
+    prior -- is passed first; both orderings occur in this codebase.
     """
 
     def __init__(
@@ -1099,6 +1199,7 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         freeze_iter=np.inf,
         scales=None,
         output_scale=1.0,
+        max_relative_contrast=np.inf,
     ):
         super().__init__(update_interval, freeze_iter)
         self.preconds = preconds
@@ -1114,6 +1215,12 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
                 f"to avoid 0^(p-1) singularities. Using epsilon={epsilon}."
             )
         self.epsilon = float(epsilon)
+
+        self.max_relative_contrast = float(max_relative_contrast)
+        if self.max_relative_contrast <= 1.0:
+            raise ValueError("max_relative_contrast must be > 1 (use np.inf to disable).")
+        if np.isfinite(self.max_relative_contrast) and len(preconds) != 2:
+            raise ValueError("max_relative_contrast is only supported for exactly 2 preconds.")
 
         if scales is not None and len(scales) != len(preconds):
             raise ValueError("Length of scales must match number of preconditioners.")
@@ -1136,6 +1243,26 @@ class LehmerMeanPreconditioner(PreconditionerWithInterval):
         # 2) Apply a symmetric floor to all inputs
         #    This guarantees x >= eps everywhere for all subsequent powers.
         clamped = [v.maximum(eps) for v in values]
+
+        if np.isfinite(self.max_relative_contrast):
+            # Floor the smaller operand at (larger operand) / max_relative_contrast.
+            # Capping only the *ratio* a/b while leaving both operands' absolute
+            # scales untouched would not actually floor anything: L_p would still
+            # collapse to ~min(a,b) as the smaller operand shrinks, just rescaled by
+            # a constant. Flooring the smaller operand's value directly gives a
+            # genuine plateau: once contrast exceeds max_relative_contrast, L_p
+            # saturates at a value proportional to the larger operand instead of
+            # continuing to shrink with the degenerate one. The Lehmer sum treats
+            # its two operands symmetrically (order doesn't affect num/den), so using
+            # max/min (value-based) rather than a fixed operand index keeps this
+            # correct regardless of which of preconds[0]/preconds[1] is data vs prior
+            # -- callers in this codebase use both orderings. See
+            # EXPERIMENT_FINDINGS.md Exp 1 for the unbounded-contrast failure this
+            # guards against.
+            a, b = clamped
+            hi = a.maximum(b)
+            lo_floored = a.minimum(b).maximum(hi / self.max_relative_contrast)
+            clamped = [hi, lo_floored]
 
         # 3) Lehmer numerator and denominator:
         #      num = Σ x^p

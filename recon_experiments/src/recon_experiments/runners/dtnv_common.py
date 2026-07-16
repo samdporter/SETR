@@ -37,7 +37,6 @@ from recon_core.cil_extensions.operators import ScalingOperator
 from recon_core.cil_extensions.preconditioners import (
     BSREMPreconditioner,
     BlockLehmerMeanPreconditioner,
-    HarmonicMeanPreconditioner,
     ImageFunctionPreconditioner,
     LehmerMeanPreconditioner,
     MajorisingHessianBlockPreconditioner,
@@ -858,10 +857,9 @@ def get_preconditioners(
                     "MaGeZ averaging is diagonal-only; using block majoriser path instead."
                 )
                 return majoriser_precond
-            p_val = 0.0 if combine == "harmonic" else lehmer_p
             return BlockLehmerMeanPreconditioner(
                 hessian_preconditioner=majoriser_precond,
-                p=p_val,
+                p=lehmer_p,
                 epsilon=1e-12,
                 max_value=max_precond_value,
                 update_interval=epoch_update_interval,
@@ -919,20 +917,16 @@ def get_preconditioners(
             freeze_iter=precond_freeze_iter,
         )
 
-    if combine == "harmonic":
-        return HarmonicMeanPreconditioner(
-            [bsrem_precond, prior_precond],
-            update_interval=epoch_update_interval,
-            freeze_iter=precond_freeze_iter,
-            epsilon=1e-6,
-        )
-
     # default Lehmer
+    # epsilon matches MajorisingHessianDiagonalPreconditioner's hessian_floor above, so
+    # that p=0/output_scale=0.5 (the exact majoriser-equivalence case) uses the same
+    # numerical floor as the majoriser path rather than falling back to the
+    # constructor's own (looser) default of 1e-12.
     return LehmerMeanPreconditioner(
         [bsrem_precond, prior_precond],
         update_interval=epoch_update_interval,
         freeze_iter=precond_freeze_iter,
-        epsilon=0,
+        epsilon=1e-8,
         p=lehmer_p,
         output_scale=lehmer_scale,
     )
